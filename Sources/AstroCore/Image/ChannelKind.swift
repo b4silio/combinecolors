@@ -1,7 +1,7 @@
 import Foundation
 
 /// The channel slots the application understands.
-public enum ChannelKind: String, Codable, CaseIterable, Identifiable, Hashable, Sendable {
+public enum ChannelKind: String, Codable, CaseIterable, Identifiable, Hashable, Sendable, CodingKeyRepresentable {
     case luminance = "L"
     case red = "R"
     case green = "G"

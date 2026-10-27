@@ -288,3 +288,32 @@ final class RealDataIntegrationTests: XCTestCase {
         XCTAssertEqual(h.int("NAXIS1"), 7272)
     }
 }
+
+final class TolerantDecodingTests: XCTestCase {
+    func testMissingAndUnknownKeysFallBackToDefaults() throws {
+        let json = """
+        {"version": 1, "channels": [{"kind": "Ha", "path": "/x/ha.fits"}],
+         "settings": {"paletteID": "hoo", "mode": "matrix", "stars": {"enabled": true}, "stretch": {"method": "ghs", "ghsLogD": 3.5, "bogus": 1},
+                      "normalization": {"method": "noSuchMethod"}, "post": {"saturation": 1.5}, "channels": {"OIII": {"gain": 2}}},
+         "crop": {"x": 1, "y": 2, "width": 30, "height": 40}}
+        """
+        let doc = try JSONDecoder().decode(ProjectDocument.self, from: Data(json.utf8))
+        XCTAssertEqual(doc.channels.first?.kind, .ha)
+        XCTAssertEqual(doc.settings.paletteID, "hoo")
+        XCTAssertTrue(doc.settings.stars.enabled)
+        XCTAssertEqual(doc.settings.stars.stretch, .auto)            // missing key → default
+        XCTAssertEqual(doc.settings.stretch.method, .ghs)
+        XCTAssertEqual(doc.settings.stretch.ghsLogD, 3.5)
+        XCTAssertEqual(doc.settings.stretch.targetBackground, StretchSettings().targetBackground)
+        XCTAssertEqual(doc.settings.normalization.method, NormalizationSettings().method)   // unknown value → default
+        XCTAssertEqual(doc.settings.post.saturation, 1.5)
+        XCTAssertEqual(doc.settings.adjust(.oiii).gain, 2)
+        XCTAssertEqual(doc.crop, PixelRect(x: 1, y: 2, width: 30, height: 40))
+        XCTAssertNil(doc.starsFile)
+        let empty = try JSONDecoder().decode(CombineSettings.self, from: Data("{}".utf8))
+        XCTAssertEqual(empty, CombineSettings())
+        // Round trip of current defaults remains exact.
+        let s = CombineSettings()
+        XCTAssertEqual(try JSONDecoder().decode(CombineSettings.self, from: try JSONEncoder().encode(s)), s)
+    }
+}
