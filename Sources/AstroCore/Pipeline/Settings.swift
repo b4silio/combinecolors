@@ -224,10 +224,15 @@ public struct CombineSettings: Codable, Equatable, Hashable {
         }
     }
 
+    /// Luminance injection is skipped for the mono check palettes (they would all look alike).
+    public var luminanceApplies: Bool {
+        luminance.enabled && (Palettes.palette(id: paletteID)?.allowsLuminance ?? true)
+    }
+
     /// Every channel the pipeline will read, given what is loaded.
     public func allChannels(available: Set<ChannelKind>) -> Set<ChannelKind> {
         var s = requiredChannels
-        s.formUnion(luminance.requiredChannels(available: available))
+        if luminanceApplies { s.formUnion(luminance.requiredChannels(available: available)) }
         if stars.enabled { s.formUnion([.red, .green, .blue]) }
         return s
     }

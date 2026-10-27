@@ -380,3 +380,21 @@ final class LuminancePresetTests: XCTestCase {
         XCTAssertEqual(fresh, LuminanceSettings())
     }
 }
+
+final class MonoLuminanceTests: XCTestCase {
+    func testMonoPalettesIgnoreLuminance() throws {
+        let sources: [ChannelKind: ChannelSource] = [.ha: Synth.source(.ha), .oiii: Synth.source(.oiii, scale: 0.4, seed: 2)]
+        let planes = sources.mapValues { $0.image }
+        var s = CombineSettings(); s.select(palette: Palettes.palette(id: "mono_oiii")!)
+        s.luminance.enabled = true; s.luminance.preset = .ha
+        XCTAssertFalse(s.luminanceApplies)
+        XCTAssertFalse(s.allChannels(available: [.ha, .oiii]).contains(.ha))
+        let ctx = RenderContext.make(settings: s.normalization, sources: sources)
+        let r = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: Renderer.analysisSamples(sources: sources), settings: s, context: ctx))
+        var off = s; off.luminance.enabled = false
+        let r2 = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: Renderer.analysisSamples(sources: sources), settings: off, context: ctx))
+        XCTAssertLessThan(r.image.r.maxAbsDifference(r2.image.r), 1e-6)
+        s.select(palette: Palettes.palette(id: "hoo")!)
+        XCTAssertTrue(s.luminanceApplies)
+    }
+}

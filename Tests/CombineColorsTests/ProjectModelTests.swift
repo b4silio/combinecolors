@@ -273,3 +273,30 @@ final class RecentSetsTests: XCTestCase {
         XCTAssertEqual(RecentSet.makeName(entries: [.init(kind: .ha, path: "/x/Nebula/h.fits"), .init(kind: .oiii, path: "/x/Nebula/o.fits")]), "Nebula")
     }
 }
+
+@MainActor
+final class PaletteVisibilityTests: XCTestCase {
+    func testHideAndFilterPersist() async throws {
+        let defaults = UserDefaults(suiteName: "PaletteVisibilityTests-\(UUID().uuidString)")!
+        let base = ProjectModelTests()
+        try await base.setUp()
+        let m = ProjectModel(defaults: defaults)
+        m.loadFiles([try base.makeChannel("v-Ha.fits", kind: .ha, scale: 1, seed: 1), try base.makeChannel("v-OIII.fits", kind: .oiii, scale: 0.5, seed: 2)])
+        await base.wait { m.sources.count == 2 && !m.isLoading }
+        let all = Palettes.available(for: m.availableKinds)
+        XCTAssertEqual(m.visiblePalettes.count, all.count)
+        m.setPalette("hoo", hidden: true)
+        m.setPalette("hho", hidden: true)
+        XCTAssertEqual(m.visiblePalettes.count, all.count - 2)
+        XCTAssertFalse(m.visiblePalettes.contains { $0.id == "hoo" })
+        m.paletteFilter = .all
+        XCTAssertEqual(m.visiblePalettes.count, all.count)
+        XCTAssertTrue(m.isPaletteHidden("hoo"))
+        m.setPalette("hoo", hidden: false)
+        XCTAssertFalse(m.isPaletteHidden("hoo"))
+        let m2 = ProjectModel(defaults: defaults)
+        XCTAssertEqual(m2.hiddenPaletteIDs, ["hho"])
+        XCTAssertEqual(m2.paletteFilter, .all)
+        try? await base.tearDown()
+    }
+}

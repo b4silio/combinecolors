@@ -171,7 +171,7 @@ struct MenuPicker<T: Hashable>: View {
 
     var body: some View {
         HStack {
-            Text(title)
+            Text(title).fixedSize().lineLimit(1)
             Menu {
                 ForEach(options, id: \.self) { o in
                     Button {

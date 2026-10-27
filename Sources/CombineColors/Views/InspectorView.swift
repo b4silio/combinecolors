@@ -125,6 +125,9 @@ struct InspectorView: View {
         let l = $model.settings.luminance
         let lum = model.settings.luminance
         Toggle("Inject luminance (adds contrast and detail)", isOn: l.enabled)
+        if lum.enabled && !model.settings.luminanceApplies {
+            Text("Not applied to the mono check palettes.").font(.caption2).foregroundStyle(.secondary)
+        }
         if lum.enabled {
             MenuPicker(title: "Source", selection: l.preset, options: LuminancePreset.allCases) { p in
                 p.displayName + (p.expression(available: model.availableKinds, custom: lum.customExpression) == nil && p != .custom ? " (unavailable)" : "")

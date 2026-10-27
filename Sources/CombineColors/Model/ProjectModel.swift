@@ -122,6 +122,25 @@ final class ProjectModel {
     private var undoSnapshot: CombineSettings?
     private var undoTimer: Timer?
 
+    // MARK: Palette visibility
+    enum PaletteFilter: String { case favorites, all }
+    private let defaults: UserDefaults
+    private(set) var hiddenPaletteIDs: Set<String> = []
+    var paletteFilter: PaletteFilter = .favorites { didSet { defaults.set(paletteFilter.rawValue, forKey: "paletteFilter") } }
+
+    func isPaletteHidden(_ id: String) -> Bool { hiddenPaletteIDs.contains(id) }
+
+    func setPalette(_ id: String, hidden: Bool) {
+        if hidden { hiddenPaletteIDs.insert(id) } else { hiddenPaletteIDs.remove(id) }
+        defaults.set(Array(hiddenPaletteIDs).sorted(), forKey: "hiddenPalettes")
+    }
+
+    /// Palettes to show for the loaded channels under the current filter.
+    var visiblePalettes: [Palette] {
+        let avail = Palettes.available(for: availableKinds)
+        return paletteFilter == .all ? avail : avail.filter { !hiddenPaletteIDs.contains($0.id) }
+    }
+
     // MARK: Recent sets
     private let recentStore: RecentSetsStore
     private(set) var recentSets: [RecentSet] = []
@@ -129,8 +148,11 @@ final class ProjectModel {
     private var suppressRecent = false
 
     init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         recentStore = RecentSetsStore(defaults: defaults)
         recentSets = recentStore.load()
+        hiddenPaletteIDs = Set(defaults.stringArray(forKey: "hiddenPalettes") ?? [])
+        paletteFilter = PaletteFilter(rawValue: defaults.string(forKey: "paletteFilter") ?? "") ?? .favorites
         renderer.onFrame = { [weak self] frame, gen in
             guard let self else { return }
             self.frame = frame

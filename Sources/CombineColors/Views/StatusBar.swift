@@ -5,33 +5,40 @@ struct StatusBar: View {
     @Bindable var model: ProjectModel
 
     var body: some View {
+        // Single fixed-height line: nothing here may wrap or change the bar's height.
         HStack(spacing: 14) {
             if model.isLoading {
                 ProgressView().controlSize(.small)
-                Text(model.loadingMessage)
+                Text(model.loadingMessage).lineLimit(1)
             } else {
-                Text(model.statusText)
+                Text(model.statusText).lineLimit(1).truncationMode(.middle)
             }
-            if let e = model.renderError { Label(e, systemImage: "exclamationmark.triangle").foregroundStyle(.orange).lineLimit(1) }
-            Spacer()
-            if let h = model.hover {
-                HStack(spacing: 8) {
-                    Text(verbatim: "(\(h.x), \(h.y))")
-                    ForEach(h.values, id: \.0) { (k, v) in Text("\(k.shortName) \(v.g4)") }
-                    if let rgb = h.rgb { Text(String(format: "RGB %.3f %.3f %.3f", rgb.0, rgb.1, rgb.2)) }
-                }
+            if let e = model.renderError { Label(e, systemImage: "exclamationmark.triangle").foregroundStyle(.orange).lineLimit(1).truncationMode(.tail) }
+            Spacer(minLength: 8)
+            Text(readout)
                 .font(.system(size: 10, design: .monospaced))
-            }
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .layoutPriority(1)
             if model.frame != nil {
-                Text("level \(model.lastRenderLevel) · \(Int(model.lastRenderMillis)) ms" + (model.isRendering ? " · rendering…" : ""))
-                    .foregroundStyle(.secondary)
+                Text("L\(model.lastRenderLevel) · \(Int(model.lastRenderMillis)) ms" + (model.isRendering ? " ⟳" : ""))
+                    .foregroundStyle(.secondary).lineLimit(1).frame(width: 80, alignment: .trailing)
             }
             Text(String(format: "%.0f%%", model.viewport.scale * 100)).foregroundStyle(.secondary).frame(width: 44, alignment: .trailing)
         }
         .font(.caption)
         .padding(.horizontal, 10)
-        .padding(.vertical, 4)
+        .frame(height: 24)
         .background(.bar)
+    }
+
+    /// Pixel read-out as one string (fixed format so the width barely changes).
+    var readout: String {
+        guard let h = model.hover else { return "" }
+        var parts = [String(format: "(%5d, %5d)", h.x, h.y)]
+        parts += h.values.map { String(format: "%@ %.5f", $0.0.shortName, $0.1) }
+        if let rgb = h.rgb { parts.append(String(format: "RGB %.3f %.3f %.3f", rgb.0, rgb.1, rgb.2)) }
+        return parts.joined(separator: "  ")
     }
 }
 

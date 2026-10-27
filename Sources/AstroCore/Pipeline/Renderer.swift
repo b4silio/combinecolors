@@ -87,7 +87,7 @@ public enum Renderer {
         var linear: [ChannelKind: PlanarImage] = [:]
         var linStats: [ChannelKind: ChannelStats] = [:]
         let needed = s.allChannels(available: available).intersection(available)
-        let lumExpr: Expr? = try s.luminance.resolvedExpression(available: available).map { src in
+        let lumExpr: Expr? = try (s.luminanceApplies ? s.luminance.resolvedExpression(available: available) : nil).map { src in
             do { return try PixelMath.parse(src) } catch let e as PixelMathError { throw RenderError.pixelMath(PixelMathError(message: "Luminance: " + e.message, position: e.position)) }
         }
         for k in needed {

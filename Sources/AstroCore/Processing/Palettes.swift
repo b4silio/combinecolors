@@ -45,6 +45,8 @@ public struct Palette: Identifiable, Equatable, Hashable {
     public let description: String
     /// Suggested luminance source (nil = none).
     public let luminance: ChannelKind?
+    /// Mono check palettes must show the raw channel: no luminance injection.
+    public var allowsLuminance: Bool { group != "Mono" }
 
     public init(id: String, name: String, group: String, kind: PaletteKind, description: String, luminance: ChannelKind? = nil) {
         self.id = id; self.name = name; self.group = group; self.kind = kind; self.description = description; self.luminance = luminance
