@@ -1,0 +1,8 @@
+.build/
+*.xcodeproj
+.swiftpm/
+DerivedData/
+build/
+*.app
+.DS_Store
+TestOutput/
