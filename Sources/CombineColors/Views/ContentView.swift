@@ -48,6 +48,7 @@ struct ContentView: View {
         .sheet(isPresented: $showPixelMath) { PixelMathEditorView(model: model) }
         .sheet(isPresented: $showExport) { ExportSheet(model: model) }
         .sheet(isPresented: $showDualBand) { DualBandSplitView(model: model) }
+        .sheet(isPresented: $showDualBandFile) { DualBandSplitView(model: model, initialFile: dualBandFile) }
         .sheet(item: $model.pendingColorFile) { pending in
             colorFileSheet(pending)
         }
@@ -124,12 +125,16 @@ struct ContentView: View {
             HStack {
                 Button("Cancel") { model.pendingColorFile = nil }.keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("Split dual-band…") { model.pendingColorFile = nil; dualBandFile = pending.file; showDualBandFile = true }
+                Button("Split dual-band…") {
+                    dualBandFile = pending.file
+                    model.pendingColorFile = nil
+                    // Present after the current sheet has gone away.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showDualBandFile = true }
+                }
                 Button("Use as RGB") { model.assignColorFileAsRGB(pending) }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
             }
         }
         .padding(16).frame(width: 440)
-        .sheet(isPresented: $showDualBandFile) { DualBandSplitView(model: model, initialFile: dualBandFile) }
     }
 
     @State private var dualBandFile: LoadedFile? = nil

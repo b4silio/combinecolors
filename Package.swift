@@ -31,6 +31,11 @@ let package = Package(
             dependencies: ["AstroCore"],
             path: "Tests/AstroCoreTests"
         ),
+        .testTarget(
+            name: "CombineColorsTests",
+            dependencies: ["CombineColors", "AstroCore"],
+            path: "Tests/CombineColorsTests"
+        ),
     ],
     swiftLanguageVersions: [.v5]
 )

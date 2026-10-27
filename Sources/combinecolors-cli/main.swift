@@ -21,6 +21,7 @@ import AstroCore
 //      --project <file.json>  load CombineSettings from a saved project / settings file
 //      --assign <file>=<kind> force a channel assignment (kind: L R G B Ha OIII SII Hb)
 //      --crop x,y,w,h         shared crop rectangle (full-resolution pixels); "auto" trims empty borders
+//      --save-project <file>  write a project file (channel paths, crop, settings) instead of/besides rendering
 
 var args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else {
@@ -79,6 +80,7 @@ case "render":
     let formatArg = option("--format") ?? "png8"
     let projectArg = option("--project")
     let cropArg = option("--crop")
+    let saveProject = option("--save-project")
     var assignments: [String: ChannelKind] = [:]
     while let a = option("--assign") {
         let parts = a.split(separator: "=", maxSplits: 1).map(String.init)
@@ -144,6 +146,18 @@ case "render":
     let context = RenderContext.make(settings: settings.normalization, sources: sources)
     print("normalisation (\(settings.normalization.method.rawValue), ref=\(context.reference?.rawValue ?? "-")) in \(Int(Date().timeIntervalSince(t1) * 1000)) ms")
     for (k, t) in context.transforms.sorted(by: { $0.key.rawValue < $1.key.rawValue }) { print("  \(k.rawValue): \(t.description)") }
+
+    if let sp = saveProject {
+        var doc = ProjectDocument()
+        var s = settings
+        if let pal = Palettes.palette(id: paletteArg) { s.select(palette: pal) }
+        if let l = lum { s.luminance.source = ChannelKind(rawValue: l) ?? ChannelKind.fromPixelMathIdentifier(l) }
+        doc.settings = s
+        doc.crop = crop
+        doc.channels = sources.values.sorted { $0.kind.rawValue < $1.kind.rawValue }.compactMap { src in src.url.map { ProjectDocument.ChannelRef(kind: src.kind, path: $0.path) } }
+        try doc.data().write(to: URL(fileURLWithPath: sp))
+        print("project written to \(sp)")
+    }
 
     let available = Set(sources.keys)
     let palettes: [Palette] = paletteArg == "all" ? Palettes.available(for: available) : [Palettes.palette(id: paletteArg)].compactMap { $0 }

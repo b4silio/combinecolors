@@ -44,7 +44,7 @@ Design decisions:
 * **Palettes** are 3×N matrices (editable) or Pixel-Math formulas; every preset
   gets a pre-computed thumbnail (whole image or chosen region).
 
-## Phases
+## Phases (all implemented)
 
 1. Core image model + IO: PlanarImage, FITS read/write (BITPIX 8/16/32/-32/-64,
    BZERO/BSCALE, NAXIS3), TIFF/PNG via ImageIO (8/16/32-bit), writers, channel detection.
@@ -60,6 +60,19 @@ Design decisions:
    parameters inspector with real-time preview, pixel math editor, dual-band splitter,
    export (FITS/TIFF16/TIFF32/PNG/JPEG), project save/load, histogram, pixel readout.
 8. Packaging (make_app.sh), README, performance pass, full test run.
+9. Shared crop (added on request): PixelRect, region-aware statistics, auto-trim of
+   registration borders, crop overlay/editing on the preview, cropped thumbnails and export.
+10. Model tests (Tests/CombineColorsTests) driving the app model headlessly: loading,
+    detection, mismatch rejection, pending files, reassign/remove, crop flow, auto-crop,
+    project round trip, export, A/B snapshot + undo, hover read-out, dual-band insertion.
+
+## Status
+
+* 65 core tests + 13 model tests pass (`swift test`).
+* Verified on the Soul Core FITS set (6 × 7272×5478 float32) and the Lowers Nebula
+  16-bit TIFF set: loading ≈ 1 s for six channels, preview renders 1–30 ms, full-resolution
+  Foraxx export ≈ 0.5 s, auto-crop 20–30 ms.
+* UI verified by screenshots (launch, project load with crop, palette grid, histogram).
 
 ## Tests
 

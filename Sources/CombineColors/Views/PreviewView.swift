@@ -36,6 +36,7 @@ final class ZoomPanNSView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
+        layer?.masksToBounds = true
         layer?.backgroundColor = NSColor(calibratedWhite: 0.11, alpha: 1).cgColor
         imageLayer.contentsGravity = .resize
         imageLayer.magnificationFilter = .linear
