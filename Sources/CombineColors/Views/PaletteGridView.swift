@@ -11,11 +11,8 @@ struct PaletteGridView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Picker("Thumbnails", selection: $model.thumbnailRegion) {
-                    ForEach(ThumbnailRegion.allCases) { r in Text(r.displayName).tag(r) }
-                }
-                .pickerStyle(.menu)
-                .controlSize(.small)
+                MenuPicker(title: "Thumbnails", selection: $model.thumbnailRegion, options: ThumbnailRegion.allCases) { $0.displayName }
+                    .controlSize(.small)
                 Spacer()
                 Button("Matrix…") { showMatrixEditor = true }.controlSize(.small)
                 Button("Pixel Math…") { showPixelMath = true }.controlSize(.small)

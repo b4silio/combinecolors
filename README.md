@@ -39,9 +39,14 @@ at full resolution.
   matching — each computed with or without a star mask.
 * **Per-channel controls**: enable, linear gain, pedestal, stretch target boost,
   post-stretch weight, black point, gamma.
+* **Luminance injection** (on by default, Hα): a drop-down of recipes — Hα, L,
+  `0.8 Hα + 0.1 OIII + 0.1 SII`, `0.7 Hα + 0.3 OIII` (HOO), `0.5/0.25/0.25`,
+  `0.5 L + 0.5 Hα`, max or mean of the lines, or a custom Pixel Math expression.
+  Missing channels are dropped and the weights renormalised (Hα → L fallback);
+  injected via L*a*b* or RGB ratio with an amount slider. Works in both stretch
+  stages (stretched channels mixed, or linear mix auto-stretched).
 * **Colour**: saturation, vibrance, SCNR green removal, hue rotation,
-  black/white point, gamma; luminance injection (L*a*b* or RGB ratio) from any
-  channel; RGB star blending (screen / lighten / add with a luminance mask,
+  black/white point, gamma; RGB star blending (screen / lighten / add with a luminance mask,
   linear or already-stretched star images detected automatically).
 * **Crop**: one rectangle shared by every channel, drawn on the preview or
   typed in, or detected automatically from the empty registration borders. The
@@ -57,6 +62,9 @@ at full resolution.
   processing elsewhere). Full resolution, rendered in strips, with the exact
   parameters of the preview.
 * **Projects**: file paths, crop and every setting in one JSON file.
+* **Recent sets**: every group of channel files loaded together is remembered as
+  one entry (File ▸ Open Recent Set, and on the empty start screen); opening it
+  reloads all channels into their slots.
 * **CLI** (`combinecolors-cli`) for headless batch rendering and testing.
 
 ## Building
@@ -115,6 +123,7 @@ B: OIII
 .build/release/combinecolors-cli render --out out --palette all --crop auto --norm backgroundSignal --linked \
     --max 2000000 Soul_Core-*-lpc.fits
 .build/release/combinecolors-cli render --out out --palette foraxx_sho --max 0 --format tiff16 --project combo.json *.fits
+.build/release/combinecolors-cli render --out out --palette hoo --lum haOiii --crop auto --save-project combo.json *.fits
 ```
 
 `--max 0` renders at full resolution; `--project` reuses a saved project's settings.

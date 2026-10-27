@@ -122,7 +122,15 @@ final class ProjectModel {
     private var undoSnapshot: CombineSettings?
     private var undoTimer: Timer?
 
-    init() {
+    // MARK: Recent sets
+    private let recentStore: RecentSetsStore
+    private(set) var recentSets: [RecentSet] = []
+    /// Suppresses recording while a set/project is being (re)loaded.
+    private var suppressRecent = false
+
+    init(defaults: UserDefaults = .standard) {
+        recentStore = RecentSetsStore(defaults: defaults)
+        recentSets = recentStore.load()
         renderer.onFrame = { [weak self] frame, gen in
             guard let self else { return }
             self.frame = frame
@@ -260,6 +268,7 @@ final class ProjectModel {
 
     private func sourcesChanged() {
         postStretchCache = [:]
+        recordRecentSet()
         if sources.isEmpty {
             context = nil; analysisSamples = [:]; thumbnails = [:]
             statusText = "Drop FITS or TIFF images to begin."
@@ -279,6 +288,50 @@ final class ProjectModel {
         }
         rebuildContext()
     }
+
+    // MARK: - Recent sets
+
+    private func recordRecentSet() {
+        guard !suppressRecent, !isLoading, !sources.isEmpty else { return }
+        let entries = sources.values.compactMap { s in s.url.map { RecentSet.Entry(kind: s.kind, path: $0.path) } }
+        // Only complete sets (every channel backed by a file) are remembered.
+        guard entries.count == sources.count else { return }
+        recentSets = recentStore.record(entries: entries)
+    }
+
+    func openRecentSet(_ set: RecentSet) {
+        let missing = set.entries.filter { !FileManager.default.fileExists(atPath: $0.path) }
+        guard missing.isEmpty else {
+            errorMessage = "Files no longer exist:\n" + missing.map { ($0.path as NSString).lastPathComponent }.joined(separator: "\n")
+            recentSets = recentStore.remove(id: set.id)
+            return
+        }
+        removeAll()
+        isLoading = true
+        loadingMessage = "Loading \(set.name)…"
+        let entries = set.entries
+        Task.detached(priority: .userInitiated) {
+            var items: [(ChannelKind, PlanarImage, String, URL?, String)] = []
+            var errors: [String] = []
+            let lock = NSLock()
+            DispatchQueue.concurrentPerform(iterations: entries.count) { i in
+                let e = entries[i]
+                let u = URL(fileURLWithPath: e.path)
+                do {
+                    let f = try ImageLoader.load(url: u)
+                    lock.lock(); items.append((e.kind, f.planes[0], f.fileName, u, f.formatDescription)); lock.unlock()
+                } catch { lock.lock(); errors.append("\(u.lastPathComponent): \(error.localizedDescription)"); lock.unlock() }
+            }
+            let its = items, errs = errors
+            await MainActor.run {
+                if !errs.isEmpty { self.errorMessage = errs.joined(separator: "\n") }
+                self.addChannels(its)
+            }
+        }
+    }
+
+    func removeRecentSet(_ set: RecentSet) { recentSets = recentStore.remove(id: set.id) }
+    func clearRecentSets() { recentStore.clear(); recentSets = [] }
 
     // MARK: - Crop
 
@@ -470,7 +523,7 @@ final class ProjectModel {
         if linear {
             s.stretch.method = .none
             s.post = PostSettings()
-            s.luminance.source = nil
+            s.luminance.enabled = false
             s.stars.enabled = false
         }
         let key = PostStretchKey(s, crop: crop, kinds: availableKinds)

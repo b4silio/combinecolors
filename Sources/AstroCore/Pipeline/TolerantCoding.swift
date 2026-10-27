@@ -62,7 +62,18 @@ extension LuminanceSettings {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: AnyKey.self)
         let d = LuminanceSettings()
-        source = c.optionalValue("source", d.source); amount = c.value("amount", d.amount); method = c.value("method", d.method)
+        enabled = c.value("enabled", d.enabled); preset = c.value("preset", d.preset); customExpression = c.value("customExpression", d.customExpression)
+        amount = c.value("amount", d.amount); method = c.value("method", d.method)
+        // Projects from the first version stored a single optional channel.
+        if c.contains(AnyKey("source")) {
+            if let k: ChannelKind = c.optionalValue("source", nil) {
+                enabled = true
+                preset = k == .luminance ? .lum : (k == .ha ? .ha : .custom)
+                if preset == .custom { customExpression = k.pixelMathName }
+            } else {
+                enabled = false
+            }
+        }
     }
 }
 

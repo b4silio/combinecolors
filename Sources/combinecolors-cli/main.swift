@@ -15,7 +15,7 @@ import AstroCore
 //      --scnr <0..1>          green removal amount
 //      --sat <factor>         saturation
 //      --hue <deg>            hue shift
-//      --lum <channel>        luminance source (L, Ha, …)
+//      --lum <preset|off>     luminance: ha | lum | haMostly | haOiii | balanced | lumHa | maxLines | meanLines | off (default ha)
 //      --stars                blend RGB stars
 //      --format <fmt>         png8 | png16 | tiff16 | tiff32 | fits32 | jpeg (default png8)
 //      --project <file.json>  load CombineSettings from a saved project / settings file
@@ -39,6 +39,13 @@ func flag(_ name: String) -> Bool {
 }
 
 func fmt(_ v: Float) -> String { String(format: "%.6g", v) }
+
+func applyLum(_ l: String, _ s: inout CombineSettings) {
+    if l == "off" || l == "none" { s.luminance.enabled = false; return }
+    s.luminance.enabled = true
+    if let p = LuminancePreset(rawValue: l) { s.luminance.preset = p }
+    else { s.luminance.preset = .custom; s.luminance.customExpression = l }
+}
 
 switch command {
 case "palettes":
@@ -139,7 +146,7 @@ case "render":
     settings.post.scnrGreen = scnr
     settings.post.saturation = sat
     settings.post.hueShift = hue
-    if let l = lum { settings.luminance.source = ChannelKind(rawValue: l) ?? ChannelKind.fromPixelMathIdentifier(l) }
+    if let l = lum { applyLum(l, &settings) }
     settings.stars.enabled = stars
 
     let t1 = Date()
@@ -151,7 +158,7 @@ case "render":
         var doc = ProjectDocument()
         var s = settings
         if let pal = Palettes.palette(id: paletteArg) { s.select(palette: pal) }
-        if let l = lum { s.luminance.source = ChannelKind(rawValue: l) ?? ChannelKind.fromPixelMathIdentifier(l) }
+        if let l = lum { applyLum(l, &s) }
         doc.settings = s
         doc.crop = crop
         doc.channels = sources.values.sorted { $0.kind.rawValue < $1.kind.rawValue }.compactMap { src in src.url.map { ProjectDocument.ChannelRef(kind: src.kind, path: $0.path) } }
@@ -166,7 +173,7 @@ case "render":
     for palette in palettes {
         var s = settings
         s.select(palette: palette)
-        if let l = lum { s.luminance.source = ChannelKind(rawValue: l) ?? ChannelKind.fromPixelMathIdentifier(l) }
+        if let l = lum { applyLum(l, &s) }
         let t2 = Date()
         do {
             let image: RGBImage

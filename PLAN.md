@@ -66,9 +66,13 @@ Design decisions:
     detection, mismatch rejection, pending files, reassign/remove, crop flow, auto-crop,
     project round trip, export, A/B snapshot + undo, hover read-out, dual-band insertion.
 
+11. Luminance recipes (Hα default, L, weighted mixes, max/mean of lines, custom expression),
+    resolution-independent luminance stretch in the post-combine stage.
+12. Recent channel sets (UserDefaults MRU, File menu + start screen), scroll-safe drop-downs.
+
 ## Status
 
-* 65 core tests + 13 model tests pass (`swift test`).
+* 87 tests pass (`swift test`): core, pipeline, luminance presets, model flows, recent sets.
 * Verified on the Soul Core FITS set (6 × 7272×5478 float32) and the Lowers Nebula
   16-bit TIFF set: loading ≈ 1 s for six channels, preview renders 1–30 ms, full-resolution
   Foraxx export ≈ 0.5 s, auto-crop 20–30 ms.

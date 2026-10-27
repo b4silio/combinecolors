@@ -48,12 +48,92 @@ public enum LuminanceMethod: String, Codable, CaseIterable, Identifiable {
     public var displayName: String { self == .ratio ? "Luminance ratio (RGB)" : "CIE L*a*b* replacement" }
 }
 
+/// Ready-made luminance recipes. Weighted presets drop missing channels and renormalise.
+public enum LuminancePreset: String, Codable, CaseIterable, Identifiable {
+    case ha, lum, haMostly, haOiii, balanced, lumHa, maxLines, meanLines, custom
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .ha: return "Hα"
+        case .lum: return "Luminance (L)"
+        case .haMostly: return "0.8 Hα + 0.1 OIII + 0.1 SII"
+        case .haOiii: return "0.7 Hα + 0.3 OIII (HOO)"
+        case .balanced: return "0.5 Hα + 0.25 OIII + 0.25 SII"
+        case .lumHa: return "0.5 L + 0.5 Hα"
+        case .maxLines: return "Max of narrowband lines"
+        case .meanLines: return "Mean of narrowband lines"
+        case .custom: return "Custom expression…"
+        }
+    }
+
+    /// Weights per channel for the weighted presets (nil for the others).
+    public var weights: [ChannelKind: Float]? {
+        switch self {
+        case .ha: return [.ha: 1]
+        case .lum: return [.luminance: 1]
+        case .haMostly: return [.ha: 0.8, .oiii: 0.1, .sii: 0.1]
+        case .haOiii: return [.ha: 0.7, .oiii: 0.3]
+        case .balanced: return [.ha: 0.5, .oiii: 0.25, .sii: 0.25]
+        case .lumHa: return [.luminance: 0.5, .ha: 0.5]
+        default: return nil
+        }
+    }
+
+    /// Pixel Math expression for the available channels; nil when nothing usable is loaded.
+    public func expression(available: Set<ChannelKind>, custom: String) -> String? {
+        switch self {
+        case .custom:
+            let t = custom.trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.isEmpty ? nil : t
+        case .maxLines, .meanLines:
+            let lines = ChannelKind.narrowband.filter { available.contains($0) }
+            guard !lines.isEmpty else { return nil }
+            if lines.count == 1 { return lines[0].pixelMathName }
+            return "\(self == .maxLines ? "max" : "mean")(\(lines.map(\.pixelMathName).joined(separator: ", ")))"
+        default:
+            guard let w = weights else { return nil }
+            let present = ChannelKind.allCases.filter { w[$0] != nil && available.contains($0) }
+            guard !present.isEmpty else { return nil }
+            let total = present.map { w[$0]! }.reduce(0, +)
+            if present.count == 1 { return present[0].pixelMathName }
+            return present.map { k -> String in
+                let v = w[k]! / total
+                return String(format: "%.3g", v) + "*" + k.pixelMathName
+            }.joined(separator: " + ")
+        }
+    }
+}
+
 public struct LuminanceSettings: Codable, Equatable, Hashable {
-    /// nil = no luminance injection.
-    public var source: ChannelKind? = nil
+    /// Inject a luminance into the colour result.
+    public var enabled: Bool = true
+    public var preset: LuminancePreset = .ha
+    /// Expression used by the `.custom` preset (stretched channels in [0,1] for the pre-combine stage).
+    public var customExpression: String = "0.8*Ha + 0.1*OIII + 0.1*SII"
     public var amount: Float = 1
     public var method: LuminanceMethod = .lab
     public init() {}
+
+    /// The expression that will actually be used for the loaded channels
+    /// (falls back from Hα to L to nothing when channels are missing).
+    public func resolvedExpression(available: Set<ChannelKind>) -> String? {
+        guard enabled else { return nil }
+        if let e = preset.expression(available: available, custom: customExpression) { return e }
+        if preset != .custom {
+            for fallback in [LuminancePreset.ha, .lum] where fallback != preset {
+                if let e = fallback.expression(available: available, custom: customExpression) { return e }
+            }
+        }
+        return nil
+    }
+
+    /// Channels referenced by the resolved expression.
+    public func requiredChannels(available: Set<ChannelKind>) -> Set<ChannelKind> {
+        guard let e = resolvedExpression(available: available), let expr = try? PixelMath.parse(e) else { return [] }
+        return Set(expr.variables.compactMap { ChannelKind.fromPixelMathIdentifier($0) })
+    }
 }
 
 public struct PostSettings: Codable, Equatable, Hashable {
@@ -129,7 +209,11 @@ public struct CombineSettings: Codable, Equatable, Hashable {
         case .matrix(let m): mode = .matrix; matrix = m
         case .pixelMath(let p): mode = .pixelMath; pixelMath = p
         }
-        luminance.source = palette.luminance
+        if let l = palette.luminance {
+            luminance.enabled = true
+            luminance.preset = l == .luminance ? .lum : (l == .ha ? .ha : .custom)
+            if luminance.preset == .custom { luminance.customExpression = l.pixelMathName }
+        }
     }
 
     /// Channels used by the current combination (excluding luminance / stars).
@@ -140,10 +224,10 @@ public struct CombineSettings: Codable, Equatable, Hashable {
         }
     }
 
-    /// Every channel the pipeline will read.
-    public var allChannels: Set<ChannelKind> {
+    /// Every channel the pipeline will read, given what is loaded.
+    public func allChannels(available: Set<ChannelKind>) -> Set<ChannelKind> {
         var s = requiredChannels
-        if let l = luminance.source { s.insert(l) }
+        s.formUnion(luminance.requiredChannels(available: available))
         if stars.enabled { s.formUnion([.red, .green, .blue]) }
         return s
     }

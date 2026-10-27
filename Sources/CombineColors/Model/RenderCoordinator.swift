@@ -145,8 +145,6 @@ final class ThumbnailCoordinator {
                 if stale { return }
                 var settings = job.settings
                 settings.select(palette: palette)
-                // Keep the user's luminance choice unless the palette suggests one.
-                if palette.luminance == nil { settings.luminance.source = job.settings.luminance.source }
                 guard let res = try? Renderer.render(RenderRequest(planes: planes, analysisPlanes: job.analysisSamples, settings: settings, context: job.context)),
                       let cg = RasterWriter.makeDisplayImage(rgb: res.image) else { continue }
                 DispatchQueue.main.async { self.onThumbnail?(palette.id, cg, gen) }

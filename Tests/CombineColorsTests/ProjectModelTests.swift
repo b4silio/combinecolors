@@ -230,3 +230,46 @@ final class ProjectModelTests: XCTestCase {
         XCTAssertEqual(m.sources[.oiii]?.stats.median ?? 0, 0.25, accuracy: 1e-6)
     }
 }
+
+@MainActor
+final class RecentSetsTests: XCTestCase {
+    func testRecordAndReopenSets() async throws {
+        let defaults = UserDefaults(suiteName: "RecentSetsTests-\(UUID().uuidString)")!
+        let base = ProjectModelTests()
+        try await base.setUp()
+        defer { Task { try? await base.tearDown() } }
+        let ha = try base.makeChannel("set-Ha.fits", kind: .ha, scale: 1, seed: 1)
+        let o3 = try base.makeChannel("set-OIII.fits", kind: .oiii, scale: 0.5, seed: 2)
+        let m = ProjectModel(defaults: defaults)
+        XCTAssertTrue(m.recentSets.isEmpty)
+        m.loadFiles([ha, o3])
+        await base.wait { m.sources.count == 2 && !m.isLoading && !m.recentSets.isEmpty }
+        XCTAssertEqual(m.recentSets.count, 1)
+        XCTAssertEqual(m.recentSets[0].entries.map(\.kind), [.ha, .oiii])
+        XCTAssertEqual(m.recentSets[0].name, "set")
+        // Adding a channel updates the same entry (new path set → new entry at front, old one kept).
+        let s2 = try base.makeChannel("set-SII.fits", kind: .sii, scale: 0.3, seed: 3)
+        m.loadFiles([s2])
+        await base.wait { m.sources.count == 3 && !m.isLoading && m.recentSets.count == 2 }
+        XCTAssertEqual(m.recentSets[0].entries.count, 3)
+        // Reopening the first set replaces the loaded channels.
+        let first = m.recentSets[1]
+        m.openRecentSet(first)
+        await base.wait { m.sources.count == 2 && !m.isLoading }
+        XCTAssertEqual(Set(m.sources.keys), [.ha, .oiii])
+        XCTAssertEqual(m.recentSets[0].paths, first.paths, "reopened set moves to the front")
+        XCTAssertEqual(m.recentSets.count, 2)
+        // Persisted across model instances.
+        let m2 = ProjectModel(defaults: defaults)
+        XCTAssertEqual(m2.recentSets.count, 2)
+        // Missing files are reported and the entry dropped.
+        try FileManager.default.removeItem(at: ha)
+        m2.openRecentSet(m2.recentSets[0])
+        XCTAssertNotNil(m2.errorMessage)
+        XCTAssertEqual(m2.recentSets.count, 1)
+        m2.clearRecentSets()
+        XCTAssertTrue(m2.recentSets.isEmpty)
+        XCTAssertEqual(RecentSet.makeName(entries: [.init(kind: .ha, path: "/a/b/M31_Ha.fits"), .init(kind: .oiii, path: "/a/b/M31_OIII.fits")]), "M31")
+        XCTAssertEqual(RecentSet.makeName(entries: [.init(kind: .ha, path: "/x/Nebula/h.fits"), .init(kind: .oiii, path: "/x/Nebula/o.fits")]), "Nebula")
+    }
+}

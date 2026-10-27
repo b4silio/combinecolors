@@ -17,7 +17,7 @@ struct InspectorView: View {
                 SectionBox(title: "Stretch", subtitle: model.settings.stretch.method.displayName) { stretchSection }
                 SectionBox(title: "Normalisation", subtitle: model.settings.normalization.method.displayName) { normalizationSection }
                 SectionBox(title: "Channels") { channelsSection }
-                SectionBox(title: "Luminance", subtitle: model.settings.luminance.source?.displayName ?? "off") { luminanceSection }
+                SectionBox(title: "Luminance", subtitle: model.settings.luminance.enabled ? (model.settings.luminance.resolvedExpression(available: model.availableKinds) ?? "unavailable") : "off") { luminanceSection }
                 SectionBox(title: "Colour") { colourSection }
                 SectionBox(title: "RGB stars", subtitle: model.settings.stars.enabled ? "on" : "off") { starsSection }
                 SectionBox(title: "Crop", subtitle: model.crop.map { String($0.width) + "×" + String($0.height) } ?? "none") { cropSection }
@@ -32,12 +32,8 @@ struct InspectorView: View {
 
     @ViewBuilder var stretchSection: some View {
         let s = $model.settings.stretch
-        Picker("Method", selection: s.method) {
-            ForEach(StretchMethod.allCases) { m in Text(m.displayName).tag(m) }
-        }
-        Picker("Stage", selection: $model.settings.stretchStage) {
-            ForEach(StretchStage.allCases) { st in Text(st.displayName).tag(st) }
-        }
+        MenuPicker(title: "Method", selection: s.method, options: StretchMethod.allCases) { $0.displayName }
+        MenuPicker(title: "Stage", selection: $model.settings.stretchStage, options: StretchStage.allCases) { $0.displayName }
         Toggle("Linked channels (same stretch for all)", isOn: s.linked)
         if model.settings.stretch.method != .none {
             SliderRow(title: "Target bg", value: s.targetBackground, range: 0.02...0.6, defaultValue: 0.2, help: "Where the median background lands after the stretch (PixInsight STF default 0.25).")
@@ -72,13 +68,10 @@ struct InspectorView: View {
 
     @ViewBuilder var normalizationSection: some View {
         let n = $model.settings.normalization
-        Picker("Method", selection: n.method) {
-            ForEach(NormalizationMethod.allCases) { m in Text(m.displayName).tag(m) }
-        }
+        MenuPicker(title: "Method", selection: n.method, options: NormalizationMethod.allCases) { $0.displayName }
         Text(model.settings.normalization.method.summary).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        Picker("Reference", selection: n.reference) {
-            Text("Automatic (\(model.context?.reference?.displayName ?? "–"))").tag(ChannelKind?.none)
-            ForEach(ChannelKind.allCases.filter { model.sources[$0] != nil }) { k in Text(k.displayName).tag(ChannelKind?.some(k)) }
+        MenuPicker(title: "Reference", selection: n.reference, options: [ChannelKind?.none] + ChannelKind.allCases.filter { model.sources[$0] != nil }.map { ChannelKind?.some($0) }) {
+            $0?.displayName ?? "Automatic (\(model.context?.reference?.displayName ?? "–"))"
         }
         Toggle("Use star mask for statistics", isOn: n.useStarMask)
         if model.settings.normalization.method == .backgroundSignal {
@@ -116,15 +109,29 @@ struct InspectorView: View {
 
     @ViewBuilder var luminanceSection: some View {
         let l = $model.settings.luminance
-        Picker("Source", selection: l.source) {
-            Text("None").tag(ChannelKind?.none)
-            ForEach(ChannelKind.allCases.filter { model.sources[$0] != nil }) { k in Text(k.displayName).tag(ChannelKind?.some(k)) }
-        }
-        if model.settings.luminance.source != nil {
-            SliderRow(title: "Amount", value: l.amount, range: 0...1, defaultValue: 1)
-            Picker("Method", selection: l.method) {
-                ForEach(LuminanceMethod.allCases) { m in Text(m.displayName).tag(m) }
+        let lum = model.settings.luminance
+        Toggle("Inject luminance (adds contrast and detail)", isOn: l.enabled)
+        if lum.enabled {
+            MenuPicker(title: "Source", selection: l.preset, options: LuminancePreset.allCases) { p in
+                p.displayName + (p.expression(available: model.availableKinds, custom: lum.customExpression) == nil && p != .custom ? " (unavailable)" : "")
             }
+            if lum.preset == .custom {
+                TextField("e.g. 0.8*Ha + 0.2*max(OIII, SII)", text: l.customExpression)
+                    .font(.system(.caption, design: .monospaced))
+                    .textFieldStyle(.roundedBorder)
+            }
+            if let e = lum.resolvedExpression(available: model.availableKinds) {
+                let ok = (try? PixelMath.parse(e)) != nil
+                let missing = lum.requiredChannels(available: model.availableKinds).subtracting(model.availableKinds)
+                Text(ok ? (missing.isEmpty ? "Using: " + e : "Missing channels: " + missing.map(\.displayName).joined(separator: ", ")) : "Expression does not parse")
+                    .font(.system(size: 9, design: .monospaced)).foregroundStyle(ok && missing.isEmpty ? Color.secondary : Color.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("No usable channel loaded for this source.").font(.caption2).foregroundStyle(.orange)
+            }
+            SliderRow(title: "Amount", value: l.amount, range: 0...1, defaultValue: 1)
+            MenuPicker(title: "Method", selection: l.method, options: LuminanceMethod.allCases) { $0.displayName }
+            Text("Pre-combine stage: the stretched channels are mixed. Post-combine stage: the linear channels are mixed, then auto-stretched.").font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         if model.settings.mode == .pixelMath && model.settings.pixelMath.hasLuminance {
             Text("The Pixel Math luminance expression overrides this source.").font(.caption2).foregroundStyle(.secondary)
@@ -159,14 +166,14 @@ struct InspectorView: View {
         if !hasRGB { Text("Load R, G and B channels (or a colour stars image) to enable.").font(.caption2).foregroundStyle(.secondary) }
         if model.settings.stars.enabled {
             SliderRow(title: "Amount", value: s.amount, range: 0...1, defaultValue: 1)
-            Picker("Star data", selection: s.stretch) { ForEach(StarsStretchMode.allCases) { m in Text(m.displayName).tag(m) } }
+            MenuPicker(title: "Star data", selection: s.stretch, options: StarsStretchMode.allCases) { $0.displayName }
             Toggle("Mask stars by luminance", isOn: s.useMask).help("Off for star-only images from StarNet/StarXTerminator.")
             if model.settings.stars.useMask {
                 SliderRow(title: "Threshold", value: s.threshold, range: 0...1, defaultValue: 0.15)
                 SliderRow(title: "Softness", value: s.softness, range: 0.01...1, defaultValue: 0.25)
             }
             SliderRow(title: "Star sat.", value: s.saturation, range: 0...3, defaultValue: 1.3)
-            Picker("Blend", selection: s.mode) { ForEach(StarsBlendMode.allCases) { m in Text(m.displayName).tag(m) } }
+            MenuPicker(title: "Blend", selection: s.mode, options: StarsBlendMode.allCases) { $0.displayName }
         }
     }
 
@@ -237,7 +244,7 @@ struct ChannelAdjustView: View {
                 Toggle(isOn: a.enabled) { EmptyView() }.toggleStyle(.checkbox)
                 Circle().fill(kind.tint).frame(width: 8, height: 8)
                 Text(kind.displayName).font(.subheadline).bold()
-                if !model.settings.requiredChannels.contains(kind) && model.settings.luminance.source != kind {
+                if !model.settings.allChannels(available: model.availableKinds).contains(kind) {
                     Text("unused").font(.caption2).foregroundStyle(.tertiary)
                 }
                 Spacer()

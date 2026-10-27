@@ -71,6 +71,31 @@ struct ContentView: View {
                 Button("Open images…") { Panels.openImages { model.loadFiles($0) } }
                 Button("Split dual-band…") { showDualBand = true }
             }
+            if !model.recentSets.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Recent sets").font(.headline).padding(.top, 12)
+                    ForEach(model.recentSets.prefix(8)) { set in
+                        Button {
+                            model.openRecentSet(set)
+                        } label: {
+                            HStack {
+                                Image(systemName: "photo.stack")
+                                VStack(alignment: .leading) {
+                                    Text(set.name).bold()
+                                    Text(set.summary + "  ·  " + (set.folder as NSString).abbreviatingWithTildeInPath).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                                }
+                                Spacer()
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(6)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .controlBackgroundColor).opacity(0.5)))
+                        .contextMenu { Button("Remove from recent") { model.removeRecentSet(set) } }
+                    }
+                }
+                .frame(width: 520)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .allowsHitTesting(true)

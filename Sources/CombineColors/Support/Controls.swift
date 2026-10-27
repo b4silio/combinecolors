@@ -160,3 +160,31 @@ extension ChannelKind {
         }
     }
 }
+
+/// Drop-down picker built on `Menu`, so that scrolling the inspector never changes the selection
+/// (menu-style `Picker`s react to the scroll wheel when the pointer passes over them).
+struct MenuPicker<T: Hashable>: View {
+    let title: String
+    @Binding var selection: T
+    let options: [T]
+    let label: (T) -> String
+
+    var body: some View {
+        HStack {
+            Text(title)
+            Menu {
+                ForEach(options, id: \.self) { o in
+                    Button {
+                        selection = o
+                    } label: {
+                        if o == selection { Label(label(o), systemImage: "checkmark") } else { Text(label(o)) }
+                    }
+                }
+            } label: {
+                Text(label(selection)).lineLimit(1)
+            }
+            .menuStyle(.borderedButton)
+            .fixedSize()
+        }
+    }
+}

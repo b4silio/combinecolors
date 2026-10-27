@@ -86,7 +86,10 @@ public enum Renderer {
         // 1. Normalised linear channels (+ gain, pedestal).
         var linear: [ChannelKind: PlanarImage] = [:]
         var linStats: [ChannelKind: ChannelStats] = [:]
-        let needed = s.allChannels.intersection(available)
+        let needed = s.allChannels(available: available).intersection(available)
+        let lumExpr: Expr? = try s.luminance.resolvedExpression(available: available).map { src in
+            do { return try PixelMath.parse(src) } catch let e as PixelMathError { throw RenderError.pixelMath(PixelMathError(message: "Luminance: " + e.message, position: e.position)) }
+        }
         for k in needed {
             let (p, st) = prepareLinear(k, plane: req.planes[k]!, settings: s, context: req.context)
             linear[k] = p; linStats[k] = st
@@ -127,7 +130,9 @@ public enum Renderer {
                 }
             }
             combined = try combine(stretched, stats: stStats, settings: s, width: w, height: h, lum: &lumPlane)
-            if let l = s.luminance.source, lumPlane == nil, let p = stretched[l] { lumPlane = p }
+            if lumPlane == nil, let e = lumExpr {
+                lumPlane = try evaluateLuminance(e, planes: stretched, width: w, height: h)
+            }
         case .postCombine:
             // Weight acts as a linear multiplier here.
             for k in needed {
@@ -136,37 +141,42 @@ public enum Renderer {
             }
             var lumLinear: PlanarImage? = nil
             combined = try combine(linear, stats: usesChannelStats(s) ? linStats : [:], settings: s, width: w, height: h, lum: &lumLinear)
-            // 3. Stretch the combined image.
-            let resolved: [ResolvedStretch]
-            if let fixed = req.fixedPostStretch, fixed.count == 3 {
+            if lumLinear == nil, let e = lumExpr {
+                lumLinear = try evaluateLuminance(e, planes: linear, width: w, height: h)
+            }
+            // 3. Stretch parameters: fixed (cached), derived from the resolution-independent analysis
+            //    samples, or — as a last resort — from this very render.
+            //    Entries 0…2 are R, G, B; entry 3 (when present) is the luminance.
+            var resolved: [ResolvedStretch] = []
+            if let fixed = req.fixedPostStretch, fixed.count >= 3, (lumLinear == nil || fixed.count >= 4) {
                 resolved = fixed
-            } else if let analysis = req.analysisPlanes, needed.allSatisfy({ analysis[$0] != nil }) {
-                var aLinear: [ChannelKind: PlanarImage] = [:]
-                for k in needed where analysis[k] != nil {
-                    let (p, _) = prepareLinear(k, plane: analysis[k]!, settings: s, context: req.context)
-                    let wgt = s.adjust(k).weight
-                    if wgt != 1 { p.affine(scale: wgt, offset: 0) }
-                    aLinear[k] = p
-                }
-                var dummy: PlanarImage? = nil
-                let aw = analysis.values.first!.width, ah = analysis.values.first!.height
-                let aCombined = try combine(aLinear, stats: [:], settings: s, width: aw, height: ah, lum: &dummy)
-                resolved = resolvePostStretch(aCombined, settings: s.stretch)
             } else {
-                resolved = resolvePostStretch(combined, settings: s.stretch)
+                var source = combined
+                var lumSource = lumLinear
+                if let analysis = req.analysisPlanes, needed.allSatisfy({ analysis[$0] != nil }) {
+                    var aLinear: [ChannelKind: PlanarImage] = [:]
+                    for k in needed {
+                        let (p, _) = prepareLinear(k, plane: analysis[k]!, settings: s, context: req.context)
+                        let wgt = s.adjust(k).weight
+                        if wgt != 1 { p.affine(scale: wgt, offset: 0) }
+                        aLinear[k] = p
+                    }
+                    var aLum: PlanarImage? = nil
+                    let aw = analysis.values.first!.width, ah = analysis.values.first!.height
+                    source = try combine(aLinear, stats: [:], settings: s, width: aw, height: ah, lum: &aLum)
+                    if aLum == nil, let e = lumExpr { aLum = try evaluateLuminance(e, planes: aLinear, width: aw, height: ah) }
+                    lumSource = aLum
+                }
+                resolved = resolvePostStretch(source, settings: s.stretch)
+                if let ls = lumSource {
+                    resolved.append(Stretch.resolve(s.stretch, stats: Statistics.fromSample(subsample(ls))))
+                }
             }
             postStretch = resolved
             for (i, p) in combined.planes.enumerated() { resolved[i].apply(to: p) }
-            // Luminance: own auto stretch.
-            if let l = s.luminance.source, let p = linear[l] {
-                let r = Stretch.resolve(s.stretch, stats: linStats[l]!)
-                channelStretch[l] = r
-                r.apply(to: p)
-                lumPlane = p
-            }
+            // Luminance: mixed in the linear domain, then its own auto stretch.
             if let ll = lumLinear {
-                let st = Statistics.fromSample(subsample(ll))
-                let r = Stretch.resolve(s.stretch, stats: st)
+                let r = resolved.count >= 4 ? resolved[3] : Stretch.resolve(s.stretch, stats: Statistics.fromSample(subsample(ll)))
                 r.apply(to: ll)
                 lumPlane = ll
             }
@@ -192,6 +202,16 @@ public enum Renderer {
     }
 
     // MARK: - Pieces
+
+    /// Evaluates a luminance expression over the given planes; a plane returned unchanged is copied.
+    static func evaluateLuminance(_ e: Expr, planes: [ChannelKind: PlanarImage], width w: Int, height h: Int) throws -> PlanarImage {
+        var env = PixelMathEnvironment(width: w, height: h)
+        for (k, p) in planes { env.set(k, plane: p) }
+        do {
+            let out = try PixelMath.evaluateToPlane(e, env: env)
+            return planes.values.contains { $0 === out } ? out.copy() : out
+        } catch let err as PixelMathError { throw RenderError.pixelMath(PixelMathError(message: "Luminance: " + err.message, position: err.position)) }
+    }
 
     static func usesChannelStats(_ s: CombineSettings) -> Bool {
         guard s.mode == .pixelMath else { return false }

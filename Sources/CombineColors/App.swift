@@ -24,6 +24,14 @@ struct CombineColorsApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("Add Images…") { Panels.openImages { model.loadFiles($0) } }.keyboardShortcut("o")
                 Button("Open Project…") { Panels.openProject { model.openProject(from: $0) } }.keyboardShortcut("o", modifiers: [.command, .shift])
+                Menu("Open Recent Set") {
+                    ForEach(model.recentSets) { set in
+                        Button("\(set.name)  (\(set.summary))") { model.openRecentSet(set) }
+                    }
+                    if model.recentSets.isEmpty { Text("No recent sets") }
+                    Divider()
+                    Button("Clear Menu") { model.clearRecentSets() }.disabled(model.recentSets.isEmpty)
+                }
                 Divider()
                 Button("Save Project") {
                     if let u = model.projectURL { try? model.saveProject(to: u) } else { saveProjectAs() }

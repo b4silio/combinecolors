@@ -36,6 +36,7 @@ final class PipelineTests: XCTestCase {
         s.select(palette: Palettes.palette(id: "sho")!)
         s.stretch.method = .none
         s.normalization.method = .none
+        s.luminance.enabled = false
         let r = try render(s)
         // With no stretch and no normalisation, R == SII, G == Ha, B == OIII (clamped).
         XCTAssertEqual(r.image.r[10, 10], min(sources[.sii]!.image[10, 10], 1), accuracy: 1e-6)
@@ -51,7 +52,7 @@ final class PipelineTests: XCTestCase {
                     s.select(palette: Palettes.palette(id: pal)!)
                     s.stretchStage = stage
                     s.stretch.linked = linked
-                    s.luminance.source = .ha
+                    s.luminance.enabled = true; s.luminance.preset = .ha
                     s.post.saturation = 1.2; s.post.scnrGreen = 0.5; s.post.hueShift = 10
                     let r = try render(s)
                     assertBounded(r.image)
@@ -59,7 +60,7 @@ final class PipelineTests: XCTestCase {
                     // Something must be visible: the mean is far from 0 and 1.
                     let m = r.image.luma().mean()
                     XCTAssertGreaterThan(m, 0.02, "\(pal) \(stage) linked=\(linked)"); XCTAssertLessThan(m, 0.98)
-                    if stage == .postCombine { XCTAssertEqual(r.postStretch?.count, 3) } else { XCTAssertNil(r.postStretch) }
+                    if stage == .postCombine { XCTAssertEqual(r.postStretch?.count, 4) } else { XCTAssertNil(r.postStretch) }
                 }
             }
         }
@@ -123,7 +124,7 @@ final class PipelineTests: XCTestCase {
         for stage in StretchStage.allCases {
             var s = CombineSettings(); s.select(palette: Palettes.palette(id: "foraxx_sho")!)
             s.stretchStage = stage
-            s.luminance.source = .ha
+            s.luminance.enabled = true; s.luminance.preset = .haMostly
             s.stars.enabled = true
             let ctx = RenderContext.make(settings: s.normalization, sources: sources)
             let whole = try Renderer.render(RenderRequest(planes: planes(), analysisPlanes: Renderer.analysisSamples(sources: sources), settings: s, context: ctx))
@@ -147,7 +148,7 @@ final class PipelineTests: XCTestCase {
 
     func testPreviewLevelIsDownsampleOfFull() throws {
         // For linear (no stretch) matrix combinations the level-1 preview equals the box-filtered full render.
-        var s = CombineSettings(); s.select(palette: Palettes.palette(id: "sho")!); s.stretch.method = .none
+        var s = CombineSettings(); s.select(palette: Palettes.palette(id: "sho")!); s.stretch.method = .none; s.luminance.enabled = false
         let full = try render(s, level: 0).image.downsampled2x()
         let half = try render(s, level: 1).image
         for (p, q) in zip(full.planes, half.planes) { XCTAssertLessThan(p.maxAbsDifference(q), 1e-5) }
@@ -315,5 +316,67 @@ final class TolerantDecodingTests: XCTestCase {
         // Round trip of current defaults remains exact.
         let s = CombineSettings()
         XCTAssertEqual(try JSONDecoder().decode(CombineSettings.self, from: try JSONEncoder().encode(s)), s)
+    }
+}
+
+final class LuminancePresetTests: XCTestCase {
+    func testPresetExpressionsAdaptToAvailableChannels() {
+        let all: Set<ChannelKind> = [.ha, .oiii, .sii, .luminance]
+        XCTAssertEqual(LuminancePreset.ha.expression(available: all, custom: ""), "Ha")
+        XCTAssertEqual(LuminancePreset.haMostly.expression(available: all, custom: ""), "0.8*Ha + 0.1*OIII + 0.1*SII")
+        // SII missing → weights renormalised over Hα and OIII.
+        XCTAssertEqual(LuminancePreset.haMostly.expression(available: [.ha, .oiii], custom: ""), "0.889*Ha + 0.111*OIII")
+        XCTAssertEqual(LuminancePreset.haMostly.expression(available: [.ha], custom: ""), "Ha")
+        XCTAssertNil(LuminancePreset.haMostly.expression(available: [.red, .green], custom: ""))
+        XCTAssertEqual(LuminancePreset.maxLines.expression(available: [.ha, .oiii], custom: ""), "max(Ha, OIII)")
+        XCTAssertEqual(LuminancePreset.meanLines.expression(available: [.sii], custom: ""), "SII")
+        XCTAssertEqual(LuminancePreset.custom.expression(available: all, custom: " Ha^0.5 "), "Ha^0.5")
+        XCTAssertNil(LuminancePreset.custom.expression(available: all, custom: "  "))
+        for p in LuminancePreset.allCases where p != .custom {
+            if let e = p.expression(available: all, custom: "") { XCTAssertNoThrow(try PixelMath.parse(e), p.rawValue) }
+        }
+    }
+
+    func testFallbackChainAndRequiredChannels() {
+        var l = LuminanceSettings()
+        XCTAssertEqual(l.resolvedExpression(available: [.ha, .oiii]), "Ha")
+        XCTAssertEqual(l.resolvedExpression(available: [.luminance, .red]), "L")       // Hα missing → L
+        XCTAssertNil(l.resolvedExpression(available: [.red, .green, .blue]))
+        l.enabled = false
+        XCTAssertNil(l.resolvedExpression(available: [.ha]))
+        l.enabled = true; l.preset = .custom; l.customExpression = "0.5*Ha + 0.5*Hb"
+        XCTAssertEqual(l.requiredChannels(available: [.ha]), [.ha, .hb])
+        var s = CombineSettings(); s.luminance = l
+        XCTAssertTrue(s.allChannels(available: [.ha, .hb]).contains(.hb))
+    }
+
+    func testRendererUsesMixedLuminance() throws {
+        let sources: [ChannelKind: ChannelSource] = [.ha: Synth.source(.ha), .oiii: Synth.source(.oiii, scale: 0.4, seed: 2), .sii: Synth.source(.sii, scale: 0.3, seed: 3)]
+        let planes = sources.mapValues { $0.image }
+        for stage in StretchStage.allCases {
+            var s = CombineSettings(); s.select(palette: Palettes.palette(id: "hoo")!); s.stretchStage = stage
+            s.luminance.enabled = false
+            let ctx = RenderContext.make(settings: s.normalization, sources: sources)
+            let samples = Renderer.analysisSamples(sources: sources)
+            let plain = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: samples, settings: s, context: ctx))
+            s.luminance.enabled = true; s.luminance.preset = .haMostly
+            let mixed = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: samples, settings: s, context: ctx))
+            XCTAssertGreaterThan(mixed.image.r.maxAbsDifference(plain.image.r), 0.01, "\(stage)")
+            for p in mixed.image.planes { let (lo, hi) = p.minMax(); XCTAssertGreaterThanOrEqual(lo, 0); XCTAssertLessThanOrEqual(hi, 1) }
+            // Custom expression that references a missing channel surfaces as a render error.
+            s.luminance.preset = .custom; s.luminance.customExpression = "Ha + Hb"
+            XCTAssertThrowsError(try Renderer.render(RenderRequest(planes: planes, analysisPlanes: samples, settings: s, context: ctx)))
+            s.luminance.customExpression = "Ha +"
+            XCTAssertThrowsError(try Renderer.render(RenderRequest(planes: planes, analysisPlanes: samples, settings: s, context: ctx)))
+        }
+    }
+
+    func testOldProjectLuminanceKeyMigrates() throws {
+        let on = try JSONDecoder().decode(LuminanceSettings.self, from: Data(#"{"source":"L","amount":0.5}"#.utf8))
+        XCTAssertTrue(on.enabled); XCTAssertEqual(on.preset, .lum); XCTAssertEqual(on.amount, 0.5)
+        let off = try JSONDecoder().decode(LuminanceSettings.self, from: Data(#"{"source":null,"amount":1}"#.utf8))
+        XCTAssertFalse(off.enabled)
+        let fresh = try JSONDecoder().decode(LuminanceSettings.self, from: Data("{}".utf8))
+        XCTAssertEqual(fresh, LuminanceSettings())
     }
 }
