@@ -11,8 +11,13 @@ struct InspectorView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
-                SectionBox(title: "Palette", subtitle: model.currentPalette?.name) {
-                    PaletteGridView(model: model, showMatrixEditor: $showMatrixEditor, showPixelMath: $showPixelMath)
+                SectionBox(title: "Palette", subtitle: model.currentPalette?.name ?? (model.settings.mode == .pixelMath ? "custom Pixel Math" : "custom matrix")) {
+                    HStack {
+                        Button("Edit matrix…") { showMatrixEditor = true }
+                        Button("Edit Pixel Math…") { showPixelMath = true }
+                    }
+                    .controlSize(.small)
+                    Text("Pick a palette from the thumbnail strip under the preview; it stays visible while you adjust the controls below.").font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 SectionBox(title: "Stretch", subtitle: model.settings.stretch.method.displayName) { stretchSection }
                 SectionBox(title: "Normalisation", subtitle: model.settings.normalization.method.displayName) { normalizationSection }
