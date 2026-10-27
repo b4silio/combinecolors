@@ -90,8 +90,8 @@ public enum Palettes {
         Palette(id: "hho", name: "HHO", group: "Narrowband", kind: .matrix(m([.ha: 1], [.ha: 1], [.oiii: 1])),
                 description: "Hα → red and green, OIII → blue. Yellow/blue bicolour."),
         Palette(id: "sho_natural", name: "Natural (line colours)", group: "Narrowband",
-                kind: .matrix(m([.ha: 0.85, .sii: 0.65], [.ha: 0.10, .oiii: 0.80, .hb: 0.35], [.oiii: 0.45, .hb: 0.75])),
-                description: "Each line is tinted with the approximate colour of its wavelength (Hα 656 nm, SII 672 nm, OIII 501 nm, Hβ 486 nm)."),
+                kind: .matrix(m([.ha: 0.85, .sii: 0.65], [.ha: 0.10, .oiii: 0.80], [.oiii: 0.60])),
+                description: "Each line is tinted with the approximate colour of its wavelength (Hα 656 nm, SII 672 nm, OIII 501 nm). Add Hβ in the matrix editor if you have it."),
 
         // --- Blends ---
         Palette(id: "sho_gold", name: "SHO Golden", group: "Blends",

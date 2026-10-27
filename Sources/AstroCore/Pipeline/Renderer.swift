@@ -296,11 +296,21 @@ public enum Renderer {
             planes.append(c)
             stats.append(context.normalizedStats[k] ?? Statistics.fromSample(subsample(c)))
         }
-        var st = StretchSettings()
-        st.method = .autoSTF
-        st.targetBackground = 0.1
-        let resolved = Stretch.resolveLinked(st, stats: stats)
-        for p in planes { resolved.apply(to: p) }
+        // Already-stretched star images (bright stars reach high values) must not be stretched again.
+        let looksStretched = (stats.map { $0.percentile(0.999) }.max() ?? 0) > 0.15
+        let doStretch: Bool
+        switch s.stars.stretch {
+        case .auto: doStretch = !looksStretched
+        case .none: doStretch = false
+        case .autoSTF: doStretch = true
+        }
+        if doStretch {
+            var st = StretchSettings()
+            st.method = .autoSTF
+            st.targetBackground = 0.1
+            let resolved = Stretch.resolveLinked(st, stats: stats)
+            for p in planes { resolved.apply(to: p) }
+        }
         return RGBImage(r: planes[0], g: planes[1], b: planes[2])
     }
 

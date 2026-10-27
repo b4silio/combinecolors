@@ -73,8 +73,22 @@ public enum StarsBlendMode: String, Codable, CaseIterable, Identifiable {
     public var displayName: String { rawValue.capitalized }
 }
 
+public enum StarsStretchMode: String, Codable, CaseIterable, Identifiable {
+    case auto, none, autoSTF
+    public var id: String { rawValue }
+    public var displayName: String {
+        switch self {
+        case .auto: return "Automatic"
+        case .none: return "Already stretched"
+        case .autoSTF: return "Linear (auto-stretch)"
+        }
+    }
+}
+
 public struct StarsBlendSettings: Codable, Equatable, Hashable {
     public var enabled: Bool = false
+    /// Whether the RGB star channels need stretching before blending.
+    public var stretch: StarsStretchMode = .auto
     public var amount: Float = 1
     /// Luminance threshold above which the RGB image is considered "star".
     public var threshold: Float = 0.15

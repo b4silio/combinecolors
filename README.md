@@ -41,14 +41,17 @@ at full resolution.
   post-stretch weight, black point, gamma.
 * **Colour**: saturation, vibrance, SCNR green removal, hue rotation,
   black/white point, gamma; luminance injection (L*a*b* or RGB ratio) from any
-  channel; RGB star blending (screen / lighten / add with a luminance mask).
+  channel; RGB star blending (screen / lighten / add with a luminance mask,
+  linear or already-stretched star images detected automatically).
 * **Crop**: one rectangle shared by every channel, drawn on the preview or
   typed in, or detected automatically from the empty registration borders. The
   crop drives statistics, thumbnails and the export; its limits can be shown
   on top of the full preview.
-* **Preview**: zoom/pan with trackpad or mouse, 1:1 and fit, pixel read-out of
-  every channel and of the result under the cursor, histogram, A/B snapshot
-  comparison, undo/redo of every adjustment.
+* **Preview**: zoom/pan with trackpad or mouse (⌘-scroll or pinch to zoom,
+  double-click toggles 1:1/fit), pixel read-out of every channel and of the
+  result under the cursor, histogram, A/B snapshot comparison (*Store A* /
+  *Show A*), undo/redo of every adjustment. Channels that are already
+  stretched (TIFF exports) are detected and the stretch is switched off.
 * **Export**: TIFF 16-bit / 32-bit float, PNG 8/16-bit, JPEG, FITS 32-bit float
   / 16-bit; stretched or linear (normalised + combined only, for further
   processing elsewhere). Full resolution, rendered in strips, with the exact

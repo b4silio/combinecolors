@@ -159,6 +159,7 @@ struct InspectorView: View {
         if !hasRGB { Text("Load R, G and B channels (or a colour stars image) to enable.").font(.caption2).foregroundStyle(.secondary) }
         if model.settings.stars.enabled {
             SliderRow(title: "Amount", value: s.amount, range: 0...1, defaultValue: 1)
+            Picker("Star data", selection: s.stretch) { ForEach(StarsStretchMode.allCases) { m in Text(m.displayName).tag(m) } }
             Toggle("Mask stars by luminance", isOn: s.useMask).help("Off for star-only images from StarNet/StarXTerminator.")
             if model.settings.stars.useMask {
                 SliderRow(title: "Threshold", value: s.threshold, range: 0...1, defaultValue: 0.15)

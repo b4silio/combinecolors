@@ -80,6 +80,8 @@ final class ProjectModel {
     private(set) var analysisSamples: [ChannelKind: PlanarImage] = [:]
     private var postStretchCache: [PostStretchKey: [ResolvedStretch]] = [:]
     private var contextGeneration = 0
+    private var stretchHintShown = false
+    private var statusHint: String? = nil
 
     // MARK: Preview
     private(set) var frame: PreviewFrame? = nil
@@ -267,6 +269,14 @@ final class ProjectModel {
         if !Renderer.missingChannels(settings: settings, available: availableKinds).isEmpty {
             if let p = Palettes.available(for: availableKinds).first { settings.select(palette: p) }
         }
+        // Already-stretched data (medians far above a linear sky level): default to no stretch.
+        if !stretchHintShown, sources.values.allSatisfy({ $0.stats.median > 0.08 }), settings.stretch.method == .autoSTF, settings == CombineSettings.defaultWith(palette: settings.paletteID) {
+            settings.stretch.method = .none
+            stretchHintShown = true
+            statusHint = "stretch set to none because the data look already stretched"
+            rebuildContext()
+            return
+        }
         rebuildContext()
     }
 
@@ -350,7 +360,7 @@ final class ProjectModel {
                 self.postStretchCache = [:]
                 self.scheduleRender()
                 self.scheduleThumbnails(delay: 0.05)
-                self.statusText = "\(srcs.count) channel\(srcs.count == 1 ? "" : "s") loaded · \(Int(srcs.values.first!.width))×\(Int(srcs.values.first!.height))"
+                self.statusText = "\(srcs.count) channel\(srcs.count == 1 ? "" : "s") loaded · \(Int(srcs.values.first!.width))×\(Int(srcs.values.first!.height))" + (self.statusHint.map { " · " + $0 } ?? "")
             }
         }
     }
@@ -561,6 +571,13 @@ final class ProjectModel {
 }
 
 extension CombineSettings {
+    /// Default settings with a given palette selected (used to detect untouched settings).
+    static func defaultWith(palette id: String) -> CombineSettings {
+        var s = CombineSettings()
+        if let p = Palettes.palette(id: id) { s.select(palette: p) }
+        return s
+    }
+
     /// True when the two settings differ only in the palette definition (thumbnails stay valid).
     static func differOnlyInPalette(_ a: CombineSettings, _ b: CombineSettings) -> Bool {
         var x = a, y = b
