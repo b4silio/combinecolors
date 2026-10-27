@@ -16,7 +16,7 @@ struct StatusBar: View {
             Spacer()
             if let h = model.hover {
                 HStack(spacing: 8) {
-                    Text("(\(h.x), \(h.y))")
+                    Text(verbatim: "(\(h.x), \(h.y))")
                     ForEach(h.values, id: \.0) { (k, v) in Text("\(k.shortName) \(v.g4)") }
                     if let rgb = h.rgb { Text(String(format: "RGB %.3f %.3f %.3f", rgb.0, rgb.1, rgb.2)) }
                 }

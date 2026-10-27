@@ -360,7 +360,7 @@ final class ProjectModel {
                 self.postStretchCache = [:]
                 self.scheduleRender()
                 self.scheduleThumbnails(delay: 0.05)
-                self.statusText = "\(srcs.count) channel\(srcs.count == 1 ? "" : "s") loaded · \(Int(srcs.values.first!.width))×\(Int(srcs.values.first!.height))" + (self.statusHint.map { " · " + $0 } ?? "")
+                self.statusText = "\(srcs.count) channel\(srcs.count == 1 ? "" : "s") loaded · \(String(srcs.values.first!.width)) × \(String(srcs.values.first!.height))" + (self.statusHint.map { " · " + $0 } ?? "")
             }
         }
     }

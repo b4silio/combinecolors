@@ -83,18 +83,16 @@ struct ContentView: View {
                 Button("Apply") { model.commitCropEditing() }
                 Button("Cancel") { model.cancelCropEditing() }
             } else {
-                Button { model.beginCropEditing() } label: { Image(systemName: "crop") }.help("Set crop (applies to every channel)").disabled(model.sources.isEmpty)
+                Button { model.beginCropEditing() } label: { Label("Crop", systemImage: "crop") }.disabled(model.sources.isEmpty)
                 if model.crop != nil {
-                    Toggle(isOn: $model.showCropOverlay) { Image(systemName: "rectangle.dashed") }.help("Show crop limits")
+                    Toggle(isOn: $model.showCropOverlay) { Label("Limits", systemImage: "rectangle.dashed") }
                 }
-                Toggle(isOn: $showHistogram) { Image(systemName: "chart.bar.xaxis") }.help("Histogram")
+                Toggle(isOn: $showHistogram) { Label("Histogram", systemImage: "chart.bar.xaxis") }
                 Divider().frame(height: 14)
-                Button("Store A") { model.snapshotA = model.settings; model.showingSnapshot = false }
-                    .help("Remember the current settings as version A for comparison").disabled(model.sources.isEmpty)
-                Toggle(isOn: $model.showingSnapshot) { Text("Show A") }
-                    .help("Show the stored version A instead of the current settings (hold to compare)").disabled(model.snapshotA == nil)
+                Button("Store A") { model.snapshotA = model.settings; model.showingSnapshot = false }.disabled(model.sources.isEmpty)
+                Toggle(isOn: $model.showingSnapshot) { Text("Show A") }.disabled(model.snapshotA == nil)
                 if model.snapshotA != nil {
-                    Button("Restore A") { if let a = model.snapshotA { model.showingSnapshot = false; model.settings = a } }.help("Go back to version A")
+                    Button("Restore A") { if let a = model.snapshotA { model.showingSnapshot = false; model.settings = a } }
                 }
                 Divider().frame(height: 14)
                 Button { zoom(.zoomOut) } label: { Image(systemName: "minus.magnifyingglass") }
@@ -143,7 +141,7 @@ struct ContentView: View {
     private func assignSheet(_ pending: PendingFile) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Which channel is \(pending.file.fileName)?").font(.headline)
-            Text("The channel could not be detected from the file name or metadata. \(pending.file.width)×\(pending.file.height) · \(pending.file.formatDescription)").font(.caption).foregroundStyle(.secondary)
+            Text(verbatim: "The channel could not be detected from the file name or metadata. \(pending.file.width) × \(pending.file.height) · \(pending.file.formatDescription)").font(.caption).foregroundStyle(.secondary)
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 90))]) {
                 ForEach(ChannelKind.allCases) { k in
                     Button { model.assignPending(pending, to: k) } label: {

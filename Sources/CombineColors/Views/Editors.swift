@@ -197,7 +197,7 @@ struct DualBandSplitView: View {
                     ZStack {
                         RoundedRectangle(cornerRadius: 6).strokeBorder(targeted ? Color.accentColor : Color.secondary.opacity(0.4), style: StrokeStyle(lineWidth: 1, dash: [5, 3]))
                         if let f = file {
-                            VStack { Text(f.fileName).bold(); Text("\(f.width)×\(f.height) · \(f.formatDescription)").font(.caption).foregroundStyle(.secondary) }
+                            VStack { Text(f.fileName).bold(); Text(verbatim: "\(f.width) × \(f.height) · \(f.formatDescription)").font(.caption).foregroundStyle(.secondary) }
                         } else {
                             VStack { Image(systemName: "square.and.arrow.down"); Text("Drop a colour FITS/TIFF here").font(.caption) }
                         }
@@ -346,7 +346,7 @@ struct ExportSheet: View {
                 .help("Writes the normalised, weighted, combined channels without any stretch — for further processing in PixInsight or Siril.")
             if let size = model.imageSize {
                 let c = model.crop
-                Text("Output: \(c?.width ?? Int(size.width))×\(c?.height ?? Int(size.height)) px\(c != nil ? " (cropped)" : ""), full resolution, rendered with the exact preview parameters.").font(.caption).foregroundStyle(.secondary)
+                Text(verbatim: "Output: \(c?.width ?? Int(size.width)) × \(c?.height ?? Int(size.height)) px\(c != nil ? " (cropped)" : ""), full resolution, rendered with the exact preview parameters.").font(.caption).foregroundStyle(.secondary)
             }
             if let e = error { Text(e).foregroundStyle(.red).font(.caption) }
             HStack {

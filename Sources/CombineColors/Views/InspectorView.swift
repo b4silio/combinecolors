@@ -20,7 +20,7 @@ struct InspectorView: View {
                 SectionBox(title: "Luminance", subtitle: model.settings.luminance.source?.displayName ?? "off") { luminanceSection }
                 SectionBox(title: "Colour") { colourSection }
                 SectionBox(title: "RGB stars", subtitle: model.settings.stars.enabled ? "on" : "off") { starsSection }
-                SectionBox(title: "Crop", subtitle: model.crop.map { "\($0.width)×\($0.height)" } ?? "none") { cropSection }
+                SectionBox(title: "Crop", subtitle: model.crop.map { String($0.width) + "×" + String($0.height) } ?? "none") { cropSection }
                 SectionBox(title: "Output") { outputSection }
             }
             .padding(8)
@@ -196,7 +196,7 @@ struct InspectorView: View {
             }
             Text("Drag on the image to draw the rectangle; drag the handles or the inside to adjust. The crop applies to every channel.").font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         } else if let c = model.crop {
-            Text("\(c.x), \(c.y)  →  \(c.width)×\(c.height) px").font(.system(.caption, design: .monospaced))
+            Text(verbatim: "x \(c.x)  y \(c.y)  →  \(c.width) × \(c.height) px").font(.system(.caption, design: .monospaced))
             Toggle("Show crop limits on the preview", isOn: $model.showCropOverlay)
             Text("Statistics, thumbnails and the exported image use the cropped area only.").font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
