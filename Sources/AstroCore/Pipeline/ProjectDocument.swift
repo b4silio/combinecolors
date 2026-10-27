@@ -12,6 +12,8 @@ public struct ProjectDocument: Codable {
     public var channels: [ChannelRef] = []
     public var settings: CombineSettings = CombineSettings()
     public var starsFile: String? = nil
+    /// Shared crop applied to every channel (statistics, thumbnails, export).
+    public var crop: PixelRect? = nil
 
     public init() {}
 

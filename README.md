@@ -1,0 +1,216 @@
+# CombineColors
+
+A native macOS app for turning stacked monochrome astrophotography channels
+(Hα, OIII, SII, Hβ, L, R, G, B) into colour images. Drop FITS or TIFF stacks
+(16-bit integer or 32-bit float, linear or already stretched), pick a palette
+from live thumbnails, tune the balance with a real-time preview, then export
+at full resolution.
+
+![Main window](docs/screenshot.png)
+
+## Features
+
+* **Input**: FITS (BITPIX 8/16/32/-32/-64, BZERO/BSCALE, NAXIS3 colour cubes,
+  ROWORDER) and TIFF/PNG/JPEG (8/16-bit integer, 32-bit float) through ImageIO.
+  Channel slots are filled automatically from the FITS `FILTER` keyword or the
+  file name (`Hydrogen-alpha`, `O3`, `SII`, `_R`, `Lum`, …); unknown files ask.
+* **Dual-band splitting** (separate pre-processing step): a one-shot-colour
+  image taken through an Hα/OIII (or SII/Hβ) filter is split into two
+  monochrome channels with adjustable R/G/B weights and cross-talk correction;
+  the results can be saved as FITS or added straight to the channel slots.
+* **Palettes**: SHO (Hubble), HOO, HSO, HOS (CFHT), OHS, OSH, SOH, HHO, a
+  "natural" line-colour palette, blends (SHO Golden, SHO Soft, HOO + SII, …),
+  dynamic Pixel-Math palettes (Foraxx SHO/HOO, line-ratio, OIII-protected, …),
+  broadband RGB / LRGB / HαRGB, and mono checks. Every palette is editable:
+  matrix palettes open in a weight table, dynamic ones in the Pixel Math editor.
+* **Pixel Math**: expressions per output channel (R, G, B, optional L) with
+  `+ - * / % ^ ~`, comparisons, `?:`, 40 functions (`mtf`, `iif`, `lerp`,
+  `clamp`, `med`, `smoothstep`, …) and whole-channel statistics
+  (`cmed(Ha)`, `cbg(OIII)`, `cnoise`, `cpct(x, q)`). Vectorised with Accelerate.
+* **Stretch** (PixInsight-style ScreenTransferFunction and more): Auto STF
+  (median → target background, shadows clipping in MADN units), manual MTF,
+  arcsinh, generalised hyperbolic (GHS), logarithmic; linked or unlinked;
+  applied **per channel before combining** or **to the colour image after a
+  linear combination** (both orders are available because they give different
+  results — see below).
+* **Normalisation** of the channel strengths before combining (see the notes
+  below): background equalisation, robust linear fit, background + dispersion,
+  background + signal (background/emission model), noise-weighted, histogram
+  matching — each computed with or without a star mask.
+* **Per-channel controls**: enable, linear gain, pedestal, stretch target boost,
+  post-stretch weight, black point, gamma.
+* **Colour**: saturation, vibrance, SCNR green removal, hue rotation,
+  black/white point, gamma; luminance injection (L*a*b* or RGB ratio) from any
+  channel; RGB star blending (screen / lighten / add with a luminance mask).
+* **Crop**: one rectangle shared by every channel, drawn on the preview or
+  typed in, or detected automatically from the empty registration borders. The
+  crop drives statistics, thumbnails and the export; its limits can be shown
+  on top of the full preview.
+* **Preview**: zoom/pan with trackpad or mouse, 1:1 and fit, pixel read-out of
+  every channel and of the result under the cursor, histogram, A/B snapshot
+  comparison, undo/redo of every adjustment.
+* **Export**: TIFF 16-bit / 32-bit float, PNG 8/16-bit, JPEG, FITS 32-bit float
+  / 16-bit; stretched or linear (normalised + combined only, for further
+  processing elsewhere). Full resolution, rendered in strips, with the exact
+  parameters of the preview.
+* **Projects**: file paths, crop and every setting in one JSON file.
+* **CLI** (`combinecolors-cli`) for headless batch rendering and testing.
+
+## Building
+
+Requirements: macOS 14+, Xcode 16+ (tested with Xcode 26 / Swift 6.3).
+
+```bash
+swift build -c release            # library, app binary, CLI
+swift test                        # unit + integration tests (~40 s)
+./scripts/make_app.sh             # assembles build/CombineColors.app
+open build/CombineColors.app
+```
+
+`Package.swift` can also be opened in Xcode directly (the `CombineColors`
+scheme runs the app).
+
+## Using the app
+
+1. **Load channels** — drop files or a folder on the window (or ⌘O). Drop a
+   file on a specific slot to force its channel. A colour file asks whether it
+   is an RGB (stars) image or a dual-band image to split.
+2. **Crop** (optional but recommended for registered stacks with empty
+   borders) — *Auto trim* finds the borders; or press the crop button, drag a
+   rectangle, adjust it with the handles, press Return. The crop applies to all
+   channels at once.
+3. **Pick a palette** from the thumbnails. Thumbnails are rendered with the
+   current stretch/normalisation/colour settings from the whole image, the crop
+   or the current view (menu above the grid).
+4. **Tune**: stretch, normalisation, per-channel balance, colour. Everything
+   updates live; double-click a slider label to reset it; ⌘Z undoes.
+   *Store A* / *Show A* compares two states.
+5. **Export** (⌘E / Combine & Export…) at full resolution.
+6. **Save the project** (⌘S) to come back later.
+
+### Pixel Math quick reference
+
+Channels: `Ha` (`H`, `Halpha`), `OIII` (`O`, `O3`), `SII` (`S`, `S2`), `Hb`,
+`R`, `G`, `B`, `L` — case-insensitive. `~x` is `1 - x` (PixInsight
+convention), `^` is power. In the "stretch channels, then combine" stage the
+channels are already in [0, 1]; in the "combine linear" stage they are linear
+and the whole result is stretched afterwards.
+
+Foraxx SHO as shipped:
+
+```
+R: (OIII^~OIII)*SII + ~(OIII^~OIII)*Ha
+G: ((OIII*Ha)^~(OIII*Ha))*Ha + ~((OIII*Ha)^~(OIII*Ha))*OIII
+B: OIII
+```
+
+### Command line
+
+```bash
+.build/release/combinecolors-cli palettes
+.build/release/combinecolors-cli info  stack-Ha.fits
+.build/release/combinecolors-cli render --out out --palette all --crop auto --norm backgroundSignal --linked \
+    --max 2000000 Soul_Core-*-lpc.fits
+.build/release/combinecolors-cli render --out out --palette foraxx_sho --max 0 --format tiff16 --project combo.json *.fits
+```
+
+`--max 0` renders at full resolution; `--project` reuses a saved project's settings.
+
+## How the preview stays faithful to the export
+
+Every per-channel transform (normalisation, stretch) is derived from
+statistics of the *full-resolution* data (a deterministic sub-sample of up to
+600 k pixels, zero padding excluded, optionally star-masked). The preview then
+applies exactly those transforms to a mip-pyramid level chosen for the
+viewport (≤ 3 Mpx, or ≤ 12 Mpx in high-quality mode); zooming past the level's
+resolution renders crops of finer levels up to 1:1. Point-wise operations
+commute with box down-sampling, so the preview *is* the down-sampled export for
+linear operations and differs only by the noise averaging for the non-linear
+ones. In the "combine linear, then stretch" mode the stretch parameters are
+computed from full-resolution samples of the combined image, not from the
+preview, so they do not drift with the zoom level. Full-resolution export runs
+in 4-Mpx strips (a 40 Mpx Foraxx combination takes about half a second on an
+M-series Mac).
+
+Rendering is latest-wins on a background queue; palette thumbnails are
+re-rendered in a low-priority queue 0.6 s after the last change.
+
+## Notes on normalisation and stretching (why the options exist)
+
+Narrowband channels differ in signal strength by large factors (Hα is usually
+several times brighter than OIII and SII), so some equalisation is needed
+before mapping them to colours. The approaches implemented, roughly in order
+of sophistication:
+
+* **Unlinked auto-stretch** (PixInsight STF with *unlinked* channels, Siril
+  "autostretch"): each channel's median is mapped to the same target
+  brightness. This is what most people see on screen and it is an implicit —
+  and aggressive — normalisation. Because the STF is invariant to affine
+  changes of the input, any linear normalisation or gain applied before it has
+  *no visible effect*; only the per-channel target boost / weight / black point
+  matter. The app shows a note when this mode is active.
+* **Background equalisation**: subtract each channel's sky level (sigma-clipped
+  median) and add the reference's. Removes the offset difference only.
+* **Linear fit** (PixInsight `LinearFit`, Siril "Linear match"): robust
+  iterative least-squares fit of the reference against each channel, applied as
+  `a·x + b`. Matches both background and signal where the channels are
+  correlated. It is sensitive to gradients that are not shared between the
+  channels (flat-field residuals, vignetting) — regression dilution pulls the
+  slope towards zero — hence the star mask and sigma rejection.
+* **Background + dispersion**: match background and robust dispersion (MADN).
+  The dispersion of a narrowband channel mixes noise and nebulosity, so this is
+  a compromise between the next two.
+* **Background + signal** (default): model each channel as *sky + emission*,
+  take the sky from the sigma-clipped star-masked median and the emission level
+  from a high percentile (99.5 % by default) of the star-masked image, then map
+  `(x - sky) / (signal - sky)` onto the reference's range. The stars are
+  excluded so that a bright star field does not define the scale; the
+  percentile is adjustable.
+* **Noise-weighted**: equalise the noise floor (`σ` from the MAD of neighbour
+  differences). The weaker channel then *looks* weaker, which is honest and
+  useful when a channel's faint signal would otherwise be amplified into
+  noise; combine with a per-channel gain if needed.
+* **Histogram matching**: quantile mapping of each channel onto the reference
+  distribution. The strongest equalisation; it also distorts relative
+  intensities within a channel, which can look artificial.
+
+Whether to **stretch before or after combining**: stretching each channel
+first (then combining) is the classic workflow for SHO/HOO because it lets
+every channel reach a similar dynamic range; combining in the linear domain
+and stretching once (linked) preserves the true intensity ratios and gives
+colours that follow the physics (and far less green in SHO), at the cost of
+the weaker lines being dimmer unless normalised. Both are one switch away;
+the normalisation methods matter most with a linked stretch or the
+post-combine stage.
+
+The stretch functions follow published formulas: the midtones transfer
+function and auto-STF constants (shadows clipping −2.8 MADN, target
+background 0.25) are PixInsight's; arcsinh and logarithmic stretches are the
+usual forms; the generalised hyperbolic stretch is the Payne/Siril formulation
+(`1 − (1 + D·b·x)^(−1/b)`, mirrored about SP, linear below LP and above HP).
+
+## Layout of the code
+
+```
+Sources/AstroCore            processing library (no UI)
+  Image/                     PlanarImage, Pyramid, PixelRect/AutoCrop, Statistics, StarMask
+  IO/                        FITS reader/writer, ImageIO raster reader/writer, loader, channel detection
+  Processing/                Stretch, Normalization, Palettes, PostProcess, DualBand
+  PixelMath/                 lexer, parser, vectorised evaluator, programs
+  Pipeline/                  CombineSettings, ChannelSource, Renderer, ProjectDocument
+Sources/CombineColors        SwiftUI app (model, coordinators, views)
+Sources/combinecolors-cli    headless renderer
+Tests/AstroCoreTests         XCTest suite (70+ tests, real-data tests skip when the data is absent)
+scripts/                     make_app.sh, make_icon.py
+```
+
+See `PLAN.md` for the phase plan and the test matrix.
+
+## Limitations / ideas
+
+* No star removal: the RGB star blend uses a luminance mask on the RGB
+  channels; a StarNet/StarXTerminator stars-only image works best (disable the
+  mask).
+* Gradients are not corrected; the normalisation assumes a flat sky.
+* Only the primary HDU of a FITS file is read; compressed FITS (`.fz`) and
+  XISF are not supported.

@@ -20,6 +20,7 @@ import AstroCore
 //      --format <fmt>         png8 | png16 | tiff16 | tiff32 | fits32 | jpeg (default png8)
 //      --project <file.json>  load CombineSettings from a saved project / settings file
 //      --assign <file>=<kind> force a channel assignment (kind: L R G B Ha OIII SII Hb)
+//      --crop x,y,w,h         shared crop rectangle (full-resolution pixels); "auto" trims empty borders
 
 var args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else {
@@ -77,6 +78,7 @@ case "render":
     let stars = flag("--stars")
     let formatArg = option("--format") ?? "png8"
     let projectArg = option("--project")
+    let cropArg = option("--crop")
     var assignments: [String: ChannelKind] = [:]
     while let a = option("--assign") {
         let parts = a.split(separator: "=", maxSplits: 1).map(String.init)
@@ -109,6 +111,19 @@ case "render":
     }
     print("loaded \(sources.count) channels in \(Int(Date().timeIntervalSince(t0) * 1000)) ms: \(sources.keys.map(\.rawValue).sorted())")
     guard !sources.isEmpty else { exit(1) }
+
+    var crop: PixelRect? = nil
+    if let c = cropArg {
+        if c == "auto" {
+            let t = Date()
+            crop = AutoCrop.detect(images: sources.values.map(\.image))
+            print("auto crop: \(crop.map { "\($0.x),\($0.y),\($0.width),\($0.height)" } ?? "none") in \(Int(Date().timeIntervalSince(t) * 1000)) ms")
+        } else {
+            let p = c.split(separator: ",").compactMap { Int($0) }
+            if p.count == 4 { crop = PixelRect(x: p[0], y: p[1], width: p[2], height: p[3]) }
+        }
+        if let r = crop { sources = sources.mapValues { ChannelSource($0, region: r) } }
+    }
 
     var settings = CombineSettings()
     if let pj = projectArg, let data = FileManager.default.contents(atPath: pj) {
@@ -146,12 +161,15 @@ case "render":
                 let lvl = any.pyramid.levelIndex(maxPixels: maxPixels)
                 var planes: [ChannelKind: PlanarImage] = [:]
                 let analysis = Renderer.analysisSamples(sources: sources)
-                for (k, src) in sources { planes[k] = src.pyramid.level(lvl) }
+                for (k, src) in sources {
+                    let l = src.pyramid.level(lvl)
+                    planes[k] = crop.map { l.cropped($0.scaled(level: lvl)) } ?? l
+                }
                 let res = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: analysis, settings: s, context: context))
                 image = res.image
                 print("\(palette.id): level \(lvl) \(image.width)×\(image.height) rendered in \(Int(res.millis)) ms")
             } else {
-                image = try Renderer.renderFull(sources: sources, settings: s, context: context, postStretch: nil, progress: nil)!
+                image = try Renderer.renderFull(sources: sources, settings: s, context: context, postStretch: nil, region: crop, progress: nil)!
                 print("\(palette.id): full \(image.width)×\(image.height) rendered in \(Int(Date().timeIntervalSince(t2) * 1000)) ms")
             }
             let url = outDir.appendingPathComponent("\(palette.id).\(format.fileExtension)")

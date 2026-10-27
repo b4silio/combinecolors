@@ -307,7 +307,8 @@ public enum Renderer {
     /// Builds the 1×N analysis sample planes for a set of sources.
     public static func analysisSamples(sources: [ChannelKind: ChannelSource], maxSamples: Int = 400_000) -> [ChannelKind: PlanarImage] {
         let kinds = sources.keys.sorted { $0.rawValue < $1.rawValue }
-        let arrays = Statistics.multiSample(images: kinds.map { sources[$0]!.image }, maxSamples: maxSamples)
+        let region = sources.values.first?.region
+        let arrays = Statistics.multiSample(images: kinds.map { sources[$0]!.image }, maxSamples: maxSamples, region: region)
         var out: [ChannelKind: PlanarImage] = [:]
         for (k, a) in zip(kinds, arrays) where !a.isEmpty { out[k] = PlanarImage(width: a.count, height: 1, pixels: a) }
         return out
@@ -318,10 +319,11 @@ public enum Renderer {
     /// Renders the full-resolution image in horizontal strips to bound memory.
     /// `postStretch` should come from a preview render so the result matches what was shown.
     public static func renderFull(sources: [ChannelKind: ChannelSource], settings: CombineSettings, context: RenderContext,
-                                  postStretch: [ResolvedStretch]?, stripPixels: Int = 4_000_000,
+                                  postStretch: [ResolvedStretch]?, region: PixelRect? = nil, stripPixels: Int = 4_000_000,
                                   progress: ((Double) -> Void)? = nil, isCancelled: (() -> Bool)? = nil) throws -> RGBImage? {
         guard let any = sources.values.first else { throw RenderError.noOutput }
-        let w = any.width, h = any.height
+        let crop = region?.clamped(width: any.width, height: any.height) ?? PixelRect.full(width: any.width, height: any.height)
+        let w = crop.width, h = crop.height
         let rows = max(1, min(h, stripPixels / w))
         let out = RGBImage(width: w, height: h)
         var y = 0
@@ -336,7 +338,7 @@ public enum Renderer {
             if isCancelled?() == true { return nil }
             let hh = min(rows, h - y)
             var planes: [ChannelKind: PlanarImage] = [:]
-            for (k, s) in sources { planes[k] = s.image.cropped(x: 0, y: y, width: w, height: hh) }
+            for (k, s) in sources { planes[k] = s.image.cropped(x: crop.x, y: crop.y + y, width: w, height: hh) }
             let res = try render(RenderRequest(planes: planes, analysisPlanes: nil, settings: settings, context: context, fixedPostStretch: fixed))
             for (src, dst) in zip(res.image.planes, out.planes) {
                 (dst.pointer + y * w).update(from: src.pointer, count: w * hh)

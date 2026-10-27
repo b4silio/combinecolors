@@ -63,8 +63,14 @@ public struct StatsOptions {
     /// Optional exclusion mask (1 = excluded) at a coarser pyramid level.
     public var mask: PlanarImage? = nil
     public var maskLevel: Int = 0
+    /// Restrict every computation to this region (full-resolution coordinates).
+    public var region: PixelRect? = nil
 
     public init() {}
+
+    func bounds(width: Int, height: Int) -> PixelRect {
+        region?.clamped(width: width, height: height) ?? PixelRect.full(width: width, height: height)
+    }
 }
 
 public enum Statistics {
@@ -116,20 +122,21 @@ public enum Statistics {
     /// Deterministic grid sample of valid pixels. Returns the sample and the valid fraction.
     public static func sample(image: PlanarImage, options: StatsOptions) -> ([Float], Float) {
         let w = image.width, h = image.height
-        let total = w * h
+        let b = options.bounds(width: w, height: h)
+        let total = b.count
         let step = max(1, Int((Double(total) / Double(options.maxSamples)).squareRoot().rounded(.down)))
         var out: [Float] = []
         out.reserveCapacity(total / (step * step) + 1)
         var visited = 0
         let mask = options.mask
         let shift = options.maskLevel
-        var y = 0
+        var y = b.y
         var row = 0
-        while y < h {
+        while y < b.maxY {
             let jitter = (row * 7) % step
-            var x = jitter
+            var x = b.x + jitter
             let rowPtr = image.pointer + y * w
-            while x < w {
+            while x < b.maxX {
                 let v = rowPtr[x]
                 visited += 1
                 var ok = v.isFinite && !(options.excludeZeros && v == 0)
@@ -149,14 +156,16 @@ public enum Statistics {
     /// Sample pairs of values at identical positions from two same-sized images.
     public static func pairedSample(_ a: PlanarImage, _ b: PlanarImage, options: StatsOptions, maskB: PlanarImage? = nil) -> ([Float], [Float]) {
         precondition(a.width == b.width && a.height == b.height)
-        let w = a.width, h = a.height, total = w * h
+        let w = a.width, h = a.height
+        let bounds = options.bounds(width: w, height: h)
+        let total = bounds.count
         let step = max(1, Int((Double(total) / Double(options.maxSamples)).squareRoot().rounded(.down)))
         var xs: [Float] = [], ys: [Float] = []
         let shift = options.maskLevel
-        var y = 0, row = 0
-        while y < h {
-            var x = (row * 7) % step
-            while x < w {
+        var y = bounds.y, row = 0
+        while y < bounds.maxY {
+            var x = bounds.x + (row * 7) % step
+            while x < bounds.maxX {
                 let va = a.pointer[y * w + x], vb = b.pointer[y * w + x]
                 var ok = va.isFinite && vb.isFinite && !(options.excludeZeros && (va == 0 || vb == 0))
                 if ok {
@@ -175,17 +184,19 @@ public enum Statistics {
 
     /// Samples several same-sized images at identical grid positions, keeping only positions
     /// where every image is valid (finite and non-zero). Returns one array per image.
-    public static func multiSample(images: [PlanarImage], maxSamples: Int = 400_000) -> [[Float]] {
+    public static func multiSample(images: [PlanarImage], maxSamples: Int = 400_000, region: PixelRect? = nil) -> [[Float]] {
         guard let first = images.first else { return [] }
-        let w = first.width, h = first.height, total = w * h
+        let w = first.width, h = first.height
         precondition(images.allSatisfy { $0.width == w && $0.height == h })
+        let b = region?.clamped(width: w, height: h) ?? PixelRect.full(width: w, height: h)
+        let total = b.count
         let step = max(1, Int((Double(total) / Double(maxSamples)).squareRoot().rounded(.down)))
         var out = [[Float]](repeating: [], count: images.count)
         for i in out.indices { out[i].reserveCapacity(total / (step * step) + 1) }
-        var y = 0, row = 0
-        while y < h {
-            var x = (row * 7) % step
-            while x < w {
+        var y = b.y, row = 0
+        while y < b.maxY {
+            var x = b.x + (row * 7) % step
+            while x < b.maxX {
                 let idx = y * w + x
                 var ok = true
                 for img in images { let v = img.pointer[idx]; if !v.isFinite || v == 0 { ok = false; break } }
@@ -201,15 +212,17 @@ public enum Statistics {
     public static func noiseEstimate(image: PlanarImage, options: StatsOptions = StatsOptions()) -> Float {
         let w = image.width, h = image.height
         guard w > 2 else { return 0 }
-        let rowStep = max(1, h * w / max(1, options.maxSamples))
+        let b = options.bounds(width: w, height: h)
+        guard b.width > 2 else { return 0 }
+        let rowStep = max(1, b.count / max(1, options.maxSamples))
         var diffs: [Float] = []
         diffs.reserveCapacity(options.maxSamples + w)
         let mask = options.mask, shift = options.maskLevel
-        var y = (rowStep / 2) % h
-        while y < h && diffs.count < options.maxSamples {
+        var y = b.y + (rowStep / 2) % b.height
+        while y < b.maxY && diffs.count < options.maxSamples {
             let p = image.pointer + y * w
-            var x = 1
-            while x < w {
+            var x = b.x + 1
+            while x < b.maxX {
                 let a = p[x - 1], b = p[x]
                 var ok = a != 0 && b != 0 && a.isFinite && b.isFinite
                 if ok, let m = mask {

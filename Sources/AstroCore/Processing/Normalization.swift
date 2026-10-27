@@ -156,10 +156,11 @@ public struct NormalizationInput {
     public let maskedStats: ChannelStats
     public let mask: PlanarImage?
     public let maskLevel: Int
+    public let region: PixelRect?
 
-    public init(kind: ChannelKind, image: PlanarImage, stats: ChannelStats, maskedStats: ChannelStats? = nil, mask: PlanarImage? = nil, maskLevel: Int = 0) {
+    public init(kind: ChannelKind, image: PlanarImage, stats: ChannelStats, maskedStats: ChannelStats? = nil, mask: PlanarImage? = nil, maskLevel: Int = 0, region: PixelRect? = nil) {
         self.kind = kind; self.image = image; self.stats = stats
-        self.maskedStats = maskedStats ?? stats; self.mask = mask; self.maskLevel = maskLevel
+        self.maskedStats = maskedStats ?? stats; self.mask = mask; self.maskLevel = maskLevel; self.region = region
     }
 }
 
@@ -214,6 +215,7 @@ public enum Normalizer {
         guard reference.image.width == channel.image.width && reference.image.height == channel.image.height else { return (1, 0) }
         var opts = StatsOptions()
         opts.maxSamples = 400_000
+        opts.region = reference.region
         if settings.useStarMask {
             opts.mask = reference.mask
             opts.maskLevel = reference.maskLevel

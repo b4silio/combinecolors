@@ -92,3 +92,46 @@ final class StatisticsTests: XCTestCase {
         XCTAssertEqual(mask.pointer[best], 1)
     }
 }
+
+final class CropTests: XCTestCase {
+    func testRegionRestrictsStatistics() {
+        let img = PlanarImage(width: 100, height: 100, fill: 0.2)
+        for y in 0..<100 { for x in 0..<50 { img[x, y] = 0.8 } }
+        var o = StatsOptions(); o.region = PixelRect(x: 50, y: 0, width: 50, height: 100)
+        XCTAssertEqual(Statistics.compute(image: img, options: o).median, 0.2)
+        o.region = PixelRect(x: 0, y: 0, width: 50, height: 100)
+        XCTAssertEqual(Statistics.compute(image: img, options: o).median, 0.8)
+        XCTAssertEqual(Statistics.compute(image: img).median, 0.2, accuracy: 0.31) // mixed
+        let m = Statistics.multiSample(images: [img], maxSamples: 1000, region: PixelRect(x: 0, y: 0, width: 50, height: 100))
+        XCTAssertTrue(m[0].allSatisfy { $0 == 0.8 })
+        XCTAssertNil(PixelRect(x: 200, y: 0, width: 10, height: 10).clamped(width: 100, height: 100))
+        XCTAssertEqual(PixelRect(x: -5, y: -5, width: 20, height: 20).clamped(width: 100, height: 100), PixelRect(x: 0, y: 0, width: 15, height: 15))
+        XCTAssertEqual(PixelRect(x: 3, y: 5, width: 10, height: 10).scaled(level: 2), PixelRect(x: 0, y: 1, width: 4, height: 3))
+    }
+
+    func testAutoCropFindsPaddedBorders() {
+        let a = Synth.channel(width: 200, height: 150), b = Synth.channel(width: 200, height: 150, seed: 9)
+        // Zero borders: a has 10 px left / 5 px top, b has 7 px right / 12 px bottom.
+        for y in 0..<150 { for x in 0..<10 { a[x, y] = 0 } ; for x in 193..<200 { b[x, y] = 0 } }
+        for x in 0..<200 { for y in 0..<5 { a[x, y] = 0 } ; for y in 138..<150 { b[x, y] = 0 } }
+        let r = AutoCrop.detect(images: [a, b])!
+        XCTAssertEqual(r, PixelRect(x: 10, y: 5, width: 183, height: 133))
+        XCTAssertEqual(AutoCrop.detect(images: [Synth.channel(width: 50, height: 40)]), PixelRect.full(width: 50, height: 40))
+    }
+
+    func testChannelSourceRegionAndRenderFullCrop() throws {
+        let ha = Synth.source(.ha), o3 = Synth.source(.oiii, scale: 0.5, seed: 2)
+        let crop = PixelRect(x: 20, y: 10, width: 100, height: 80)
+        let sources: [ChannelKind: ChannelSource] = [.ha: ChannelSource(ha, region: crop), .oiii: ChannelSource(o3, region: crop)]
+        XCTAssertEqual(sources[.ha]!.region, crop)
+        XCTAssertTrue(sources[.ha]!.pyramid === ha.pyramid)
+        var s = CombineSettings(); s.select(palette: Palettes.palette(id: "hoo")!)
+        let ctx = RenderContext.make(settings: s.normalization, sources: sources)
+        let full = try Renderer.renderFull(sources: sources, settings: s, context: ctx, postStretch: nil)!
+        let cropped = try Renderer.renderFull(sources: sources, settings: s, context: ctx, postStretch: nil, region: crop, stripPixels: 100 * 7)!
+        XCTAssertEqual(cropped.width, 100); XCTAssertEqual(cropped.height, 80)
+        for (p, q) in zip(full.planes, cropped.planes) { XCTAssertLessThan(p.cropped(crop).maxAbsDifference(q), 1e-6) }
+        let renamed = ChannelSource(ha, kind: .sii)
+        XCTAssertEqual(renamed.kind, .sii); XCTAssertEqual(renamed.stats, ha.stats)
+    }
+}
