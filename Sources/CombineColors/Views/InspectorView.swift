@@ -9,16 +9,26 @@ struct InspectorView: View {
     @Binding var showDualBand: Bool
 
     var body: some View {
+        // Two independently scrolling panes: palettes on top, controls below (drag the divider).
+        VSplitView {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    SectionBox(title: "Palette", subtitle: model.currentPalette?.name ?? (model.settings.mode == .pixelMath ? "custom Pixel Math" : "custom matrix")) {
+                        PaletteGridView(model: model, showMatrixEditor: $showMatrixEditor, showPixelMath: $showPixelMath)
+                    }
+                }
+                .padding(8)
+            }
+            .frame(minHeight: 120, idealHeight: 380)
+            controls
+                .frame(minHeight: 200)
+        }
+        .frame(minWidth: 320, idealWidth: 400, maxWidth: 480)
+    }
+
+    private var controls: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
-                SectionBox(title: "Palette", subtitle: model.currentPalette?.name ?? (model.settings.mode == .pixelMath ? "custom Pixel Math" : "custom matrix")) {
-                    HStack {
-                        Button("Edit matrix…") { showMatrixEditor = true }
-                        Button("Edit Pixel Math…") { showPixelMath = true }
-                    }
-                    .controlSize(.small)
-                    Text("Pick a palette from the thumbnail strip under the preview; it stays visible while you adjust the controls below.").font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                }
                 SectionBox(title: "Stretch", subtitle: model.settings.stretch.method.displayName) { stretchSection }
                 SectionBox(title: "Normalisation", subtitle: model.settings.normalization.method.displayName) { normalizationSection }
                 SectionBox(title: "Channels") { channelsSection }
@@ -30,7 +40,6 @@ struct InspectorView: View {
             }
             .padding(8)
         }
-        .frame(minWidth: 320, idealWidth: 400, maxWidth: 480)
     }
 
     // MARK: Stretch

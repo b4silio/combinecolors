@@ -12,7 +12,6 @@ struct ContentView: View {
     @State private var zoomRequest: (ZoomAction, Int)? = nil
     @State private var zoomCounter = 0
     @State private var showHistogram = true
-    @AppStorage("showPaletteStrip") private var showPaletteStrip = true
 
     var body: some View {
         HSplitView {
@@ -26,10 +25,6 @@ struct ContentView: View {
                     if showHistogram, !model.histogram.isEmpty {
                         VStack { Spacer(); HStack { HistogramView(histogram: model.histogram).frame(width: 220, height: 70).padding(8); Spacer() } }
                     }
-                }
-                if showPaletteStrip {
-                    Divider()
-                    PaletteStripView(model: model, showMatrixEditor: $showMatrixEditor, showPixelMath: $showPixelMath)
                 }
                 Divider()
                 StatusBar(model: model)
@@ -118,7 +113,6 @@ struct ContentView: View {
                     Toggle(isOn: $model.showCropOverlay) { Label("Limits", systemImage: "rectangle.dashed") }
                 }
                 Toggle(isOn: $showHistogram) { Label("Histogram", systemImage: "chart.bar.xaxis") }
-                Toggle(isOn: $showPaletteStrip) { Label("Palettes", systemImage: "square.grid.3x2") }
                 Divider().frame(height: 14)
                 Button("Store A") { model.snapshotA = model.settings; model.showingSnapshot = false }.disabled(model.sources.isEmpty)
                 Toggle(isOn: $model.showingSnapshot) { Text("Show A") }.disabled(model.snapshotA == nil)

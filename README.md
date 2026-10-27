@@ -90,11 +90,11 @@ scheme runs the app).
    borders) — *Auto trim* finds the borders; or press the crop button, drag a
    rectangle, adjust it with the handles, press Return. The crop applies to all
    channels at once.
-3. **Pick a palette** from the thumbnail strip under the preview. It stays
-   visible while you work in the inspector, and every thumbnail is re-rendered
-   with the current stretch/normalisation/colour settings (from the whole image,
-   the crop or the current view — menu at the left of the strip; the slider
-   sets the thumbnail size, the toolbar's *Palettes* toggle hides the strip).
+3. **Pick a palette** from the thumbnails in the upper part of the right pane.
+   The pane is split: palettes above, controls below, each with its own scroll
+   (drag the divider), so thumbnails stay visible while you move sliders. They
+   are re-rendered with the current settings from the whole image, the crop or
+   the current view (*From* menu).
 4. **Tune**: stretch, normalisation, per-channel balance, colour. Everything
    updates live; double-click a slider label to reset it; ⌘Z undoes.
    *Store A* / *Show A* compares two states.
