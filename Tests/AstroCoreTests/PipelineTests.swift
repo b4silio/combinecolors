@@ -495,6 +495,27 @@ final class ColorBandsAndDetailTests: XCTestCase {
         XCTAssertTrue(ColorBandsSettings().isNeutral)
     }
 
+    func testTextureAndClarityDoNotDigHalosAroundStars() {
+        // Flat background with a bright star: local contrast must not darken the ring around it.
+        let w = 256, h = 256
+        let img = RGBImage(width: w, height: h)
+        for y in 0..<h { for x in 0..<w {
+            let dx = Float(x - 128), dy = Float(y - 128)
+            let v = 0.3 + 0.7 * exp(-(dx * dx + dy * dy) / 18)
+            img.r[x, y] = v; img.g[x, y] = v; img.b[x, y] = v
+        } }
+        var d = DetailSettings(); d.texture = 1; d.clarity = 1
+        PostProcess.detail(img, settings: d)
+        let lum = img.luma()
+        var ringMin: Float = 1
+        for y in 0..<h { for x in 0..<w {
+            let r = ((Float(x - 128) * Float(x - 128)) + (Float(y - 128) * Float(y - 128))).squareRoot()
+            if r > 6 && r < 40 { ringMin = min(ringMin, lum[x, y]) }
+        } }
+        XCTAssertGreaterThan(ringMin, 0.3 - 0.01, "dark halo around the star")
+        XCTAssertGreaterThan(lum[128, 128], 0.9)
+    }
+
     func testDetailChangesLocalContrastAndStripsMatch() throws {
         let sources: [ChannelKind: ChannelSource] = [.ha: Synth.source(.ha), .oiii: Synth.source(.oiii, scale: 0.4, seed: 2)]
         let planes = sources.mapValues { $0.image }
@@ -516,6 +537,12 @@ final class ColorBandsAndDetailTests: XCTestCase {
         for (p, q) in zip(det.image.planes, strips.planes) { XCTAssertLessThan(p.maxAbsDifference(q), 1e-4) }
         XCTAssertEqual(PostProcess.blurLevels(width: 7272, relativeRadius: 0.015), 7)
         XCTAssertEqual(PostProcess.blurLevels(width: 3636, relativeRadius: 0.015), 6)
+        // The three scales are ordered: texture < clarity < dehaze.
+        XCTAssertLessThan(PostProcess.blurLevels(width: 2000, relativeRadius: PostProcess.textureRadius), PostProcess.blurLevels(width: 2000, relativeRadius: PostProcess.clarityRadius))
+        XCTAssertLessThan(PostProcess.blurLevels(width: 2000, relativeRadius: PostProcess.clarityRadius), PostProcess.blurLevels(width: 2000, relativeRadius: PostProcess.dehazeRadius))
+        var tex = s; tex.detail = DetailSettings(); tex.detail.texture = 0.8
+        let tx = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: samples, settings: tex, context: ctx))
+        XCTAssertGreaterThan(highPassStd(tx.image.luma()), highPassStd(plain.image.luma()))
         // Settings round trip with bands.
         var ba = ColorBandAdjust(); ba.hue = 12; s.colorBands.set(.teals, ba)
         XCTAssertEqual(try JSONDecoder().decode(CombineSettings.self, from: try JSONEncoder().encode(s)), s)

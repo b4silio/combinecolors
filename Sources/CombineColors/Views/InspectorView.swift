@@ -65,8 +65,9 @@ struct ControlsStripView: View {
 
     @ViewBuilder var detailSection: some View {
         let d = $model.settings.detail
-        SliderRow(title: "Clarity", value: d.clarity, range: -1...1, defaultValue: 0, help: "Mid-tone local contrast (radius ≈ 1.5 % of the width).")
-        SliderRow(title: "Dehaze", value: d.dehaze, range: -1...1, defaultValue: 0, help: "Subtracts the large-scale haze component (radius ≈ 12 % of the width); negative adds haze.")
+        SliderRow(title: "Texture", value: d.texture, range: -1...1, defaultValue: 0, help: "Fine-detail local contrast (radius ≈ 0.6 % of the width); stars are excluded from the blur to avoid dark halos.")
+        SliderRow(title: "Clarity", value: d.clarity, range: -1...1, defaultValue: 0, help: "Mid-tone local contrast at a broader scale (radius ≈ 6 % of the width).")
+        SliderRow(title: "Dehaze", value: d.dehaze, range: -1...1, defaultValue: 0, help: "Subtracts the large-scale haze component (radius ≈ 25 % of the width); negative adds haze.")
         Text("Applied last, on the luminance; radii scale with the image.").font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
     }
 

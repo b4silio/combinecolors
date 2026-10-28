@@ -188,10 +188,37 @@ public enum PostProcess {
         max(1, Int((log2(max(Float(width) * relativeRadius, 1))).rounded()))
     }
 
-    public static let clarityRadius: Float = 0.015
-    public static let dehazeRadius: Float = 0.12
+    public static let textureRadius: Float = 0.006
+    public static let clarityRadius: Float = 0.06
+    public static let dehazeRadius: Float = 0.25
 
-    /// Clarity (mid-tone local contrast) and dehaze (large-scale haze subtraction), applied to the
+    /// Luminance with the stars clipped off (99th percentile, at least 0.15): the blurs are taken
+    /// from this copy so bright stars do not dig dark halos around themselves.
+    static func starCapped(_ y: PlanarImage) -> PlanarImage {
+        var opts = StatsOptions(); opts.maxSamples = 200_000
+        var sample = Statistics.sample(image: y, options: opts).0
+        sample.sort()
+        var lo: Float = 0, hi = max(Statistics.percentile(sorted: sample, q: 0.99), 0.15)
+        let out = PlanarImage(width: y.width, height: y.height)
+        vDSP_vclip(y.pointer, 1, &lo, &hi, out.pointer, 1, vDSP_Length(y.count))
+        return out
+    }
+
+    /// Local contrast at one scale: `t += amount × midtoneWeight × (t − blur)`, with the blur
+    /// taken from the star-capped image and darkening limited to `darkFactor` of the lightening
+    /// (both measures against halos around stars).
+    static func localContrast(_ t: UnsafeMutablePointer<Float>, count n: Int, blur: PlanarImage, amount: Float, darkFactor: Float) {
+        let bp = blur.pointer
+        for i in 0..<n {
+            let l = t[i]
+            let w = 4 * l * (1 - l)           // mid-tone weight
+            var delta = amount * w * (l - bp[i])
+            if delta < 0 { delta *= darkFactor }
+            t[i] = min(max(l + delta, 0), 1)
+        }
+    }
+
+    /// Texture (fine), clarity (mid) and dehaze (large-scale) local contrast, applied to the
     /// luminance and propagated to RGB by ratio. Radii are relative to the image width so every
     /// pyramid level and the export agree.
     public static func detail(_ img: RGBImage, settings d: DetailSettings) {
@@ -201,7 +228,7 @@ public enum PostProcess {
         let target = y.copy()
         let t = target.pointer, yp = y.pointer
         if d.dehaze != 0 {
-            let haze = pyramidBlur(y, levels: blurLevels(width: img.width, relativeRadius: dehazeRadius))
+            let haze = pyramidBlur(starCapped(target), levels: blurLevels(width: img.width, relativeRadius: dehazeRadius))
             let hp = haze.pointer
             let k = d.dehaze * 0.6
             for i in 0..<n {
@@ -211,14 +238,12 @@ public enum PostProcess {
             }
         }
         if d.clarity != 0 {
-            let blur = pyramidBlur(target, levels: blurLevels(width: img.width, relativeRadius: clarityRadius))
-            let bp = blur.pointer
-            let a = d.clarity * 1.2
-            for i in 0..<n {
-                let l = t[i]
-                let w = 4 * l * (1 - l)           // mid-tone weight
-                t[i] = min(max(l + a * w * (l - bp[i]), 0), 1)
-            }
+            let blur = pyramidBlur(starCapped(target), levels: blurLevels(width: img.width, relativeRadius: clarityRadius))
+            localContrast(t, count: n, blur: blur, amount: d.clarity * 1.2, darkFactor: 0.7)
+        }
+        if d.texture != 0 {
+            let blur = pyramidBlur(starCapped(target), levels: blurLevels(width: img.width, relativeRadius: textureRadius))
+            localContrast(t, count: n, blur: blur, amount: d.texture * 1.0, darkFactor: 0.5)
         }
         let r = img.r.pointer, g = img.g.pointer, b = img.b.pointer
         for i in 0..<n {

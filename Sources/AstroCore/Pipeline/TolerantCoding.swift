@@ -135,7 +135,7 @@ extension ColorBandsSettings {
 extension DetailSettings {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: AnyKey.self)
-        clarity = c.value("clarity", 0); dehaze = c.value("dehaze", 0)
+        texture = c.value("texture", 0); clarity = c.value("clarity", 0); dehaze = c.value("dehaze", 0)
     }
 }
 

@@ -15,6 +15,7 @@ import AstroCore
 //      --scnr <0..1>          green removal amount
 //      --sat <factor>         saturation
 //      --hue <deg>            hue shift
+//      --texture <-1..1>      fine local contrast;  --clarity <-1..1>  mid-scale;  --dehaze <-1..1>  large-scale
 //      --lum <preset|off>     luminance: ha | lum | haMostly | haOiii | balanced | lumHa | maxLines | meanLines | off (default ha)
 //      --stars                blend RGB stars
 //      --format <fmt>         png8 | png16 | tiff16 | tiff32 | fits32 | jpeg (default png8)
@@ -82,6 +83,9 @@ case "render":
     let scnr = Float(option("--scnr") ?? "0") ?? 0
     let sat = Float(option("--sat") ?? "1") ?? 1
     let hue = Float(option("--hue") ?? "0") ?? 0
+    let texture = Float(option("--texture") ?? "0") ?? 0
+    let clarity = Float(option("--clarity") ?? "0") ?? 0
+    let dehaze = Float(option("--dehaze") ?? "0") ?? 0
     let lum = option("--lum")
     let stars = flag("--stars")
     let formatArg = option("--format") ?? "png8"
@@ -146,6 +150,7 @@ case "render":
     settings.post.scnrGreen = scnr
     settings.post.saturation = sat
     settings.post.hueShift = hue
+    settings.detail.texture = texture; settings.detail.clarity = clarity; settings.detail.dehaze = dehaze
     if let l = lum { applyLum(l, &settings) }
     settings.stars.enabled = stars
 

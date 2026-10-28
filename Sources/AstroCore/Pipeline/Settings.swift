@@ -201,12 +201,14 @@ public struct ColorBandsSettings: Codable, Equatable, Hashable {
 
 /// Local-contrast operations (Camera Raw "Clarity" and "Dehaze").
 public struct DetailSettings: Codable, Equatable, Hashable {
-    /// −1…1: mid-tone local contrast (radius ≈ 1.5 % of the image width).
+    /// −1…1: fine-detail local contrast (radius ≈ 0.6 % of the image width).
+    public var texture: Float = 0
+    /// −1…1: mid-tone local contrast at a broader scale (radius ≈ 6 % of the width).
     public var clarity: Float = 0
-    /// −1…1: removes (or adds) the large-scale haze component (radius ≈ 12 % of the width).
+    /// −1…1: removes (or adds) the large-scale haze component (radius ≈ 25 % of the width).
     public var dehaze: Float = 0
     public init() {}
-    public var isNeutral: Bool { clarity == 0 && dehaze == 0 }
+    public var isNeutral: Bool { texture == 0 && clarity == 0 && dehaze == 0 }
 }
 
 public enum StarsStretchMode: String, Codable, CaseIterable, Identifiable {
