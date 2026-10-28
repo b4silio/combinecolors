@@ -73,13 +73,55 @@ struct RightClickReset: NSViewRepresentable {
     func updateNSView(_ v: RightClickView, context: Context) { v.action = action }
 }
 
+/// Lets a drag on empty space scroll the enclosing horizontal `ScrollView` (sweeping through the
+/// blocks). The NSScrollView is located from a hidden background view.
+final class ScrollDragState {
+    weak var scrollView: NSScrollView?
+    var startX: CGFloat? = nil
+
+    var gesture: some Gesture {
+        DragGesture(minimumDistance: 3)
+            .onChanged { [self] g in
+                guard let sv = scrollView, let doc = sv.documentView else { return }
+                if startX == nil { startX = sv.contentView.bounds.origin.x }
+                let maxX = max(0, doc.frame.width - sv.contentView.bounds.width)
+                let x = min(max(0, startX! - g.translation.width), maxX)
+                sv.contentView.scroll(to: NSPoint(x: x, y: sv.contentView.bounds.origin.y))
+                sv.reflectScrolledClipView(sv.contentView)
+            }
+            .onEnded { [self] _ in startX = nil }
+    }
+}
+
+struct ScrollViewFinder: NSViewRepresentable {
+    let state: ScrollDragState
+
+    final class FinderView: NSView {
+        var state: ScrollDragState?
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); state?.scrollView = enclosingScrollView }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+
+    func makeNSView(context: Context) -> FinderView { let v = FinderView(); v.state = state; return v }
+    func updateNSView(_ v: FinderView, context: Context) { v.state = state; if let sv = v.enclosingScrollView { state.scrollView = sv } }
+}
+
 /// Block of the horizontal controls strip: a vertical title bar on the left (click to collapse or
 /// expand) and, when expanded, the parameters in a fixed-width column that scrolls if needed.
 struct ControlBlock<Content: View>: View {
     let title: String
     var width: CGFloat = 320
     @Binding var expanded: Bool
+    /// Dragging on the block's empty space scrolls the strip.
+    var dragScroll: ScrollDragState? = nil
+    /// Visible height of the block (the content stretches to it so empty space stays draggable).
+    var minHeight: CGFloat = 0
     @ViewBuilder var content: Content
+
+    @ViewBuilder private func dragBackground(_ color: Color) -> some View {
+        let bg = color.contentShape(Rectangle())
+        if let d = dragScroll { bg.gesture(d.gesture) } else { bg }
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -104,10 +146,13 @@ struct ControlBlock<Content: View>: View {
                         .padding(.horizontal, 6)
                         .padding(.vertical, 5)
                         .frame(width: width, alignment: .leading)
+                        // Fill the block so that a drag on the empty space below the controls scrolls the strip too.
+                        .frame(minHeight: minHeight, alignment: .top)
+                        .background { dragBackground(Color.clear) }
                 }
             }
         }
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.35))
+        .background { dragBackground(Color(nsColor: .controlBackgroundColor).opacity(0.35)) }
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(0.08)))
     }

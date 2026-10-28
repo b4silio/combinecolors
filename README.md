@@ -111,8 +111,8 @@ scheme runs the app).
    *Reset all* returns every setting to the palette defaults.
 4. **Tune** in the strip of blocks under the preview (Channels, Stretch,
    Normalisation, Luminance, Colour bands, Colour, Detail, RGB stars, Crop):
-   click a block's vertical title to collapse or expand it, scroll sideways for
-   the others. Everything updates live; double-click a slider label to reset
+   click a block's vertical title to collapse or expand it, scroll sideways or
+   drag on empty space to reach the others. Everything updates live; double-click a slider label to reset
    it; ⌘Z undoes. *Save preset* keeps a look in the row under the palettes to
    compare later.
 5. **Export** (⌘E, File menu or toolbar) at full resolution; *HQ* in the

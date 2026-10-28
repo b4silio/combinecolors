@@ -7,6 +7,7 @@ struct ControlsStripView: View {
     @Bindable var model: ProjectModel
 
     @AppStorage("collapsedBlocks") private var collapsed: String = ""
+    @State private var dragScroll = ScrollDragState()
 
     static let height: CGFloat = 204
 
@@ -22,19 +23,21 @@ struct ControlsStripView: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: true) {
             HStack(alignment: .top, spacing: 6) {
-                ControlBlock(title: "Channels", width: 250, expanded: binding("channels")) { channelsSection }
-                ControlBlock(title: "Stretch", width: 262, expanded: binding("stretch")) { stretchSection }
-                ControlBlock(title: "Normalisation", width: 290, expanded: binding("normalisation")) { normalizationSection }
-                ControlBlock(title: "Luminance", width: 250, expanded: binding("luminance")) { luminanceSection }
-                ControlBlock(title: "Colour bands", width: 226, expanded: binding("bands")) { colorBandsSection }
-                ControlBlock(title: "Colour", width: 250, expanded: binding("colour")) { colourSection }
-                ControlBlock(title: "Detail", width: 250, expanded: binding("detail")) { detailSection }
-                ControlBlock(title: "RGB stars", width: 262, expanded: binding("stars")) { starsSection }
+                ControlBlock(title: "Channels", width: 250, expanded: binding("channels"), dragScroll: dragScroll, minHeight: Self.height - 14) { channelsSection }
+                ControlBlock(title: "Stretch", width: 262, expanded: binding("stretch"), dragScroll: dragScroll, minHeight: Self.height - 14) { stretchSection }
+                ControlBlock(title: "Normalisation", width: 290, expanded: binding("normalisation"), dragScroll: dragScroll, minHeight: Self.height - 14) { normalizationSection }
+                ControlBlock(title: "Luminance", width: 250, expanded: binding("luminance"), dragScroll: dragScroll, minHeight: Self.height - 14) { luminanceSection }
+                ControlBlock(title: "Colour bands", width: 226, expanded: binding("bands"), dragScroll: dragScroll, minHeight: Self.height - 14) { colorBandsSection }
+                ControlBlock(title: "Colour", width: 250, expanded: binding("colour"), dragScroll: dragScroll, minHeight: Self.height - 14) { colourSection }
+                ControlBlock(title: "Detail", width: 250, expanded: binding("detail"), dragScroll: dragScroll, minHeight: Self.height - 14) { detailSection }
+                ControlBlock(title: "RGB stars", width: 262, expanded: binding("stars"), dragScroll: dragScroll, minHeight: Self.height - 14) { starsSection }
             }
             .padding(.horizontal, 6)
             .padding(.top, 10)
             .padding(.bottom, 4)
             .frame(height: Self.height)
+            .background(ScrollViewFinder(state: dragScroll))
+            .background(Color.clear.contentShape(Rectangle()).gesture(dragScroll.gesture))
         }
         .frame(height: Self.height)
     }
