@@ -272,6 +272,28 @@ struct MenuPicker<T: Hashable>: View {
 }
 
 
+/// Integer slider in the same layout as `SliderRow`.
+struct IntSliderRow: View {
+    let title: String
+    @Binding var value: Int
+    var range: ClosedRange<Int>
+    var defaultValue: Int
+    var help: String? = nil
+    var labelWidth: CGFloat = 70
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(title).frame(width: labelWidth, alignment: .leading).lineLimit(1)
+                .onTapGesture(count: 2) { value = defaultValue }
+                .help(help ?? "Double-click or right-click to reset")
+            Slider(value: Binding(get: { Double(value) }, set: { value = Int($0.rounded()) }), in: Double(range.lowerBound)...Double(range.upperBound), step: 1)
+                .overlay(RightClickReset { value = defaultValue })
+            Text("\(value)").font(.system(size: 10, design: .monospaced)).frame(width: 46, alignment: .trailing)
+        }
+        .controlSize(.small)
+    }
+}
+
 /// AppKit checkbox with a mixed state, cycling unchecked → partial → checked on click.
 struct TriStateCheckbox: NSViewRepresentable {
     let title: String

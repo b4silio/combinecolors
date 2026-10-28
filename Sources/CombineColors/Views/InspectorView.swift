@@ -31,6 +31,7 @@ struct ControlsStripView: View {
                 ControlBlock(title: "Luminance", width: 250, expanded: binding("luminance"), dragScroll: dragScroll, minHeight: Self.height - 14) { luminanceSection }
                 ControlBlock(title: "Colour bands", width: 226, expanded: binding("bands"), dragScroll: dragScroll, minHeight: Self.height - 14) { colorBandsSection }
                 ControlBlock(title: "Colour", width: 250, expanded: binding("colour"), dragScroll: dragScroll, minHeight: Self.height - 14) { colourSection }
+                ControlBlock(title: "Denoise", width: 262, expanded: binding("denoise"), dragScroll: dragScroll, minHeight: Self.height - 14) { denoiseSection }
                 ControlBlock(title: "Detail", width: 266, expanded: binding("detail"), dragScroll: dragScroll, minHeight: Self.height - 14) { detailSection }
                 // Stays collapsed while no R, G and B channels are loaded (nothing to blend).
                 ControlBlock(title: "RGB stars", width: 262, expanded: hasRGB ? binding("stars") : .constant(false), dragScroll: dragScroll, minHeight: Self.height - 14) { starsSection }
@@ -61,6 +62,30 @@ struct ControlsStripView: View {
         }
         ForEach(ColorBand.allCases) { band in
             ColorBandRow(model: model, band: band, component: bandComponent)
+        }
+    }
+
+    // MARK: Denoise
+
+    @ViewBuilder var denoiseSection: some View {
+        let d = $model.settings.denoise
+        MenuPicker(title: "Method", selection: d.method, options: DenoiseMethod.allCases) { $0.displayName }
+            .help("Wavelets: starlet k·σ thresholding, the classic astronomical method, fast. Non-local means: patch averaging, best on fine texture, slower (export can take a while). Guided filter: edge-preserving smoothing, fastest.")
+        SliderRow(title: "Luminance", value: d.amount, range: 0...1, defaultValue: 0, help: "Strength of the luminance noise reduction, relative to the measured noise level (so it adapts to the preview level and the export).")
+        switch model.settings.denoise.method {
+        case .wavelets:
+            IntSliderRow(title: "Layers", value: d.layers, range: 1...5, defaultValue: 3, help: "Number of wavelet scales denoised (1 = finest only).")
+        case .nonLocalMeans:
+            IntSliderRow(title: "Search", value: d.search, range: 3...10, defaultValue: 5, help: "Search window radius in pixels; cost grows with its square.")
+        case .guided:
+            IntSliderRow(title: "Radius", value: d.radius, range: 1...8, defaultValue: 3, help: "Window radius in pixels.")
+        }
+        SliderRow(title: "Protect", value: d.protectBright, range: 0...1, defaultValue: 0.5, help: "Keeps bright structures (stars, nebula cores) untouched.")
+        SliderRow(title: "Colour", value: d.color, range: 0...1, defaultValue: 0, help: "Smooths colour mottling (chroma only, luminance untouched).")
+        HStack {
+            Spacer()
+            Button("Reset") { model.settings.denoise = DenoiseSettings() }.controlSize(.small)
+                .disabled(model.settings.denoise == DenoiseSettings())
         }
     }
 

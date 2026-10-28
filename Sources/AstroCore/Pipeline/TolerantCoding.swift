@@ -115,6 +115,7 @@ extension CombineSettings {
         stretchStage = c.value("stretchStage", d.stretchStage); luminance = c.value("luminance", d.luminance)
         post = c.value("post", d.post); stars = c.value("stars", d.stars)
         colorBands = c.value("colorBands", d.colorBands); detail = c.value("detail", d.detail)
+        denoise = c.value("denoise", d.denoise)
     }
 }
 
@@ -137,6 +138,16 @@ extension DetailSettings {
         let c = try decoder.container(keyedBy: AnyKey.self)
         texture = c.value("texture", 0); clarity = c.value("clarity", 0); dehaze = c.value("dehaze", 0)
         sharpen = c.value("sharpen", 0); sharpenRadius = c.value("sharpenRadius", 1.5); sharpenMasking = c.value("sharpenMasking", 0)
+    }
+}
+
+extension DenoiseSettings {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: AnyKey.self)
+        let d = DenoiseSettings()
+        method = c.value("method", d.method); amount = c.value("amount", d.amount); layers = c.value("layers", d.layers)
+        search = c.value("search", d.search); radius = c.value("radius", d.radius)
+        protectBright = c.value("protectBright", d.protectBright); color = c.value("color", d.color)
     }
 }
 

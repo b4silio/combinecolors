@@ -81,6 +81,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
         let urls = args.map { URL(fileURLWithPath: $0) }.filter { FileManager.default.fileExists(atPath: $0.path) }
         if !urls.isEmpty { AppDelegate.deliver(urls) }
+        // When files are given at launch AppKit treats them as documents and SwiftUI skips the
+        // WindowGroup window (there is no DocumentGroup). A reopen request makes SwiftUI create it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { AppDelegate.ensureWindow() }
+    }
+
+    static func ensureWindow() {
+        guard !NSApp.windows.contains(where: { $0.isVisible && $0.canBecomeMain }) else { return }
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: NSWorkspace.OpenConfiguration())
     }
 
     func application(_ application: NSApplication, open urls: [URL]) { AppDelegate.deliver(urls) }

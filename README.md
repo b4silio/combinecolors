@@ -48,6 +48,11 @@ at full resolution.
   stages (stretched channels mixed, or linear mix auto-stretched).
 * **Colour bands** (Camera Raw style selective colour): hue, saturation and
   lightness per band — reds, oranges, yellows, greens, teals, blues, magentas.
+* **Denoise**: luminance noise reduction by starlet wavelet thresholding (the
+  classic astronomical method), non-local means or a guided filter, with the
+  noise level measured from the image, protection of bright structures and
+  separate chroma smoothing. All CPU, no models: wavelets and guided filter
+  are instant, non-local means takes a few seconds on a full-size export.
 * **Colour**: saturation, vibrance, SCNR green removal, hue rotation,
   black/white point, gamma. **Detail**: texture (fine), clarity (mid-scale)
   and dehaze (large-scale) local contrast, as in Camera Raw; the blurs are

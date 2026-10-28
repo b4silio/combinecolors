@@ -52,7 +52,7 @@ public struct RenderRequest {
     public var context: RenderContext
     /// When set, these resolved stretches are used for the post-combine stage instead of being derived.
     public var fixedPostStretch: [ResolvedStretch]?
-    /// Apply clarity/dehaze inside this call (false while rendering strips).
+    /// Apply denoise and detail inside this call (false while rendering strips).
     public var applyDetail: Bool = true
     /// Rendered pixels per full-resolution pixel (1 at full size, 0.5 at pyramid level 1, …);
     /// pixel-based radii such as the sharpening radius are scaled by it.
@@ -207,7 +207,10 @@ public enum Renderer {
         }
         combined.clamp01()
         // 7. Local contrast last (non point-wise; the strip renderer applies it on the whole image).
-        if req.applyDetail { PostProcess.detail(combined, settings: s.detail, scale: req.scale) }
+        if req.applyDetail {
+            Denoise.apply(combined, settings: s.denoise)
+            PostProcess.detail(combined, settings: s.detail, scale: req.scale)
+        }
         return RenderResult(image: combined, postStretch: postStretch, channelStretch: channelStretch, millis: Date().timeIntervalSince(t0) * 1000)
     }
 
@@ -394,6 +397,7 @@ public enum Renderer {
             progress?(Double(y) / Double(h))
         }
         if isCancelled?() == true { return nil }
+        Denoise.apply(out, settings: settings.denoise)
         PostProcess.detail(out, settings: settings.detail, scale: 1)
         return out
     }

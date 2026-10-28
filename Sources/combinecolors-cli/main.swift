@@ -18,6 +18,8 @@ import AstroCore
 //      --texture <-1..1>      fine local contrast;  --clarity <-0.5..2>  mid-scale;  --dehaze <-1..1>  large-scale
 //      --sharpen <0..2>       unsharp mask amount;  --sharpen-radius <px>  its radius in full-resolution pixels (default 1.5)
 //      --sharpen-masking <0..1>  protect low-contrast (noise) areas from the sharpening
+//      --denoise <0..1>       luminance noise reduction;  --denoise-method wavelets | nonLocalMeans | guided
+//      --denoise-color <0..1> chroma smoothing
 //      --lum <preset|off>     luminance: ha | lum | haMostly | haOiii | balanced | lumHa | maxLines | meanLines | off (default ha)
 //      --stars                blend RGB stars
 //      --format <fmt>         png8 | png16 | tiff16 | tiff32 | fits32 | jpeg (default png8)
@@ -91,6 +93,9 @@ case "render":
     let sharpen = Float(option("--sharpen") ?? "0") ?? 0
     let sharpenRadius = Float(option("--sharpen-radius") ?? "1.5") ?? 1.5
     let sharpenMasking = Float(option("--sharpen-masking") ?? "0") ?? 0
+    let denoise = Float(option("--denoise") ?? "0") ?? 0
+    let denoiseMethod = DenoiseMethod(rawValue: option("--denoise-method") ?? "wavelets") ?? .wavelets
+    let denoiseColor = Float(option("--denoise-color") ?? "0") ?? 0
     let lum = option("--lum")
     let stars = flag("--stars")
     let formatArg = option("--format") ?? "png8"
@@ -157,6 +162,7 @@ case "render":
     settings.post.hueShift = hue
     settings.detail.texture = texture; settings.detail.clarity = clarity; settings.detail.dehaze = dehaze
     settings.detail.sharpen = sharpen; settings.detail.sharpenRadius = sharpenRadius; settings.detail.sharpenMasking = sharpenMasking
+    settings.denoise.amount = denoise; settings.denoise.method = denoiseMethod; settings.denoise.color = denoiseColor
     if let l = lum { applyLum(l, &settings) }
     settings.stars.enabled = stars
 

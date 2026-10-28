@@ -217,6 +217,36 @@ public struct DetailSettings: Codable, Equatable, Hashable {
     public var isNeutral: Bool { texture == 0 && clarity == 0 && dehaze == 0 && sharpen == 0 }
 }
 
+public enum DenoiseMethod: String, Codable, CaseIterable, Identifiable {
+    case wavelets, nonLocalMeans, guided
+    public var id: String { rawValue }
+    public var displayName: String {
+        switch self {
+        case .wavelets: return "Wavelets (starlet)"
+        case .nonLocalMeans: return "Non-local means"
+        case .guided: return "Guided filter"
+        }
+    }
+}
+
+public struct DenoiseSettings: Codable, Equatable, Hashable {
+    public var method: DenoiseMethod = .wavelets
+    /// 0…1 luminance noise reduction strength (0 = off).
+    public var amount: Float = 0
+    /// Wavelet scales denoised (1…5).
+    public var layers: Int = 3
+    /// Non-local means search radius in pixels (3…10).
+    public var search: Int = 5
+    /// Guided-filter window radius in pixels (1…8).
+    public var radius: Int = 3
+    /// 0…1: keeps bright structures (stars, cores) untouched.
+    public var protectBright: Float = 0.5
+    /// 0…1 chroma (colour mottling) smoothing.
+    public var color: Float = 0
+    public init() {}
+    public var isNeutral: Bool { amount == 0 && color == 0 }
+}
+
 public enum StarsStretchMode: String, Codable, CaseIterable, Identifiable {
     case auto, none, autoSTF
     public var id: String { rawValue }
@@ -260,6 +290,7 @@ public struct CombineSettings: Codable, Equatable, Hashable {
     public var colorBands = ColorBandsSettings()
     public var post = PostSettings()
     public var detail = DetailSettings()
+    public var denoise = DenoiseSettings()
     public var stars = StarsBlendSettings()
 
     public init() {}
