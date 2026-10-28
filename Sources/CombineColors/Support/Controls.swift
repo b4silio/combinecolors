@@ -83,7 +83,9 @@ final class ScrollDragState {
     var startX: CGFloat? = nil
 
     var gesture: some Gesture {
-        DragGesture(minimumDistance: 3)
+        // Global coordinates: the view carrying the gesture sits inside the scroll view, so a local
+        // translation would shift with every scroll it causes (the strip jumped back and forth).
+        DragGesture(minimumDistance: 3, coordinateSpace: .global)
             .onChanged { [self] g in
                 guard let sv = scrollView, let doc = sv.documentView else { return }
                 if startX == nil { startX = sv.contentView.bounds.origin.x }
