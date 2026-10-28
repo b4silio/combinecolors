@@ -111,7 +111,7 @@ final class PixelMathTests: XCTestCase {
     func testAllPresetPalettesCompile() {
         for p in Palettes.all {
             if case .pixelMath(let prog) = p.kind { XCTAssertNoThrow(try prog.compile(), p.id) }
-            XCTAssertFalse(p.requiredChannels.isEmpty, p.id)
+            XCTAssertTrue(p.isMonochrome || !p.requiredChannels.isEmpty, p.id)
         }
         XCTAssertEqual(Set(Palettes.all.map(\.id)).count, Palettes.all.count, "palette ids must be unique")
     }

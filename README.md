@@ -59,9 +59,10 @@ at full resolution.
   on top of the full preview.
 * **Preview**: zoom/pan with trackpad or mouse (⌘-scroll or pinch to zoom,
   double-click toggles 1:1/fit), press-and-hold a channel thumbnail to see that
-  channel alone, pixel read-out of every channel and of the
-  result under the cursor, histogram, A/B snapshot comparison (*Store A* /
-  *Show A*), undo/redo of every adjustment. Channels that are already
+  channel alone, pixel read-out of every channel and of the result under the
+  cursor, histogram, a **preset bar** (Save preset stores settings with a
+  thumbnail; click to switch, right-click to rename/update/delete; presets are
+  saved in the project), undo/redo of every adjustment. Channels that are already
   stretched (TIFF exports) are detected and the stretch is switched off.
 * **Export**: TIFF 16-bit / 32-bit float, PNG 8/16-bit, JPEG, FITS 32-bit float
   / 16-bit; stretched or linear (normalised + combined only, for further
@@ -104,7 +105,7 @@ scheme runs the app).
    button (Favourites / All switch shows them again).
 4. **Tune**: stretch, normalisation, per-channel balance, colour. Everything
    updates live; double-click a slider label to reset it; ⌘Z undoes.
-   *Store A* / *Show A* compares two states.
+   *Save preset* keeps a look in the bar under the preview to compare later.
 5. **Export** (⌘E / Combine & Export…) at full resolution.
 6. **Save the project** (⌘S) to come back later.
 
