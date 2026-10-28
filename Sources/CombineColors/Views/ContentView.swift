@@ -102,25 +102,40 @@ struct ContentView: View {
     }
 
     private var previewToolbar: some View {
-        HStack(spacing: 4) {
-            if model.cropEditing {
-                Text("Crop: drag to draw, Return to apply, Esc to cancel").font(.caption).padding(.horizontal, 6)
-                Button("Apply") { model.commitCropEditing() }.keyboardShortcut(.return, modifiers: [])
-                Button("Cancel") { model.cancelCropEditing() }.keyboardShortcut(.escape, modifiers: [])
-            } else {
-                Button { model.beginCropEditing() } label: { Label("Crop", systemImage: "crop") }.disabled(model.sources.isEmpty)
-                if model.crop != nil {
-                    Toggle(isOn: $model.showCropOverlay) { Label("Limits", systemImage: "rectangle.dashed") }
+        VStack(alignment: .trailing, spacing: 4) {
+            HStack(spacing: 4) {
+                if model.cropEditing {
+                    Button("Apply") { model.commitCropEditing() }.keyboardShortcut(.return, modifiers: [])
+                    Button("Cancel") { model.cancelCropEditing() }.keyboardShortcut(.escape, modifiers: [])
+                } else {
+                    Button { model.beginCropEditing() } label: { Label("Crop", systemImage: "crop") }.disabled(model.sources.isEmpty)
+                        .help("Draw a crop rectangle shared by every channel (Return applies, Esc cancels)")
+                    Button("Auto") { model.autoCrop() }.disabled(model.sources.isEmpty)
+                        .help("Crop away the empty borders left by registration")
+                    if model.crop != nil {
+                        Toggle(isOn: $model.showCropOverlay) { Label("Limits", systemImage: "rectangle.dashed") }
+                        Button("Clear") { model.clearCrop() }.help("Remove the crop")
+                    }
+                    Button { model.rotateClockwise() } label: { Label("Rotate", systemImage: "rotate.right") }
+                        .disabled(model.sources.isEmpty || model.isLoading)
+                    Divider().frame(height: 14)
+                    Toggle(isOn: $model.highQualityPreview) { Label("HQ", systemImage: "sparkles") }.help("High quality preview (more pixels)")
+                    Divider().frame(height: 14)
+                    Button { zoom(.zoomOut) } label: { Image(systemName: "minus.magnifyingglass") }
+                    Button { zoom(.zoomIn) } label: { Image(systemName: "plus.magnifyingglass") }
+                    Button("Fit") { zoom(.fit) }
+                    Button("1:1") { zoom(.actualSize) }
                 }
-                Button { model.rotateClockwise() } label: { Label("Rotate", systemImage: "rotate.right") }
-                    .disabled(model.sources.isEmpty || model.isLoading)
-                Divider().frame(height: 14)
-                Toggle(isOn: $model.highQualityPreview) { Label("HQ", systemImage: "sparkles") }
-                Divider().frame(height: 14)
-                Button { zoom(.zoomOut) } label: { Image(systemName: "minus.magnifyingglass") }
-                Button { zoom(.zoomIn) } label: { Image(systemName: "plus.magnifyingglass") }
-                Button("Fit") { zoom(.fit) }
-                Button("1:1") { zoom(.actualSize) }
+            }
+            if model.cropEditing, let d = Binding($model.cropDraft) {
+                Grid(alignment: .trailing, horizontalSpacing: 4, verticalSpacing: 2) {
+                    GridRow { Text("X"); TextField("x", value: d.x, format: .number).frame(width: 56) }
+                    GridRow { Text("Y"); TextField("y", value: d.y, format: .number).frame(width: 56) }
+                    GridRow { Text("W"); TextField("w", value: d.width, format: .number).frame(width: 56) }
+                    GridRow { Text("H"); TextField("h", value: d.height, format: .number).frame(width: 56) }
+                }
+                .font(.caption)
+                .textFieldStyle(.roundedBorder)
             }
         }
         .controlSize(.small)

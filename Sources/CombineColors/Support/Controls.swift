@@ -27,18 +27,19 @@ struct SliderRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 4) {
             Text(title)
-                .frame(width: 80, alignment: .leading)
+                .frame(width: 70, alignment: .leading)
                 .lineLimit(1)
                 .onTapGesture(count: 2) { value = defaultValue }
-                .help(help ?? "Double-click to reset")
+                .help(help ?? "Double-click or right-click to reset")
             Slider(value: position, in: 0...1)
+                .overlay(RightClickReset { value = defaultValue })
             TextField("", value: $value, formatter: SliderRow.formatter(format))
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 58)
+                .frame(width: 46)
                 .multilineTextAlignment(.trailing)
-                .font(.system(.caption, design: .monospaced))
+                .font(.system(size: 10, design: .monospaced))
         }
         .controlSize(.small)
     }
@@ -53,11 +54,29 @@ struct SliderRow: View {
     }
 }
 
+/// Transparent overlay that only reacts to right-clicks (and control-clicks); every other
+/// event goes through to the view underneath. Used to reset sliders.
+struct RightClickReset: NSViewRepresentable {
+    var action: () -> Void
+
+    final class RightClickView: NSView {
+        var action: () -> Void = {}
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard let e = NSApp.currentEvent, e.type == .rightMouseDown || (e.type == .leftMouseDown && e.modifierFlags.contains(.control)) else { return nil }
+            return super.hitTest(point)
+        }
+        override func rightMouseDown(with event: NSEvent) { action() }
+        override func mouseDown(with event: NSEvent) { if event.modifierFlags.contains(.control) { action() } else { super.mouseDown(with: event) } }
+    }
+
+    func makeNSView(context: Context) -> RightClickView { let v = RightClickView(); v.action = action; return v }
+    func updateNSView(_ v: RightClickView, context: Context) { v.action = action }
+}
+
 /// Block of the horizontal controls strip: a vertical title bar on the left (click to collapse or
 /// expand) and, when expanded, the parameters in a fixed-width column that scrolls if needed.
 struct ControlBlock<Content: View>: View {
     let title: String
-    var subtitle: String? = nil
     var width: CGFloat = 320
     @Binding var expanded: Bool
     @ViewBuilder var content: Content
@@ -65,18 +84,13 @@ struct ControlBlock<Content: View>: View {
     var body: some View {
         HStack(spacing: 0) {
             Button { withAnimation(.easeOut(duration: 0.12)) { expanded.toggle() } } label: {
-                VStack(spacing: 4) {
-                    Text(title.uppercased())
-                        .font(.system(size: 11, weight: .bold))
-                        .tracking(1)
-                    if let s = subtitle, expanded {
-                        Text(s).font(.system(size: 9)).foregroundStyle(.secondary)
-                    }
-                }
+                Text(title.uppercased())
+                    .font(.system(size: 11, weight: .bold))
+                    .tracking(1)
                 .lineLimit(1)
                 .fixedSize()
                 .rotationEffect(.degrees(-90))
-                .frame(width: expanded ? 30 : 24)
+                .frame(width: 22)
                 .frame(maxHeight: .infinity)
                 .background(expanded ? Color.accentColor.opacity(0.22) : Color(nsColor: .controlBackgroundColor).opacity(0.8))
                 .contentShape(Rectangle())
@@ -86,9 +100,9 @@ struct ControlBlock<Content: View>: View {
             .help(expanded ? "Collapse \(title)" : "Expand \(title)")
             if expanded {
                 ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 4) { content }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
+                    VStack(alignment: .leading, spacing: 2) { content }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 5)
                         .frame(width: width, alignment: .leading)
                 }
             }

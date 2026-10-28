@@ -8,7 +8,7 @@ struct ControlsStripView: View {
 
     @AppStorage("collapsedBlocks") private var collapsed: String = ""
 
-    static let height: CGFloat = 250
+    static let height: CGFloat = 204
 
     private func binding(_ id: String) -> Binding<Bool> {
         Binding(get: { !collapsed.split(separator: ",").contains(Substring(id)) },
@@ -22,42 +22,40 @@ struct ControlsStripView: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: true) {
             HStack(alignment: .top, spacing: 6) {
-                ControlBlock(title: "Channels", subtitle: channelsSubtitle, width: 300, expanded: binding("channels")) { channelsSection }
-                ControlBlock(title: "Stretch", subtitle: model.settings.stretch.method.displayName, width: 310, expanded: binding("stretch")) { stretchSection }
-                ControlBlock(title: "Normalisation", subtitle: model.settings.normalization.method.displayName, width: 330, expanded: binding("normalisation")) { normalizationSection }
-                ControlBlock(title: "Luminance", subtitle: model.settings.luminance.enabled ? (model.settings.luminance.resolvedExpression(available: model.availableKinds) ?? "unavailable") : "off", width: 300, expanded: binding("luminance")) { luminanceSection }
-                ControlBlock(title: "Colour bands", subtitle: model.settings.colorBands.isNeutral ? "neutral" : "adjusted", width: 350, expanded: binding("bands")) { colorBandsSection }
-                ControlBlock(title: "Colour", subtitle: model.settings.post == PostSettings() ? "neutral" : "adjusted", width: 300, expanded: binding("colour")) { colourSection }
-                ControlBlock(title: "Detail", subtitle: model.settings.detail.isNeutral ? "neutral" : String(format: "clarity %.2f · dehaze %.2f", model.settings.detail.clarity, model.settings.detail.dehaze), width: 290, expanded: binding("detail")) { detailSection }
-                ControlBlock(title: "RGB stars", subtitle: model.settings.stars.enabled ? "on" : "off", width: 300, expanded: binding("stars")) { starsSection }
-                ControlBlock(title: "Crop", subtitle: model.crop.map { String($0.width) + "×" + String($0.height) } ?? "none", width: 260, expanded: binding("crop")) { cropSection }
+                ControlBlock(title: "Channels", width: 250, expanded: binding("channels")) { channelsSection }
+                ControlBlock(title: "Stretch", width: 262, expanded: binding("stretch")) { stretchSection }
+                ControlBlock(title: "Normalisation", width: 290, expanded: binding("normalisation")) { normalizationSection }
+                ControlBlock(title: "Luminance", width: 250, expanded: binding("luminance")) { luminanceSection }
+                ControlBlock(title: "Colour bands", width: 226, expanded: binding("bands")) { colorBandsSection }
+                ControlBlock(title: "Colour", width: 250, expanded: binding("colour")) { colourSection }
+                ControlBlock(title: "Detail", width: 250, expanded: binding("detail")) { detailSection }
+                ControlBlock(title: "RGB stars", width: 262, expanded: binding("stars")) { starsSection }
             }
-            .padding(6)
+            .padding(.horizontal, 6)
+            .padding(.top, 10)
+            .padding(.bottom, 4)
             .frame(height: Self.height)
         }
         .frame(height: Self.height)
     }
 
-    private var channelsSubtitle: String {
-        let kinds = ChannelKind.allCases.filter { model.sources[$0] != nil }
-        return kinds.isEmpty ? "none" : kinds.map(\.shortName).joined(separator: " ")
-    }
-
     // MARK: Colour bands
 
+    @AppStorage("colorBandComponent") private var bandComponentRaw = ColorBandComponent.saturation.rawValue
+    private var bandComponent: ColorBandComponent { ColorBandComponent(rawValue: bandComponentRaw) ?? .saturation }
+
     @ViewBuilder var colorBandsSection: some View {
-        Text("Selective colour: hue, saturation and lightness per hue band (Camera Raw HSL).").font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        HStack(spacing: 6) {
-            Text("").frame(width: 74)
-            Text("Hue").font(.caption2).frame(maxWidth: .infinity)
-            Text("Saturation").font(.caption2).frame(maxWidth: .infinity)
-            Text("Lightness").font(.caption2).frame(maxWidth: .infinity)
+        HStack(spacing: 4) {
+            Picker("", selection: $bandComponentRaw) {
+                ForEach(ColorBandComponent.allCases) { c in Text(c.shortName).tag(c.rawValue) }
+            }
+            .pickerStyle(.segmented).labelsHidden().controlSize(.mini)
+            Button { model.settings.colorBands = ColorBandsSettings() } label: { Image(systemName: "arrow.counterclockwise") }
+                .controlSize(.mini).buttonStyle(.borderless).help("Reset all bands").disabled(model.settings.colorBands.isNeutral)
         }
         ForEach(ColorBand.allCases) { band in
-            ColorBandRow(model: model, band: band)
+            ColorBandRow(model: model, band: band, component: bandComponent)
         }
-        Button("Reset bands") { model.settings.colorBands = ColorBandsSettings() }.controlSize(.small)
-            .disabled(model.settings.colorBands.isNeutral)
     }
 
     // MARK: Detail
@@ -66,7 +64,7 @@ struct ControlsStripView: View {
         let d = $model.settings.detail
         SliderRow(title: "Clarity", value: d.clarity, range: -1...1, defaultValue: 0, help: "Mid-tone local contrast (radius ≈ 1.5 % of the width).")
         SliderRow(title: "Dehaze", value: d.dehaze, range: -1...1, defaultValue: 0, help: "Subtracts the large-scale haze component (radius ≈ 12 % of the width); negative adds haze.")
-        Text("Applied last, on the luminance of the final image. Radii scale with the image so preview and export match.").font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        Text("Applied last, on the luminance; radii scale with the image.").font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
     }
 
     // MARK: Stretch
@@ -74,8 +72,9 @@ struct ControlsStripView: View {
     @ViewBuilder var stretchSection: some View {
         let s = $model.settings.stretch
         MenuPicker(title: "Method", selection: s.method, options: StretchMethod.allCases) { $0.displayName }
-        MenuPicker(title: "Stage", selection: $model.settings.stretchStage, options: StretchStage.allCases) { $0.displayName }
-        Toggle("Linked channels (same stretch for all)", isOn: s.linked)
+        MenuPicker(title: "Order", selection: $model.settings.stretchStage, options: StretchStage.allCases) { $0.shortName }
+            .help("Stretch first: each channel is stretched, then combined. Combine first: the linear channels are combined, then the colour image is stretched.")
+        Toggle("Linked channels", isOn: s.linked).help("Same stretch for all channels")
         if model.settings.stretch.method != .none {
             SliderRow(title: "Target bg", value: s.targetBackground, range: 0.02...0.6, defaultValue: 0.2, help: "Where the median background lands after the stretch (PixInsight STF default 0.25).")
             SliderRow(title: "Shadow clip", value: s.shadowsClipping, range: -6...0, defaultValue: -2.8, format: "%.1f", help: "Black point in MADN units below the median (STF default −2.8).")
@@ -100,7 +99,7 @@ struct ControlsStripView: View {
         }
         SliderRow(title: "Gamma", value: s.gamma, range: 0.3...3, defaultValue: 1, logarithmic: true)
         if !model.settings.stretch.linked && model.settings.stretchStage == .preCombine && model.settings.stretch.method == .autoSTF {
-            Text("Unlinked auto-stretch already equalises every channel: normalisation and linear gain have no visible effect in this mode. Use the per-channel target boost, weight and black point instead, or switch to linked.")
+            Text("Unlinked auto-stretch equalises every channel: normalisation and gain have no visible effect.")
                 .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -151,10 +150,7 @@ struct ControlsStripView: View {
     @ViewBuilder var luminanceSection: some View {
         let l = $model.settings.luminance
         let lum = model.settings.luminance
-        Toggle("Inject luminance (adds contrast and detail)", isOn: l.enabled)
-        if lum.enabled && !model.settings.luminanceApplies {
-            Text("Not applied to the mono check palettes.").font(.caption2).foregroundStyle(.secondary)
-        }
+        Toggle("Inject luminance", isOn: l.enabled)
         if lum.enabled {
             MenuPicker(title: "Source", selection: l.preset, options: LuminancePreset.allCases) { p in
                 p.displayName + (p.expression(available: model.availableKinds, custom: lum.customExpression) == nil && p != .custom ? " (unavailable)" : "")
@@ -175,7 +171,6 @@ struct ControlsStripView: View {
             }
             SliderRow(title: "Amount", value: l.amount, range: 0...1, defaultValue: 1)
             MenuPicker(title: "Method", selection: l.method, options: LuminanceMethod.allCases) { $0.displayName }
-            Text("Pre-combine stage: the stretched channels are mixed. Post-combine stage: the linear channels are mixed, then auto-stretched.").font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         if model.settings.mode == .pixelMath && model.settings.pixelMath.hasLuminance {
             Text("The Pixel Math luminance expression overrides this source.").font(.caption2).foregroundStyle(.secondary)
@@ -218,39 +213,6 @@ struct ControlsStripView: View {
             }
             SliderRow(title: "Star sat.", value: s.saturation, range: 0...3, defaultValue: 1.3)
             MenuPicker(title: "Blend", selection: s.mode, options: StarsBlendMode.allCases) { $0.displayName }
-        }
-    }
-
-    // MARK: Crop
-
-    @ViewBuilder var cropSection: some View {
-        HStack {
-            if model.cropEditing {
-                Button("Apply") { model.commitCropEditing() }.keyboardShortcut(.return, modifiers: [])
-                Button("Cancel") { model.cancelCropEditing() }.keyboardShortcut(.escape, modifiers: [])
-            } else {
-                Button(model.crop == nil ? "Set crop…" : "Edit crop…") { model.beginCropEditing() }
-                Button("Auto trim") { model.autoCrop() }.help("Removes the empty borders left by registration in any channel.")
-                if model.crop != nil { Button("Clear") { model.clearCrop() } }
-                Button { model.rotateClockwise() } label: { Image(systemName: "rotate.right") }.help("Rotate every channel 90° clockwise").disabled(model.isLoading)
-            }
-        }
-        .controlSize(.small)
-        .disabled(model.sources.isEmpty)
-        if model.cropEditing, let d = Binding($model.cropDraft) {
-            HStack {
-                Text("X").frame(width: 14); TextField("x", value: d.x, format: .number).frame(width: 60)
-                Text("Y").frame(width: 14); TextField("y", value: d.y, format: .number).frame(width: 60)
-            }
-            HStack {
-                Text("W").frame(width: 14); TextField("w", value: d.width, format: .number).frame(width: 60)
-                Text("H").frame(width: 14); TextField("h", value: d.height, format: .number).frame(width: 60)
-            }
-            Text("Drag on the image to draw the rectangle; drag the handles or the inside to adjust. The crop applies to every channel.").font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        } else if let c = model.crop {
-            Text(verbatim: "x \(c.x)  y \(c.y)  →  \(c.width) × \(c.height) px").font(.system(.caption, design: .monospaced))
-            Toggle("Show crop limits on the preview", isOn: $model.showCropOverlay)
-            Text("Statistics, thumbnails and the exported image use the cropped area only.").font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -298,9 +260,18 @@ struct ChannelAdjustView: View {
 }
 
 
+enum ColorBandComponent: String, CaseIterable, Identifiable {
+    case hue, saturation, lightness
+    var id: String { rawValue }
+    var shortName: String {
+        switch self { case .hue: return "Hue"; case .saturation: return "Sat"; case .lightness: return "Light" }
+    }
+}
+
 struct ColorBandRow: View {
     @Bindable var model: ProjectModel
     let band: ColorBand
+    let component: ColorBandComponent
 
     private var adjust: Binding<ColorBandAdjust> {
         Binding(get: { model.settings.colorBands.adjust(band) }, set: { model.settings.colorBands.set(band, $0) })
@@ -308,32 +279,36 @@ struct ColorBandRow: View {
 
     var body: some View {
         let a = adjust
-        HStack(spacing: 6) {
+        HStack(spacing: 4) {
             HStack(spacing: 4) {
-                Circle().fill(Color(hue: Double(band.hue) / 360, saturation: 0.85, brightness: 0.95)).frame(width: 9, height: 9)
+                Circle().fill(Color(hue: Double(band.hue) / 360, saturation: 0.85, brightness: 0.95)).frame(width: 8, height: 8)
                 Text(band.displayName).font(.caption)
             }
-            .frame(width: 74, alignment: .leading)
+            .frame(width: 62, alignment: .leading)
             .onTapGesture(count: 2) { model.settings.colorBands.set(band, ColorBandAdjust()) }
             .help("Double-click to reset \(band.displayName)")
-            MiniSlider(value: a.hue, range: -60...60, format: "%+.0f°")
-            MiniSlider(value: a.saturation, range: -1...1, format: "%+.2f")
-            MiniSlider(value: a.lightness, range: -1...1, format: "%+.2f")
+            switch component {
+            case .hue: MiniSlider(value: a.hue, range: -60...60, format: "%+.0f°")
+            case .saturation: MiniSlider(value: a.saturation, range: -1...1, format: "%+.2f")
+            case .lightness: MiniSlider(value: a.lightness, range: -1...1, format: "%+.2f")
+            }
         }
     }
 }
 
-/// Slider with a tiny value label below it; double-click the label to reset to 0.
+/// Slider with a tiny value label on the right; double-click the label or right-click the slider to reset to 0.
 struct MiniSlider: View {
     @Binding var value: Float
     var range: ClosedRange<Float>
     var format: String
 
     var body: some View {
-        VStack(spacing: 0) {
+        HStack(spacing: 4) {
             Slider(value: Binding(get: { Double(value) }, set: { value = Float($0) }), in: Double(range.lowerBound)...Double(range.upperBound))
                 .controlSize(.mini)
+                .overlay(RightClickReset { value = 0 })
             Text(String(format: format, value)).font(.system(size: 9, design: .monospaced)).foregroundStyle(value == 0 ? .tertiary : .secondary)
+                .frame(width: 38, alignment: .trailing)
                 .onTapGesture(count: 2) { value = 0 }
         }
         .frame(maxWidth: .infinity)

@@ -41,6 +41,12 @@ public enum StretchStage: String, Codable, CaseIterable, Identifiable {
         case .postCombine: return "Combine linear, then stretch"
         }
     }
+    public var shortName: String {
+        switch self {
+        case .preCombine: return "Stretch first"
+        case .postCombine: return "Combine first"
+        }
+    }
 }
 
 public enum LuminanceMethod: String, Codable, CaseIterable, Identifiable {
