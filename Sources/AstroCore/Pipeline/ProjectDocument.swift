@@ -29,8 +29,15 @@ public struct ProjectDocument: Codable {
     public var crop: PixelRect? = nil
     /// Saved presets (settings + thumbnail) for quick switching.
     public var presets: [SettingsPreset] = []
-    /// Quarter turns clockwise applied to every channel at load (0…3); the crop is in rotated coordinates.
+    /// Quarter turns clockwise applied to every channel at load (0…3); the crop is in oriented coordinates.
     public var rotation: Int = 0
+    /// Horizontal mirror applied before the rotation (see `Orientation`).
+    public var flipped: Bool = false
+
+    public var orientation: Orientation {
+        get { Orientation(rotation: rotation, flipped: flipped) }
+        set { rotation = newValue.rotation; flipped = newValue.flipped }
+    }
 
     public init() {}
 

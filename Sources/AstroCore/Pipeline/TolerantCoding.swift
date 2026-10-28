@@ -160,6 +160,7 @@ extension ProjectDocument {
         starsFile = c.optionalValue("starsFile", d.starsFile); crop = c.optionalValue("crop", d.crop)
         presets = c.value("presets", d.presets)
         rotation = ((c.value("rotation", d.rotation) % 4) + 4) % 4
+        flipped = c.value("flipped", d.flipped)
     }
 }
 

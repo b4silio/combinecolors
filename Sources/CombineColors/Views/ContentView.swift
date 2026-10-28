@@ -117,7 +117,11 @@ struct ContentView: View {
                         Button("Clear") { model.clearCrop() }.help("Remove the crop")
                     }
                     Button { model.rotateClockwise() } label: { Label("Rotate", systemImage: "rotate.right") }
-                        .disabled(model.sources.isEmpty || model.isLoading)
+                        .disabled(model.sources.isEmpty || model.isLoading).help("Rotate every channel 90° clockwise (⌘R)")
+                    Button { model.flipHorizontal() } label: { Image(systemName: "arrow.left.and.right.righttriangle.left.righttriangle.right") }
+                        .disabled(model.sources.isEmpty || model.isLoading).help("Flip horizontally (⇧⌘H)")
+                    Button { model.flipVertical() } label: { Image(systemName: "arrow.up.and.down.righttriangle.up.righttriangle.down") }
+                        .disabled(model.sources.isEmpty || model.isLoading).help("Flip vertically (⇧⌘V)")
                     Divider().frame(height: 14)
                     Toggle(isOn: $model.highQualityPreview) { Label("HQ", systemImage: "sparkles") }.help("High quality preview (more pixels)")
                     Divider().frame(height: 14)

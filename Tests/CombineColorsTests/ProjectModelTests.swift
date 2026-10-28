@@ -237,6 +237,29 @@ final class ProjectModelTests: XCTestCase {
         XCTAssertEqual(m.sources[.hb]?.width, 150); XCTAssertEqual(m.sources[.hb]?.height, 200)
     }
 
+    func testFlips() async throws {
+        let m = try await loadedModel()
+        let haBefore = m.sources[.ha]!.image
+        m.cropDraft = PixelRect(x: 10, y: 20, width: 100, height: 80); m.cropEditing = true; m.commitCropEditing()
+        await wait { m.sources[.ha]?.region == m.crop && !m.isLoading && m.context != nil }
+        m.flipHorizontal()
+        await wait { m.orientation.flipped && !m.isLoading && m.context != nil }
+        XCTAssertEqual(m.imageSize, CGSize(width: 200, height: 150))
+        XCTAssertEqual(m.crop, PixelRect(x: 200 - 110, y: 20, width: 100, height: 80))
+        XCTAssertEqual(m.sources[.ha]!.image[199 - 10, 20], haBefore[10, 20])
+        m.flipVertical()
+        await wait { m.orientation == Orientation(rotation: 2, flipped: false) && !m.isLoading && m.context != nil }
+        XCTAssertEqual(m.crop, PixelRect(x: 90, y: 150 - 100, width: 100, height: 80))
+        XCTAssertEqual(m.sources[.ha]!.image[189, 129], haBefore[10, 20])
+        XCTAssertEqual(m.projectDocument().rotation, 2); XCTAssertFalse(m.projectDocument().flipped)
+        // A channel added now gets the same 180° turn.
+        let url = try makeChannel("x-Hb.fits", kind: .hb, scale: 0.2, seed: 4)
+        m.loadFiles([url])
+        await wait { m.sources[.hb] != nil && !m.isLoading }
+        let raw = try ImageLoader.load(url: url).planes[0]
+        XCTAssertEqual(m.sources[.hb]!.image[189, 129], raw[10, 20])
+    }
+
     func testPresetsAndUndo() async throws {
         let m = try await loadedModel()
         let um = UndoManager()

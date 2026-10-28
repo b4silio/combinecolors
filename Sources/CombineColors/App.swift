@@ -48,6 +48,8 @@ struct CombineColorsApp: App {
                 Toggle("Show Crop Limits", isOn: Binding(get: { model.showCropOverlay }, set: { model.showCropOverlay = $0 }))
                 Divider()
                 Button("Rotate Clockwise") { model.rotateClockwise() }.keyboardShortcut("r").disabled(model.sources.isEmpty || model.isLoading)
+                Button("Flip Horizontal") { model.flipHorizontal() }.keyboardShortcut("h", modifiers: [.command, .shift]).disabled(model.sources.isEmpty || model.isLoading)
+                Button("Flip Vertical") { model.flipVertical() }.keyboardShortcut("v", modifiers: [.command, .shift]).disabled(model.sources.isEmpty || model.isLoading)
                 Button("Auto Trim Borders") { model.autoCrop() }.disabled(model.sources.isEmpty)
             }
         }

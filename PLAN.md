@@ -109,6 +109,7 @@ Reproducing the project means implementing phases 1–8 plus everything below.
 | C18 | Crash on Crop → Cancel without an existing crop: the toolbar X/Y/W/H fields used a force-unwrapping `Binding($model.cropDraft)`, and the draft became nil while a field was still bound; now a safe binding with a fallback, and Cancel keeps the draft | `ContentView.previewToolbar`, `ProjectModel.cancelCropEditing` | ProjectModelTests.testCropFlow |
 | C19 | Drag-to-scroll of the controls strip jumped back and forth: the drag translation was measured in the dragged view's own coordinates, which move with every scroll it triggers; the gesture now uses the global coordinate space | `ScrollDragState.gesture` | — |
 | F30 | RGB stars block stays collapsed while no R, G and B channels are loaded; it reopens (to its remembered state) once they are | `ControlsStripView.hasRGB` | — |
+| F31 | Flip horizontal / vertical alongside Rotate (preview toolbar, View menu ⇧⌘H / ⇧⌘V): every channel, the crop and the thumbnails are mirrored; the combined orientation (flip + quarter turns, dihedral composition) is stored in the project and recent-set state and replayed on channels added later | `Orientation` (+ `Op`), `PlanarImage.flippedHorizontally/Vertically`, `PixelRect.flipped…`, `ProjectModel.transform`, `ProjectDocument.flipped/orientation` | PlanarImageTests.testFlipsAndOrientationComposition (all 8 orientations), ProjectModelTests.testFlips, PipelineTests (document round-trip, decoding default) |
 | F29 | Detail block tidy-up and sharpening: Clarity range −0.5…2, radius notes next to the slider titles (0.6 % / 6 % / 25 %), description text gone, Reset button; new unsharp-mask Sharpen with Amount (0…2), Radius (0.5–5 full-resolution px, scaled to the render level so it only shows at 1:1) and Masking (0…1, fades the mask out below `masking × 4σ` of the high-pass noise); blur from the star-capped luminance and halved darkening as for the other scales; CLI `--sharpen --sharpen-radius --sharpen-masking` | `DetailSettings.sharpen/sharpenRadius/sharpenMasking`, `PostProcess.gaussianBlur/sharpen`, `RenderRequest.scale`, `SliderRow.note/labelWidth` | PipelineTests (edge slope vs scale, masking leaves noise alone, halo test with sharpen, decoding defaults) |
 | F14 | Press-and-hold a channel thumbnail → main preview shows that channel alone (grayscale, own auto-stretch), released → normal view; implemented as a temporary monochrome settings override (`peekSettings`) | `ProjectModel.peekChannel`, `ChannelStripView` gesture | PeekTests, screenshot |
 
@@ -141,7 +142,7 @@ commit (see the project memory note).
 
 ## Status
 
-* 100 tests pass (`swift test`): core, pipeline, luminance presets, monochrome, colour bands/detail, rotation, model flows, presets, recent sets, palette visibility, peek.
+* 102 tests pass (`swift test`): core, pipeline, luminance presets, monochrome, colour bands/detail, rotation, model flows, presets, recent sets, palette visibility, peek.
 * Verified on the Soul Core FITS set (6 × 7272×5478 float32) and the Lowers Nebula
   16-bit TIFF set: loading ≈ 1 s for six channels, preview renders 1–30 ms, full-resolution
   Foraxx export ≈ 0.5 s, auto-crop 20–30 ms.

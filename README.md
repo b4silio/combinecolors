@@ -57,11 +57,13 @@ at full resolution.
   1:1) and a Camera-Raw-like masking slider that spares the noisy sky.
   RGB star blending (screen / lighten / add with a luminance mask,
   linear or already-stretched star images detected automatically).
-* **Crop and rotation**: one rectangle shared by every channel, drawn on the
+* **Crop, rotation and flips**: one rectangle shared by every channel, drawn on the
   preview or typed in, or detected automatically from the empty registration
   borders. The crop drives statistics, channel thumbnails and the export; its
   limits can be shown on top of the full preview. *Rotate* (⌘R) turns every
-  channel, the crop and the previews by 90° clockwise (stored in the project).
+  channel, the crop and the previews by 90° clockwise; the flip buttons
+  (⇧⌘H / ⇧⌘V) mirror them. The resulting orientation is stored in the project
+  and applied to channels added later.
 * **Preview**: scroll or pinch to zoom around the pointer, drag (or ⌘-scroll)
   to pan, double-click toggles 1:1/fit, press-and-hold a channel thumbnail to see that
   channel alone (keep the button down and move over the other slots to switch),

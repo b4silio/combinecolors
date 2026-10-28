@@ -59,8 +59,8 @@ final class ProjectModel {
     private(set) var baseSources: [ChannelKind: ChannelSource] = [:]
     private(set) var sources: [ChannelKind: ChannelSource] = [:]
     var imageSize: CGSize? { sources.values.first.map { CGSize(width: $0.width, height: $0.height) } }
-    /// Size a new file must have (the loaded size before the rotation is applied).
-    var requiredFileSize: CGSize? { imageSize.map { rotation % 2 == 1 ? CGSize(width: $0.height, height: $0.width) : $0 } }
+    /// Size a new file must have (the loaded size before the orientation is applied).
+    var requiredFileSize: CGSize? { imageSize.map { orientation.swapsAxes ? CGSize(width: $0.height, height: $0.width) : $0 } }
     var availableKinds: Set<ChannelKind> { Set(sources.keys) }
     private(set) var slotThumbnails: [ChannelKind: CGImage] = [:]
     var pendingFiles: [PendingFile] = []
@@ -76,8 +76,9 @@ final class ProjectModel {
     var cropEditing = false
     var cropDraft: PixelRect? = nil
     var showCropOverlay = true
-    /// Quarter turns clockwise applied to every channel (0…3). Stored in the project; new channels are rotated on load.
-    private(set) var rotation = 0
+    /// Rotation / mirroring applied to every channel. Stored in the project; new channels are oriented on load.
+    private(set) var orientation = Orientation.identity
+    var rotation: Int { orientation.rotation }
     /// Set by the File menu to show the export sheet.
     var exportRequested = false
 
@@ -311,13 +312,13 @@ final class ProjectModel {
         guard !items.isEmpty else { return }
         isLoading = true
         loadingMessage = "Analysing \(items.map { $0.0.shortName }.joined(separator: ", "))…"
-        let crop = self.crop, turns = rotation
+        let crop = self.crop, orient = orientation
         Task.detached(priority: .userInitiated) {
             var built: [ChannelSource?] = Array(repeating: nil, count: items.count)
             let lock = NSLock()
             DispatchQueue.concurrentPerform(iterations: items.count) { i in
                 let (kind, plane, name, url, fmt) = items[i]
-                let src = ChannelSource(kind: kind, image: plane.rotated90CW(times: turns), fileName: name, url: url, formatDescription: fmt)
+                let src = ChannelSource(kind: kind, image: orient.apply(to: plane), fileName: name, url: url, formatDescription: fmt)
                 lock.lock(); built[i] = src; lock.unlock()
             }
             let cropped: [ChannelSource] = built.compactMap { $0 }.map { crop == nil ? $0 : ChannelSource($0, region: crop) }
@@ -347,22 +348,26 @@ final class ProjectModel {
 
     func removeAll() {
         baseSources = [:]; sources = [:]; slotThumbnails = [:]; frame = nil; thumbnails = [:]
-        crop = nil; cropDraft = nil; cropEditing = false; rotation = 0
+        crop = nil; cropDraft = nil; cropEditing = false; orientation = .identity
         sourcesChanged()
     }
 
-    // MARK: - Rotation
+    // MARK: - Rotation / flips
 
-    /// Rotates every channel (and the crop) by 90° clockwise; statistics and star masks are rebuilt.
-    func rotateClockwise() {
+    func rotateClockwise() { transform(.rotateClockwise) }
+    func flipHorizontal() { transform(.flipHorizontal) }
+    func flipVertical() { transform(.flipVertical) }
+
+    /// Rotates or mirrors every channel (and the crop); statistics and star masks are rebuilt.
+    func transform(_ op: Orientation.Op) {
         guard !baseSources.isEmpty, !isLoading else { return }
         let base = baseSources
         let w = base.values.first!.width, h = base.values.first!.height
-        rotation = (rotation + 1) % 4
-        let newCrop = crop?.rotated90CW(imageWidth: w, imageHeight: h)
-        cropDraft = cropDraft?.rotated90CW(imageWidth: w, imageHeight: h)
+        orientation = orientation.applying(op)
+        let newCrop = crop?.applying(op, imageWidth: w, imageHeight: h)
+        cropDraft = cropDraft?.applying(op, imageWidth: w, imageHeight: h)
         isLoading = true
-        loadingMessage = "Rotating…"
+        loadingMessage = op == .rotateClockwise ? "Rotating…" : "Flipping…"
         frame = nil
         Task.detached(priority: .userInitiated) {
             let kinds = Array(base.keys)
@@ -370,7 +375,7 @@ final class ProjectModel {
             let lock = NSLock()
             DispatchQueue.concurrentPerform(iterations: kinds.count) { i in
                 let k = kinds[i], old = base[k]!
-                let b = ChannelSource(kind: k, image: old.image.rotated90CW(), fileName: old.fileName, url: old.url, formatDescription: old.formatDescription)
+                let b = ChannelSource(kind: k, image: old.image.applying(op), fileName: old.fileName, url: old.url, formatDescription: old.formatDescription)
                 let c = newCrop == nil ? b : ChannelSource(b, region: newCrop)
                 lock.lock(); newBase[k] = b; newCur[k] = c; lock.unlock()
             }
@@ -444,7 +449,7 @@ final class ProjectModel {
 
     private var stateSaveTimer: Timer?
 
-    /// Auto-saves the current settings/crop/rotation/presets with the recent set (debounced).
+    /// Auto-saves the current settings/crop/orientation/presets with the recent set (debounced).
     private func scheduleRecentStateSave() {
         stateSaveTimer?.invalidate()
         stateSaveTimer = Timer.scheduledTimer(withTimeInterval: 0.7, repeats: false) { [weak self] _ in
@@ -489,7 +494,7 @@ final class ProjectModel {
             await MainActor.run {
                 if !errs.isEmpty { self.errorMessage = errs.joined(separator: "\n") }
                 if let st = set.state {
-                    self.rotation = st.rotation
+                    self.orientation = st.orientation
                     self.settings = st.settings
                     self.crop = st.crop
                     self.presets = st.presets
@@ -736,7 +741,7 @@ final class ProjectModel {
         var doc = ProjectDocument()
         doc.settings = settings
         doc.crop = crop
-        doc.rotation = rotation
+        doc.orientation = orientation
         doc.presets = presets
         doc.channels = sources.values.sorted { $0.kind.rawValue < $1.kind.rawValue }.compactMap { s in
             s.url.map { ProjectDocument.ChannelRef(kind: s.kind, path: $0.path) }
@@ -758,7 +763,7 @@ final class ProjectModel {
             presets = doc.presets
             presetThumbnailCache = [:]
             let refs = doc.channels
-            rotation = doc.rotation
+            orientation = doc.orientation
             guard !refs.isEmpty else { settings = doc.settings; crop = doc.crop; return }
             isLoading = true
             loadingMessage = "Loading project…"

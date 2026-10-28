@@ -76,6 +76,23 @@ public final class PlanarImage {
         return out
     }
 
+    /// Mirrored left-right.
+    public func flippedHorizontally() -> PlanarImage {
+        let out = PlanarImage(width: width, height: height)
+        var src = vImage_Buffer(data: pointer, height: vImagePixelCount(height), width: vImagePixelCount(width), rowBytes: width * MemoryLayout<Float>.stride)
+        var dst = vImage_Buffer(data: out.pointer, height: vImagePixelCount(height), width: vImagePixelCount(width), rowBytes: width * MemoryLayout<Float>.stride)
+        let err = vImageHorizontalReflect_PlanarF(&src, &dst, vImage_Flags(kvImageNoFlags))
+        precondition(err == kvImageNoError, "vImageHorizontalReflect_PlanarF failed: \(err)")
+        return out
+    }
+
+    /// Mirrored top-bottom (a copy; see `flipVertically()` for in place).
+    public func flippedVertically() -> PlanarImage {
+        let out = copy()
+        out.flipVertically()
+        return out
+    }
+
     /// Rotated by `times` quarter turns clockwise (0 returns self).
     public func rotated90CW(times: Int) -> PlanarImage {
         var img = self

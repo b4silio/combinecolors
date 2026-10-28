@@ -66,4 +66,36 @@ final class PlanarImageTests: XCTestCase {
         XCTAssertEqual(rr, PixelRect(x: 1, y: 1, width: 1, height: 2))
         XCTAssertEqual([r[rr.x, rr.y], r[rr.x, rr.y + 1]], [1, 2])
     }
+
+    func testFlipsAndOrientationComposition() {
+        let img = PlanarImage(width: 3, height: 2, pixels: [0, 1, 2, 3, 4, 5])
+        XCTAssertEqual(img.flippedHorizontally().toArray(), [2, 1, 0, 5, 4, 3])
+        XCTAssertEqual(img.flippedVertically().toArray(), [3, 4, 5, 0, 1, 2])
+        let rect = PixelRect(x: 0, y: 0, width: 2, height: 1)   // pixels 0,1
+        XCTAssertEqual(rect.flippedHorizontally(imageWidth: 3), PixelRect(x: 1, y: 0, width: 2, height: 1))
+        XCTAssertEqual(rect.flippedVertically(imageHeight: 2), PixelRect(x: 0, y: 1, width: 2, height: 1))
+        // Any sequence of operations, replayed step by step on the image and the rectangle, matches the
+        // composed orientation applied once to the originals (all 8 group elements get visited).
+        var rng = SystemRandomNumberGenerator()
+        let base = PlanarImage(width: 5, height: 3, pixels: (0..<15).map(Float.init))
+        let baseRect = PixelRect(x: 1, y: 0, width: 2, height: 2)
+        var seen = Set<Orientation>()
+        for _ in 0..<20 {
+            var o = Orientation.identity
+            var img = base, r = baseRect
+            for _ in 0..<Int.random(in: 0...6, using: &rng) {
+                let op = Orientation.Op.allCases.randomElement(using: &rng)!
+                o = o.applying(op)
+                r = r.applying(op, imageWidth: img.width, imageHeight: img.height)
+                img = img.applying(op)
+                seen.insert(o)
+            }
+            XCTAssertEqual(o.apply(to: base).toArray(), img.toArray(), "\(o)")
+            XCTAssertEqual(o.apply(to: baseRect, imageWidth: base.width, imageHeight: base.height), r, "\(o)")
+            XCTAssertEqual(o.swapsAxes, img.width != base.width)
+        }
+        XCTAssertEqual(seen.count, 8)
+        XCTAssertEqual(Orientation.identity.applying(.flipHorizontal).applying(.flipHorizontal), .identity)
+        XCTAssertEqual(Orientation.identity.applying(.flipVertical).applying(.flipHorizontal).rotation, 2)
+    }
 }
