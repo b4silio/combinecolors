@@ -74,7 +74,9 @@ at full resolution.
 * **Projects**: file paths, crop and every setting in one JSON file.
 * **Recent sets**: every group of channel files loaded together is remembered as
   one entry (File ▸ Open Recent Set, and on the empty start screen); opening it
-  reloads all channels into their slots.
+  reloads all channels into their slots. The settings, crop, rotation and
+  presets last used with a set are saved with it automatically (no project
+  file needed) and come back when it is reopened.
 * **CLI** (`combinecolors-cli`) for headless batch rendering and testing.
 
 ## Building

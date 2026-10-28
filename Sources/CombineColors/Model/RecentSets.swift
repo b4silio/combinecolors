@@ -11,6 +11,10 @@ struct RecentSet: Codable, Identifiable, Equatable {
     var name: String
     var entries: [Entry]
     var date: Date
+    /// Last settings, crop, rotation and presets used with this set (auto-saved; no channel paths inside).
+    var state: ProjectDocument? = nil
+
+    static func == (a: RecentSet, b: RecentSet) -> Bool { a.id == b.id && a.entries == b.entries && a.date == b.date && a.name == b.name }
 
     var paths: Set<String> { Set(entries.map(\.path)) }
     var folder: String { (entries.first?.path as NSString?)?.deletingLastPathComponent ?? "" }
@@ -53,9 +57,23 @@ final class RecentSetsStore {
     func record(entries: [RecentSet.Entry]) -> [RecentSet] {
         guard !entries.isEmpty else { return load() }
         let sorted = entries.sorted { $0.kind.rawValue < $1.kind.rawValue }
-        var sets = load().filter { $0.paths != Set(sorted.map(\.path)) }
-        sets.insert(RecentSet(name: RecentSet.makeName(entries: sorted), entries: sorted, date: Date()), at: 0)
+        let paths = Set(sorted.map(\.path))
+        let existing = load()
+        let previous = existing.first { $0.paths == paths }
+        var sets = existing.filter { $0.paths != paths }
+        // Same files again: keep the entry's identity and its saved state.
+        sets.insert(RecentSet(id: previous?.id ?? UUID(), name: RecentSet.makeName(entries: sorted), entries: sorted, date: Date(), state: previous?.state), at: 0)
         if sets.count > RecentSetsStore.limit { sets.removeLast(sets.count - RecentSetsStore.limit) }
+        save(sets)
+        return sets
+    }
+
+    /// Stores the state for the set with exactly these file paths (no-op when the set is unknown).
+    @discardableResult
+    func updateState(paths: Set<String>, state: ProjectDocument) -> [RecentSet] {
+        var sets = load()
+        guard let i = sets.firstIndex(where: { $0.paths == paths }) else { return sets }
+        sets[i].state = state
         save(sets)
         return sets
     }

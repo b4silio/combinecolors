@@ -71,7 +71,7 @@ final class ProjectModel {
         didSet { settingsChanged(from: oldValue) }
     }
     var crop: PixelRect? = nil {
-        didSet { if crop != oldValue { cropChanged() } }
+        didSet { if crop != oldValue { cropChanged(); scheduleRecentStateSave() } }
     }
     var cropEditing = false
     var cropDraft: PixelRect? = nil
@@ -121,6 +121,7 @@ final class ProjectModel {
         let png = frame.flatMap { try? RasterWriter.pngData(rgb: $0.rgb, maxWidth: 192) }
         let p = SettingsPreset(name: n, settings: settings, thumbnailPNG: png)
         presets.append(p)
+        scheduleRecentStateSave()
         return p
     }
 
@@ -129,11 +130,13 @@ final class ProjectModel {
     func deletePreset(_ p: SettingsPreset) {
         presets.removeAll { $0.id == p.id }
         presetThumbnailCache.removeValue(forKey: p.id)
+        scheduleRecentStateSave()
     }
 
     func renamePreset(_ p: SettingsPreset, to name: String) {
         guard let i = presets.firstIndex(where: { $0.id == p.id }), !name.isEmpty else { return }
         presets[i].name = name
+        scheduleRecentStateSave()
     }
 
     /// Replaces the preset's settings and thumbnail with the current state.
@@ -143,6 +146,7 @@ final class ProjectModel {
         presets[i].thumbnailPNG = frame.flatMap { try? RasterWriter.pngData(rgb: $0.rgb, maxWidth: 192) }
         presets[i].date = Date()
         presetThumbnailCache.removeValue(forKey: p.id)
+        scheduleRecentStateSave()
     }
 
     func presetThumbnail(_ p: SettingsPreset) -> CGImage? {
@@ -383,6 +387,7 @@ final class ProjectModel {
                 self.suppressCropRebuild = false
                 self.rebuildContext()
                 self.fitRequest += 1
+                self.scheduleRecentStateSave()
             }
         }
     }
@@ -434,6 +439,27 @@ final class ProjectModel {
         // Only complete sets (every channel backed by a file) are remembered.
         guard entries.count == sources.count else { return }
         recentSets = recentStore.record(entries: entries)
+        saveRecentState()
+    }
+
+    private var stateSaveTimer: Timer?
+
+    /// Auto-saves the current settings/crop/rotation/presets with the recent set (debounced).
+    private func scheduleRecentStateSave() {
+        stateSaveTimer?.invalidate()
+        stateSaveTimer = Timer.scheduledTimer(withTimeInterval: 0.7, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.saveRecentState() }
+        }
+    }
+
+    func saveRecentState() {
+        stateSaveTimer?.invalidate()
+        guard !suppressRecent, !isLoading, !sources.isEmpty else { return }
+        let paths = Set(sources.values.compactMap { $0.url?.path })
+        guard paths.count == sources.count else { return }
+        var doc = projectDocument()
+        doc.channels = []
+        recentSets = recentStore.updateState(paths: paths, state: doc)
     }
 
     func openRecentSet(_ set: RecentSet) {
@@ -462,6 +488,13 @@ final class ProjectModel {
             let its = items, errs = errors
             await MainActor.run {
                 if !errs.isEmpty { self.errorMessage = errs.joined(separator: "\n") }
+                if let st = set.state {
+                    self.rotation = st.rotation
+                    self.settings = st.settings
+                    self.crop = st.crop
+                    self.presets = st.presets
+                    self.presetThumbnailCache = [:]
+                }
                 self.addChannels(its)
             }
         }
@@ -562,11 +595,13 @@ final class ProjectModel {
         registerUndo(old)
         if settings.normalization != old.normalization {
             rebuildContext()
+            scheduleRecentStateSave()
             return
         }
         scheduleRender()
         let paletteOnly = CombineSettings.differOnlyInPalette(settings, old)
         if !paletteOnly { scheduleThumbnails(delay: 0.6) }
+        scheduleRecentStateSave()
     }
 
     private func viewportChanged() {

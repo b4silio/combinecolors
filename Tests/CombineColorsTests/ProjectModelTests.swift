@@ -317,13 +317,31 @@ final class RecentSetsTests: XCTestCase {
         m.loadFiles([s2])
         await base.wait { m.sources.count == 3 && !m.isLoading && m.recentSets.count == 2 }
         XCTAssertEqual(m.recentSets[0].entries.count, 3)
-        // Reopening the first set replaces the loaded channels.
+        // Settings, crop and presets are auto-saved with the set (debounced) and restored on reopening.
+        m.settings.post.saturation = 1.7
+        m.cropDraft = PixelRect(x: 10, y: 20, width: 100, height: 80); m.cropEditing = true; m.commitCropEditing()
+        m.savePreset(name: "look")
+        await base.wait(timeout: 5) { m.recentSets[0].state?.settings.post.saturation == 1.7 && m.recentSets[0].state?.crop != nil && m.recentSets[0].state?.presets.count == 1 }
+        XCTAssertEqual(m.recentSets[0].state?.crop, PixelRect(x: 10, y: 20, width: 100, height: 80))
+        XCTAssertTrue(m.recentSets[0].state?.channels.isEmpty ?? false, "no paths inside the state")
+        // Reopening the first set replaces the loaded channels and brings back the state it was saved with.
         let first = m.recentSets[1]
         m.openRecentSet(first)
         await base.wait { m.sources.count == 2 && !m.isLoading }
         XCTAssertEqual(Set(m.sources.keys), [.ha, .oiii])
         XCTAssertEqual(m.recentSets[0].paths, first.paths, "reopened set moves to the front")
         XCTAssertEqual(m.recentSets.count, 2)
+        XCTAssertEqual(m.settings.post.saturation, 1, "the two-channel set was saved with default settings")
+        XCTAssertNil(m.crop)
+        // Now reopen the three-channel set: its state comes back.
+        let three = m.recentSets[1]
+        XCTAssertEqual(three.state?.settings.post.saturation, 1.7)
+        m.openRecentSet(three)
+        await base.wait { m.sources.count == 3 && !m.isLoading && m.crop != nil }
+        XCTAssertEqual(m.settings.post.saturation, 1.7)
+        XCTAssertEqual(m.crop, PixelRect(x: 10, y: 20, width: 100, height: 80))
+        XCTAssertEqual(m.presets.map(\.name), ["look"])
+        XCTAssertEqual(m.recentSets[0].id, three.id, "same set keeps its identity")
         // Persisted across model instances.
         let m2 = ProjectModel(defaults: defaults)
         XCTAssertEqual(m2.recentSets.count, 2)
