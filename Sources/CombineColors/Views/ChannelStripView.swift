@@ -36,7 +36,7 @@ struct ChannelSlotView: View {
     var targeted: Bool
 
     private var source: ChannelSource? { model.sources[kind] }
-    private var frameColor: Color { targeted ? Color.accentColor : (source == nil ? Color.secondary.opacity(0.35) : kind.tint) }
+    private var frameColor: Color { targeted ? Color.accentColor : (source == nil ? kind.tint.opacity(0.55) : kind.tint) }
 
     var body: some View {
         ZStack {
@@ -51,14 +51,14 @@ struct ChannelSlotView: View {
             } else {
                 VStack(spacing: 2) {
                     Image(systemName: "plus").foregroundStyle(.secondary)
-                    Text(kind.shortName).font(.caption2).foregroundStyle(.secondary)
+                    Text("Drop \(kind.shortName)").font(.caption2).foregroundStyle(.secondary)
                 }
             }
             // The channel is identified by the frame colour and a small badge.
             RoundedRectangle(cornerRadius: 5)
                 .strokeBorder(frameColor, style: StrokeStyle(lineWidth: targeted ? 3 : (source == nil ? 1 : 2), dash: source == nil ? [4, 3] : []))
         }
-        .frame(width: source == nil ? 56 : 120, height: 80)
+        .frame(width: source == nil ? 96 : 120, height: 80)
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { _ in if source != nil && model.peekChannel != kind { model.peekChannel = kind } }
