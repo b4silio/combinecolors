@@ -92,7 +92,7 @@ final class RenderCoordinator {
             let lvl = src.pyramid.level(level)
             planes[k] = wholeLevel ? lvl : lvl.cropped(x: x0, y: y0, width: cw, height: ch)
         }
-        let result = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: req.analysisSamples, settings: req.settings, context: req.context, fixedPostStretch: req.fixedPostStretch))
+        let result = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: req.analysisSamples, settings: req.settings, context: req.context, fixedPostStretch: req.fixedPostStretch, scale: Float(s)))
         guard let cg = RasterWriter.makeDisplayImage(rgb: result.image) else { throw RenderError.noOutput }
         let inv = 1 / s
         let rect = CGRect(x: Double(x0) * inv, y: Double(y0) * inv, width: Double(cw) * inv, height: Double(ch) * inv)
@@ -145,7 +145,7 @@ final class ThumbnailCoordinator {
                 if stale { return }
                 var settings = job.settings
                 settings.select(palette: palette)
-                guard let res = try? Renderer.render(RenderRequest(planes: planes, analysisPlanes: job.analysisSamples, settings: settings, context: job.context)),
+                guard let res = try? Renderer.render(RenderRequest(planes: planes, analysisPlanes: job.analysisSamples, settings: settings, context: job.context, scale: Float(s))),
                       let cg = RasterWriter.makeDisplayImage(rgb: res.image) else { continue }
                 DispatchQueue.main.async { self.onThumbnail?(palette.id, cg, gen) }
             }

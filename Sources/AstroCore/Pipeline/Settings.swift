@@ -203,12 +203,18 @@ public struct ColorBandsSettings: Codable, Equatable, Hashable {
 public struct DetailSettings: Codable, Equatable, Hashable {
     /// −1…1: fine-detail local contrast (radius ≈ 0.6 % of the image width).
     public var texture: Float = 0
-    /// −1…1: mid-tone local contrast at a broader scale (radius ≈ 6 % of the width).
+    /// −0.5…2: mid-tone local contrast at a broader scale (radius ≈ 6 % of the width).
     public var clarity: Float = 0
     /// −1…1: removes (or adds) the large-scale haze component (radius ≈ 25 % of the width).
     public var dehaze: Float = 0
+    /// 0…2: unsharp-mask amount on the luminance.
+    public var sharpen: Float = 0
+    /// Unsharp-mask radius (Gaussian σ) in full-resolution pixels.
+    public var sharpenRadius: Float = 1.5
+    /// 0…1: protects low-contrast (noise) areas from the sharpening, like Camera Raw's Masking.
+    public var sharpenMasking: Float = 0
     public init() {}
-    public var isNeutral: Bool { texture == 0 && clarity == 0 && dehaze == 0 }
+    public var isNeutral: Bool { texture == 0 && clarity == 0 && dehaze == 0 && sharpen == 0 }
 }
 
 public enum StarsStretchMode: String, Codable, CaseIterable, Identifiable {

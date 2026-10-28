@@ -15,7 +15,9 @@ import AstroCore
 //      --scnr <0..1>          green removal amount
 //      --sat <factor>         saturation
 //      --hue <deg>            hue shift
-//      --texture <-1..1>      fine local contrast;  --clarity <-1..1>  mid-scale;  --dehaze <-1..1>  large-scale
+//      --texture <-1..1>      fine local contrast;  --clarity <-0.5..2>  mid-scale;  --dehaze <-1..1>  large-scale
+//      --sharpen <0..2>       unsharp mask amount;  --sharpen-radius <px>  its radius in full-resolution pixels (default 1.5)
+//      --sharpen-masking <0..1>  protect low-contrast (noise) areas from the sharpening
 //      --lum <preset|off>     luminance: ha | lum | haMostly | haOiii | balanced | lumHa | maxLines | meanLines | off (default ha)
 //      --stars                blend RGB stars
 //      --format <fmt>         png8 | png16 | tiff16 | tiff32 | fits32 | jpeg (default png8)
@@ -86,6 +88,9 @@ case "render":
     let texture = Float(option("--texture") ?? "0") ?? 0
     let clarity = Float(option("--clarity") ?? "0") ?? 0
     let dehaze = Float(option("--dehaze") ?? "0") ?? 0
+    let sharpen = Float(option("--sharpen") ?? "0") ?? 0
+    let sharpenRadius = Float(option("--sharpen-radius") ?? "1.5") ?? 1.5
+    let sharpenMasking = Float(option("--sharpen-masking") ?? "0") ?? 0
     let lum = option("--lum")
     let stars = flag("--stars")
     let formatArg = option("--format") ?? "png8"
@@ -151,6 +156,7 @@ case "render":
     settings.post.saturation = sat
     settings.post.hueShift = hue
     settings.detail.texture = texture; settings.detail.clarity = clarity; settings.detail.dehaze = dehaze
+    settings.detail.sharpen = sharpen; settings.detail.sharpenRadius = sharpenRadius; settings.detail.sharpenMasking = sharpenMasking
     if let l = lum { applyLum(l, &settings) }
     settings.stars.enabled = stars
 
@@ -191,7 +197,7 @@ case "render":
                     let l = src.pyramid.level(lvl)
                     planes[k] = crop.map { l.cropped($0.scaled(level: lvl)) } ?? l
                 }
-                let res = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: analysis, settings: s, context: context))
+                let res = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: analysis, settings: s, context: context, scale: 1 / Float(1 << lvl)))
                 image = res.image
                 print("\(palette.id): level \(lvl) \(image.width)×\(image.height) rendered in \(Int(res.millis)) ms")
             } else {

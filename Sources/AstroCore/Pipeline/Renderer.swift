@@ -54,9 +54,12 @@ public struct RenderRequest {
     public var fixedPostStretch: [ResolvedStretch]?
     /// Apply clarity/dehaze inside this call (false while rendering strips).
     public var applyDetail: Bool = true
+    /// Rendered pixels per full-resolution pixel (1 at full size, 0.5 at pyramid level 1, …);
+    /// pixel-based radii such as the sharpening radius are scaled by it.
+    public var scale: Float = 1
 
-    public init(planes: [ChannelKind: PlanarImage], analysisPlanes: [ChannelKind: PlanarImage]? = nil, settings: CombineSettings, context: RenderContext, fixedPostStretch: [ResolvedStretch]? = nil, applyDetail: Bool = true) {
-        self.planes = planes; self.analysisPlanes = analysisPlanes; self.settings = settings; self.context = context; self.fixedPostStretch = fixedPostStretch; self.applyDetail = applyDetail
+    public init(planes: [ChannelKind: PlanarImage], analysisPlanes: [ChannelKind: PlanarImage]? = nil, settings: CombineSettings, context: RenderContext, fixedPostStretch: [ResolvedStretch]? = nil, applyDetail: Bool = true, scale: Float = 1) {
+        self.planes = planes; self.analysisPlanes = analysisPlanes; self.settings = settings; self.context = context; self.fixedPostStretch = fixedPostStretch; self.applyDetail = applyDetail; self.scale = scale
     }
 }
 
@@ -204,7 +207,7 @@ public enum Renderer {
         }
         combined.clamp01()
         // 7. Local contrast last (non point-wise; the strip renderer applies it on the whole image).
-        if req.applyDetail { PostProcess.detail(combined, settings: s.detail) }
+        if req.applyDetail { PostProcess.detail(combined, settings: s.detail, scale: req.scale) }
         return RenderResult(image: combined, postStretch: postStretch, channelStretch: channelStretch, millis: Date().timeIntervalSince(t0) * 1000)
     }
 
@@ -391,7 +394,7 @@ public enum Renderer {
             progress?(Double(y) / Double(h))
         }
         if isCancelled?() == true { return nil }
-        PostProcess.detail(out, settings: settings.detail)
+        PostProcess.detail(out, settings: settings.detail, scale: 1)
         return out
     }
 }

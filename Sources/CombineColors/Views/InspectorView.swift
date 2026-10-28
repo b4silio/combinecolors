@@ -29,7 +29,7 @@ struct ControlsStripView: View {
                 ControlBlock(title: "Luminance", width: 250, expanded: binding("luminance"), dragScroll: dragScroll, minHeight: Self.height - 14) { luminanceSection }
                 ControlBlock(title: "Colour bands", width: 226, expanded: binding("bands"), dragScroll: dragScroll, minHeight: Self.height - 14) { colorBandsSection }
                 ControlBlock(title: "Colour", width: 250, expanded: binding("colour"), dragScroll: dragScroll, minHeight: Self.height - 14) { colourSection }
-                ControlBlock(title: "Detail", width: 250, expanded: binding("detail"), dragScroll: dragScroll, minHeight: Self.height - 14) { detailSection }
+                ControlBlock(title: "Detail", width: 266, expanded: binding("detail"), dragScroll: dragScroll, minHeight: Self.height - 14) { detailSection }
                 ControlBlock(title: "RGB stars", width: 262, expanded: binding("stars"), dragScroll: dragScroll, minHeight: Self.height - 14) { starsSection }
             }
             .padding(.horizontal, 6)
@@ -65,10 +65,19 @@ struct ControlsStripView: View {
 
     @ViewBuilder var detailSection: some View {
         let d = $model.settings.detail
-        SliderRow(title: "Texture", value: d.texture, range: -1...1, defaultValue: 0, help: "Fine-detail local contrast (radius ≈ 0.6 % of the width); stars are excluded from the blur to avoid dark halos.")
-        SliderRow(title: "Clarity", value: d.clarity, range: -1...1, defaultValue: 0, help: "Mid-tone local contrast at a broader scale (radius ≈ 6 % of the width).")
-        SliderRow(title: "Dehaze", value: d.dehaze, range: -1...1, defaultValue: 0, help: "Subtracts the large-scale haze component (radius ≈ 25 % of the width); negative adds haze.")
-        Text("Applied last, on the luminance; radii scale with the image.").font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        let lw: CGFloat = 84
+        SliderRow(title: "Texture", value: d.texture, range: -1...1, defaultValue: 0, help: "Fine-detail local contrast (radius ≈ 0.6 % of the width); stars are excluded from the blur to avoid dark halos.", note: "0.6%", labelWidth: lw)
+        SliderRow(title: "Clarity", value: d.clarity, range: -0.5...2, defaultValue: 0, help: "Mid-tone local contrast at a broader scale (radius ≈ 6 % of the width).", note: "6%", labelWidth: lw)
+        SliderRow(title: "Dehaze", value: d.dehaze, range: -1...1, defaultValue: 0, help: "Subtracts the large-scale haze component (radius ≈ 25 % of the width); negative adds haze.", note: "25%", labelWidth: lw)
+        Divider()
+        SliderRow(title: "Sharpen", value: d.sharpen, range: 0...2, defaultValue: 0, help: "Unsharp mask on the luminance (stars excluded from the blur). The radius is in full-resolution pixels, so judge it at 1:1 with HQ on; a fitted preview shows little of it.", labelWidth: lw)
+        SliderRow(title: "Radius", value: d.sharpenRadius, range: 0.5...5, defaultValue: 1.5, format: "%.1f", help: "Sharpening radius in full-resolution pixels.", note: "px", labelWidth: lw)
+        SliderRow(title: "Masking", value: d.sharpenMasking, range: 0...1, defaultValue: 0, help: "Protects flat, noisy areas: only detail above this fraction of the noise level is sharpened (like Camera Raw's Masking).", labelWidth: lw)
+        HStack {
+            Spacer()
+            Button("Reset") { model.settings.detail = DetailSettings() }.controlSize(.small)
+                .disabled(model.settings.detail == DetailSettings())
+        }
     }
 
     // MARK: Stretch

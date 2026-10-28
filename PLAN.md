@@ -106,6 +106,7 @@ Reproducing the project means implementing phases 1–8 plus everything below.
 | F26 | Recent sets remember their state: settings, crop, rotation and presets are auto-saved (debounced 0.7 s, in UserDefaults, no project file needed) with the recent entry whose files are loaded, and restored when the set is reopened; reloading the same files keeps the entry and its state | `RecentSet.state`, `RecentSetsStore.updateState/record`, `ProjectModel.saveRecentState/openRecentSet` | RecentSetsTests |
 | F27 | Drag on empty space of a processing block (or between blocks) sweeps the controls strip horizontally | `ScrollDragState`, `ScrollViewFinder`, `ControlBlock.dragScroll` | — |
 | F28 | Detail reworked into three Camera-Raw-like scales: Texture (radius 0.6 % of width), Clarity (6 %), Dehaze (25 %); every blur is taken from a star-clipped luminance (99th percentile cap) and darkening is damped (×0.5 texture, ×0.7 clarity) so stars no longer dig dark halos; CLI `--texture --clarity --dehaze` | `DetailSettings.texture`, `PostProcess.detail/starCapped/localContrast` | ColorBandsAndDetailTests (halo test on a synthetic star, scale ordering, strips == whole) |
+| F29 | Detail block tidy-up and sharpening: Clarity range −0.5…2, radius notes next to the slider titles (0.6 % / 6 % / 25 %), description text gone, Reset button; new unsharp-mask Sharpen with Amount (0…2), Radius (0.5–5 full-resolution px, scaled to the render level so it only shows at 1:1) and Masking (0…1, fades the mask out below `masking × 4σ` of the high-pass noise); blur from the star-capped luminance and halved darkening as for the other scales; CLI `--sharpen --sharpen-radius --sharpen-masking` | `DetailSettings.sharpen/sharpenRadius/sharpenMasking`, `PostProcess.gaussianBlur/sharpen`, `RenderRequest.scale`, `SliderRow.note/labelWidth` | PipelineTests (edge slope vs scale, masking leaves noise alone, halo test with sharpen, decoding defaults) |
 | F14 | Press-and-hold a channel thumbnail → main preview shows that channel alone (grayscale, own auto-stretch), released → normal view; implemented as a temporary monochrome settings override (`peekSettings`) | `ProjectModel.peekChannel`, `ChannelStripView` gesture | PeekTests, screenshot |
 
 ### Corrections
@@ -137,7 +138,7 @@ commit (see the project memory note).
 
 ## Status
 
-* 99 tests pass (`swift test`): core, pipeline, luminance presets, monochrome, colour bands/detail, rotation, model flows, presets, recent sets, palette visibility, peek.
+* 100 tests pass (`swift test`): core, pipeline, luminance presets, monochrome, colour bands/detail, rotation, model flows, presets, recent sets, palette visibility, peek.
 * Verified on the Soul Core FITS set (6 × 7272×5478 float32) and the Lowers Nebula
   16-bit TIFF set: loading ≈ 1 s for six channels, preview renders 1–30 ms, full-resolution
   Foraxx export ≈ 0.5 s, auto-crop 20–30 ms.

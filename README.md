@@ -52,7 +52,9 @@ at full resolution.
   black/white point, gamma. **Detail**: texture (fine), clarity (mid-scale)
   and dehaze (large-scale) local contrast, as in Camera Raw; the blurs are
   taken from a star-clipped luminance so stars get no dark halos, and radii
-  are relative to the image so preview and export agree.
+  are relative to the image so preview and export agree. Sharpening is an
+  unsharp mask with amount, radius (full-resolution pixels, so judge it at
+  1:1) and a Camera-Raw-like masking slider that spares the noisy sky.
   RGB star blending (screen / lighten / add with a luminance mask,
   linear or already-stretched star images detected automatically).
 * **Crop and rotation**: one rectangle shared by every channel, drawn on the

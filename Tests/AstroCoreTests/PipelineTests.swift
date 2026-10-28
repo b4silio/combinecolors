@@ -329,6 +329,8 @@ final class TolerantDecodingTests: XCTestCase {
         XCTAssertEqual(doc.settings.stretch.targetBackground, StretchSettings().targetBackground)
         XCTAssertEqual(doc.settings.normalization.method, NormalizationSettings().method)   // unknown value → default
         XCTAssertEqual(doc.rotation, 0)                                                    // missing → no rotation
+        XCTAssertEqual(doc.settings.detail.sharpen, 0)                                     // pre-sharpen file → off
+        XCTAssertEqual(doc.settings.detail.sharpenRadius, 1.5)
         XCTAssertEqual(doc.settings.post.saturation, 1.5)
         XCTAssertEqual(doc.settings.adjust(.oiii).gain, 2)
         XCTAssertEqual(doc.crop, PixelRect(x: 1, y: 2, width: 30, height: 40))
@@ -504,7 +506,7 @@ final class ColorBandsAndDetailTests: XCTestCase {
             let v = 0.3 + 0.7 * exp(-(dx * dx + dy * dy) / 18)
             img.r[x, y] = v; img.g[x, y] = v; img.b[x, y] = v
         } }
-        var d = DetailSettings(); d.texture = 1; d.clarity = 1
+        var d = DetailSettings(); d.texture = 1; d.clarity = 1; d.sharpen = 2; d.sharpenRadius = 2
         PostProcess.detail(img, settings: d)
         let lum = img.luma()
         var ringMin: Float = 1
@@ -543,8 +545,59 @@ final class ColorBandsAndDetailTests: XCTestCase {
         var tex = s; tex.detail = DetailSettings(); tex.detail.texture = 0.8
         let tx = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: samples, settings: tex, context: ctx))
         XCTAssertGreaterThan(highPassStd(tx.image.luma()), highPassStd(plain.image.luma()))
-        // Settings round trip with bands.
-        var ba = ColorBandAdjust(); ba.hue = 12; s.colorBands.set(.teals, ba)
+        // Settings round trip with bands and sharpening.
+        var ba = ColorBandAdjust(); ba.hue = 12; s.colorBands.set(.teals, ba); s.detail.sharpen = 0.7; s.detail.sharpenRadius = 2.5
         XCTAssertEqual(try JSONDecoder().decode(CombineSettings.self, from: try JSONEncoder().encode(s)), s)
+    }
+
+    func testSharpenIsAnUnsharpMaskScaledToTheRenderLevel() throws {
+        // A soft edge gets steeper; the same radius at half scale (preview level 1) blurs half as much.
+        let w = 64, h = 16
+        func edge() -> RGBImage {
+            let img = RGBImage(width: w, height: h)
+            for y in 0..<h { for x in 0..<w {
+                let v = 0.2 + 0.6 / (1 + exp(-Float(x - 32)))
+                img.r[x, y] = v; img.g[x, y] = v; img.b[x, y] = v
+            } }
+            return img
+        }
+        func slope(_ img: RGBImage) -> Float { img.luma()[33, 8] - img.luma()[31, 8] }
+        let plain = edge()
+        var d = DetailSettings(); d.sharpen = 1; d.sharpenRadius = 2
+        let full = edge(); PostProcess.detail(full, settings: d, scale: 1)
+        let half = edge(); PostProcess.detail(half, settings: d, scale: 0.5)
+        let tiny = edge(); PostProcess.detail(tiny, settings: d, scale: 0.1)
+        XCTAssertGreaterThan(slope(full), slope(plain) * 1.2)
+        XCTAssertGreaterThan(slope(half), slope(plain))
+        XCTAssertLessThan(slope(half), slope(full))
+        XCTAssertEqual(slope(tiny), slope(plain), accuracy: 1e-6, "σ below a quarter pixel: no-op")
+        for p in full.planes { let (lo, hi) = p.minMax(); XCTAssertGreaterThanOrEqual(lo, 0); XCTAssertLessThanOrEqual(hi, 1) }
+        // Flat areas are untouched; the Gaussian is normalised.
+        let flat = PlanarImage(width: 32, height: 32, fill: 0.4)
+        XCTAssertLessThan(PostProcess.gaussianBlur(flat, sigma: 1.5).maxAbsDifference(flat), 1e-5)
+        XCTAssertTrue(DetailSettings().isNeutral)
+        var sharpOnly = DetailSettings(); sharpOnly.sharpen = 0.5
+        XCTAssertFalse(sharpOnly.isNeutral)
+        // Masking leaves faint noise alone but still sharpens the strong edge.
+        var rng = SystemRandomNumberGenerator()
+        let ref = edge()
+        for y in 0..<h { for x in 0..<w {
+            let v = ref.r[x, y] + Float.random(in: -0.01...0.01, using: &rng)
+            ref.r[x, y] = v; ref.g[x, y] = v; ref.b[x, y] = v
+        } }
+        func meanNoiseDelta(masking: Float) -> RGBImage {
+            let out = RGBImage(r: ref.r.copy(), g: ref.g.copy(), b: ref.b.copy())
+            var m = d; m.sharpenMasking = masking
+            PostProcess.detail(out, settings: m, scale: 1)
+            return out
+        }
+        func noiseChange(_ img: RGBImage) -> Float {
+            var sum: Float = 0
+            for y in 0..<h { for x in 2..<18 { sum += abs(img.r[x, y] - ref.r[x, y]) } }
+            return sum / Float(16 * h)
+        }
+        let unmasked = meanNoiseDelta(masking: 0), masked = meanNoiseDelta(masking: 1)
+        XCTAssertLessThan(noiseChange(masked), 0.15 * noiseChange(unmasked), "masking must spare the flat noisy area")
+        XCTAssertGreaterThan(slope(masked), slope(plain) * 1.2)
     }
 }

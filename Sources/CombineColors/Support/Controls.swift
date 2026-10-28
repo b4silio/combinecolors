@@ -12,6 +12,9 @@ struct SliderRow: View {
     var format: String = "%.2f"
     var logarithmic: Bool = false
     var help: String? = nil
+    /// Small grey note after the title, e.g. the radius of a filter.
+    var note: String? = nil
+    var labelWidth: CGFloat = 70
 
     private var position: Binding<Double> {
         Binding(
@@ -28,8 +31,8 @@ struct SliderRow: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            Text(title)
-                .frame(width: 70, alignment: .leading)
+            (Text(title) + Text(note.map { " (\($0))" } ?? "").font(.system(size: 9)).foregroundColor(.secondary))
+                .frame(width: labelWidth, alignment: .leading)
                 .lineLimit(1)
                 .onTapGesture(count: 2) { value = defaultValue }
                 .help(help ?? "Double-click or right-click to reset")

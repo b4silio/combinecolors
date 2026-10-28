@@ -218,10 +218,58 @@ public enum PostProcess {
         }
     }
 
-    /// Texture (fine), clarity (mid) and dehaze (large-scale) local contrast, applied to the
-    /// luminance and propagated to RGB by ratio. Radii are relative to the image width so every
-    /// pyramid level and the export agree.
-    public static func detail(_ img: RGBImage, settings d: DetailSettings) {
+    /// Separable Gaussian blur (σ in pixels, edges extended).
+    public static func gaussianBlur(_ p: PlanarImage, sigma: Float) -> PlanarImage {
+        let r = max(1, Int((3 * sigma).rounded(.up)))
+        var k = (0...(2 * r)).map { exp(-Float(($0 - r) * ($0 - r)) / (2 * sigma * sigma)) }
+        let sum = k.reduce(0, +)
+        for i in k.indices { k[i] /= sum }
+        let tmp = PlanarImage(width: p.width, height: p.height), out = PlanarImage(width: p.width, height: p.height)
+        var src = vImage_Buffer(data: p.pointer, height: vImagePixelCount(p.height), width: vImagePixelCount(p.width), rowBytes: p.width * 4)
+        var mid = vImage_Buffer(data: tmp.pointer, height: vImagePixelCount(p.height), width: vImagePixelCount(p.width), rowBytes: p.width * 4)
+        var dst = vImage_Buffer(data: out.pointer, height: vImagePixelCount(p.height), width: vImagePixelCount(p.width), rowBytes: p.width * 4)
+        let flags = vImage_Flags(kvImageEdgeExtend)
+        k.withUnsafeBufferPointer { kp in
+            vImageConvolve_PlanarF(&src, &mid, nil, 0, 0, kp.baseAddress!, 1, UInt32(2 * r + 1), 0, flags)
+            vImageConvolve_PlanarF(&mid, &dst, nil, 0, 0, kp.baseAddress!, UInt32(2 * r + 1), 1, 0, flags)
+        }
+        return out
+    }
+
+    /// Unsharp mask: `t += amount × (t − blur)` with the blur taken from the star-capped image and
+    /// darkening halved, like the other scales. `sigma` is in pixels of `t`. `masking` (0…1)
+    /// fades the mask out where the high-pass is below `masking × 4σ` of the high-pass noise
+    /// (median absolute deviation), so flat noisy sky is left alone and edges are sharpened.
+    static func sharpen(_ t: UnsafeMutablePointer<Float>, count n: Int, source: PlanarImage, sigma: Float, amount: Float, masking: Float = 0) {
+        let blur = gaussianBlur(starCapped(source), sigma: sigma)
+        let bp = blur.pointer
+        var threshold: Float = 0
+        if masking > 0 {
+            let step = max(1, n / 200_000)
+            var sample = stride(from: 0, to: n, by: step).map { abs(t[$0] - bp[$0]) }
+            sample.sort()
+            let noise = Statistics.percentile(sorted: sample, q: 0.5) / 0.6745
+            threshold = masking * 4 * noise
+        }
+        for i in 0..<n {
+            let l = t[i]
+            let d = l - bp[i]
+            var delta = amount * d
+            if threshold > 0 {
+                // Smooth ramp from 0 at half the threshold to 1 at the threshold.
+                let w = min(max((abs(d) - 0.5 * threshold) / (0.5 * threshold), 0), 1)
+                delta *= w * w * (3 - 2 * w)
+            }
+            if delta < 0 { delta *= 0.5 }
+            t[i] = min(max(l + delta, 0), 1)
+        }
+    }
+
+    /// Texture (fine), clarity (mid) and dehaze (large-scale) local contrast plus sharpening,
+    /// applied to the luminance and propagated to RGB by ratio. The local-contrast radii are
+    /// relative to the image width so every pyramid level and the export agree; the sharpening
+    /// radius is in full-resolution pixels and scaled by `scale` (rendered px per full-res px).
+    public static func detail(_ img: RGBImage, settings d: DetailSettings, scale: Float = 1) {
         guard !d.isNeutral else { return }
         let n = img.width * img.height
         let y = img.luma()
@@ -244,6 +292,12 @@ public enum PostProcess {
         if d.texture != 0 {
             let blur = pyramidBlur(starCapped(target), levels: blurLevels(width: img.width, relativeRadius: textureRadius))
             localContrast(t, count: n, blur: blur, amount: d.texture * 1.0, darkFactor: 0.5)
+        }
+        if d.sharpen > 0 {
+            // Below ~0.25 px the blur is the identity and the mask vanishes (a down-sampled preview
+            // of a 1 px sharpening legitimately shows nothing).
+            let sigma = d.sharpenRadius * scale
+            if sigma >= 0.25 { sharpen(t, count: n, source: target, sigma: sigma, amount: d.sharpen, masking: d.sharpenMasking) }
         }
         let r = img.r.pointer, g = img.g.pointer, b = img.b.pointer
         for i in 0..<n {
