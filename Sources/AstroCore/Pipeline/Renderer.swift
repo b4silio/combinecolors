@@ -52,9 +52,11 @@ public struct RenderRequest {
     public var context: RenderContext
     /// When set, these resolved stretches are used for the post-combine stage instead of being derived.
     public var fixedPostStretch: [ResolvedStretch]?
+    /// Apply clarity/dehaze inside this call (false while rendering strips).
+    public var applyDetail: Bool = true
 
-    public init(planes: [ChannelKind: PlanarImage], analysisPlanes: [ChannelKind: PlanarImage]? = nil, settings: CombineSettings, context: RenderContext, fixedPostStretch: [ResolvedStretch]? = nil) {
-        self.planes = planes; self.analysisPlanes = analysisPlanes; self.settings = settings; self.context = context; self.fixedPostStretch = fixedPostStretch
+    public init(planes: [ChannelKind: PlanarImage], analysisPlanes: [ChannelKind: PlanarImage]? = nil, settings: CombineSettings, context: RenderContext, fixedPostStretch: [ResolvedStretch]? = nil, applyDetail: Bool = true) {
+        self.planes = planes; self.analysisPlanes = analysisPlanes; self.settings = settings; self.context = context; self.fixedPostStretch = fixedPostStretch; self.applyDetail = applyDetail
     }
 }
 
@@ -190,8 +192,9 @@ public enum Renderer {
             PostProcess.injectLuminance(combined, lum: lum, amount: s.luminance.amount, method: s.luminance.method)
         }
 
-        // 5. Colour post-processing.
+        // 5. Colour post-processing: selective colour bands, then the global controls.
         combined.clamp01()
+        PostProcess.colorBands(combined, settings: s.colorBands)
         PostProcess.apply(s.post, to: combined)
 
         // 6. RGB stars.
@@ -200,6 +203,8 @@ public enum Renderer {
             PostProcess.blendStars(combined, stars: stars, settings: s.stars)
         }
         combined.clamp01()
+        // 7. Local contrast last (non point-wise; the strip renderer applies it on the whole image).
+        if req.applyDetail { PostProcess.detail(combined, settings: s.detail) }
         return RenderResult(image: combined, postStretch: postStretch, channelStretch: channelStretch, millis: Date().timeIntervalSince(t0) * 1000)
     }
 
@@ -370,7 +375,7 @@ public enum Renderer {
         var fixed = postStretch
         if fixed == nil && settings.stretchStage == .postCombine {
             // Derive once from the analysis planes.
-            let probe = try render(RenderRequest(planes: analysisPlanes, analysisPlanes: nil, settings: settings, context: context))
+            let probe = try render(RenderRequest(planes: analysisPlanes, analysisPlanes: nil, settings: settings, context: context, applyDetail: false))
             fixed = probe.postStretch
         }
         while y < h {
@@ -378,13 +383,15 @@ public enum Renderer {
             let hh = min(rows, h - y)
             var planes: [ChannelKind: PlanarImage] = [:]
             for (k, s) in sources { planes[k] = s.image.cropped(x: crop.x, y: crop.y + y, width: w, height: hh) }
-            let res = try render(RenderRequest(planes: planes, analysisPlanes: nil, settings: settings, context: context, fixedPostStretch: fixed))
+            let res = try render(RenderRequest(planes: planes, analysisPlanes: nil, settings: settings, context: context, fixedPostStretch: fixed, applyDetail: false))
             for (src, dst) in zip(res.image.planes, out.planes) {
                 (dst.pointer + y * w).update(from: src.pointer, count: w * hh)
             }
             y += hh
             progress?(Double(y) / Double(h))
         }
+        if isCancelled?() == true { return nil }
+        PostProcess.detail(out, settings: settings.detail)
         return out
     }
 }

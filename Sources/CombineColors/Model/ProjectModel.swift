@@ -94,17 +94,60 @@ final class ProjectModel {
     private(set) var lastRenderLevel: Int = 0
     var hover: HoverInfo? = nil
     var fitRequest = 0   // incremented to ask the preview to fit
-    /// A/B comparison: a stored snapshot of the settings and whether it is being shown.
-    var snapshotA: CombineSettings? = nil
-    var showingSnapshot = false { didSet { if showingSnapshot != oldValue { scheduleRender() } } }
+    /// Saved presets (settings + thumbnail), shown in the bar under the preview.
+    private(set) var presets: [SettingsPreset] = []
+    private var presetThumbnailCache: [UUID: CGImage] = [:]
     /// Channel shown full-size while its slot thumbnail is pressed.
     var peekChannel: ChannelKind? = nil { didSet { if peekChannel != oldValue { scheduleRender() } } }
 
-    /// Settings currently displayed (the snapshot while comparing, or a single channel while peeking).
+    /// Settings currently displayed (a single channel while peeking).
     var displayedSettings: CombineSettings {
         if let k = peekChannel, sources[k] != nil { return ProjectModel.peekSettings(for: k, base: settings) }
-        return (showingSnapshot ? snapshotA : nil) ?? settings
+        return settings
     }
+
+    // MARK: - Presets
+
+    /// Stores the current settings with a thumbnail of the current preview.
+    @discardableResult
+    func savePreset(name: String? = nil) -> SettingsPreset {
+        let n = name ?? "Preset \(presets.count + 1)"
+        let png = frame.flatMap { try? RasterWriter.pngData(rgb: $0.rgb, maxWidth: 192) }
+        let p = SettingsPreset(name: n, settings: settings, thumbnailPNG: png)
+        presets.append(p)
+        return p
+    }
+
+    func applyPreset(_ p: SettingsPreset) { settings = p.settings }
+
+    func deletePreset(_ p: SettingsPreset) {
+        presets.removeAll { $0.id == p.id }
+        presetThumbnailCache.removeValue(forKey: p.id)
+    }
+
+    func renamePreset(_ p: SettingsPreset, to name: String) {
+        guard let i = presets.firstIndex(where: { $0.id == p.id }), !name.isEmpty else { return }
+        presets[i].name = name
+    }
+
+    /// Replaces the preset's settings and thumbnail with the current state.
+    func updatePreset(_ p: SettingsPreset) {
+        guard let i = presets.firstIndex(where: { $0.id == p.id }) else { return }
+        presets[i].settings = settings
+        presets[i].thumbnailPNG = frame.flatMap { try? RasterWriter.pngData(rgb: $0.rgb, maxWidth: 192) }
+        presets[i].date = Date()
+        presetThumbnailCache.removeValue(forKey: p.id)
+    }
+
+    func presetThumbnail(_ p: SettingsPreset) -> CGImage? {
+        if let c = presetThumbnailCache[p.id] { return c }
+        guard let d = p.thumbnailPNG, let img = RasterWriter.cgImage(fromPNG: d) else { return nil }
+        presetThumbnailCache[p.id] = img
+        return img
+    }
+
+    /// The preset whose settings equal the current ones (highlighted in the bar).
+    var activePresetID: UUID? { presets.first { $0.settings == settings }?.id }
 
     /// Grayscale view of one channel with the current stretch, no colour processing.
     static func peekSettings(for kind: ChannelKind, base: CombineSettings) -> CombineSettings {
@@ -492,7 +535,7 @@ final class ProjectModel {
         isRendering = true
         let shown = displayedSettings
         if shown.normalization != settings.normalization {
-            // The snapshot uses a different normalisation: render it with a context of its own.
+            // Different normalisation than the live context: render with a context of its own.
             let snapshotCtx = RenderContext.make(settings: shown.normalization, sources: sources)
             let req = PreviewRequest(sources: sources, settings: shown, context: snapshotCtx, analysisSamples: analysisSamples, fixedPostStretch: nil,
                                      visibleRect: viewport.visibleRect.isEmpty ? nil : viewport.visibleRect,
@@ -565,6 +608,8 @@ final class ProjectModel {
         if linear {
             s.stretch.method = .none
             s.post = PostSettings()
+            s.colorBands = ColorBandsSettings()
+            s.detail = DetailSettings()
             s.luminance.enabled = false
             s.stars.enabled = false
         }
@@ -601,6 +646,7 @@ final class ProjectModel {
         var doc = ProjectDocument()
         doc.settings = settings
         doc.crop = crop
+        doc.presets = presets
         doc.channels = sources.values.sorted { $0.kind.rawValue < $1.kind.rawValue }.compactMap { s in
             s.url.map { ProjectDocument.ChannelRef(kind: s.kind, path: $0.path) }
         }
@@ -618,6 +664,8 @@ final class ProjectModel {
             let doc = try ProjectDocument.load(from: url)
             projectURL = url
             removeAll()
+            presets = doc.presets
+            presetThumbnailCache = [:]
             let refs = doc.channels
             guard !refs.isEmpty else { settings = doc.settings; crop = doc.crop; return }
             isLoading = true

@@ -8,38 +8,64 @@ struct InspectorView: View {
     @Binding var showExport: Bool
     @Binding var showDualBand: Bool
 
+    /// Accordion: one open block at a time (the palette block keeps its own state).
+    @AppStorage("inspectorOpenSection") private var openSection: String = "channels"
+    @AppStorage("paletteSectionOpen") private var paletteOpen: Bool = true
+
+    private func binding(_ id: String) -> Binding<Bool> {
+        Binding(get: { openSection == id }, set: { openSection = $0 ? id : "" })
+    }
+
     var body: some View {
-        // Two independently scrolling panes: palettes on top, controls below (drag the divider).
-        VSplitView {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    SectionBox(title: "Palette", subtitle: model.currentPalette?.name ?? (model.settings.mode == .pixelMath ? "custom Pixel Math" : "custom matrix")) {
-                        PaletteGridView(model: model, showMatrixEditor: $showMatrixEditor, showPixelMath: $showPixelMath)
-                    }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                SectionBox(title: "Palette", subtitle: model.currentPalette?.name ?? (model.settings.mode == .pixelMath ? "custom Pixel Math" : "custom matrix"), expanded: $paletteOpen) {
+                    PaletteGridView(model: model, showMatrixEditor: $showMatrixEditor, showPixelMath: $showPixelMath)
                 }
-                .padding(8)
+                SectionBox(title: "Channels", subtitle: channelsSubtitle, expanded: binding("channels")) { channelsSection }
+                SectionBox(title: "Stretch", subtitle: model.settings.stretch.method.displayName, expanded: binding("stretch")) { stretchSection }
+                SectionBox(title: "Normalisation", subtitle: model.settings.normalization.method.displayName, expanded: binding("normalisation")) { normalizationSection }
+                SectionBox(title: "Luminance", subtitle: model.settings.luminance.enabled ? (model.settings.luminance.resolvedExpression(available: model.availableKinds) ?? "unavailable") : "off", expanded: binding("luminance")) { luminanceSection }
+                SectionBox(title: "Colour bands", subtitle: model.settings.colorBands.isNeutral ? "neutral" : "adjusted", expanded: binding("bands")) { colorBandsSection }
+                SectionBox(title: "Colour", subtitle: model.settings.post == PostSettings() ? "neutral" : "adjusted", expanded: binding("colour")) { colourSection }
+                SectionBox(title: "Detail", subtitle: model.settings.detail.isNeutral ? "neutral" : String(format: "clarity %.2f · dehaze %.2f", model.settings.detail.clarity, model.settings.detail.dehaze), expanded: binding("detail")) { detailSection }
+                SectionBox(title: "RGB stars", subtitle: model.settings.stars.enabled ? "on" : "off", expanded: binding("stars")) { starsSection }
+                SectionBox(title: "Crop", subtitle: model.crop.map { String($0.width) + "×" + String($0.height) } ?? "none", expanded: binding("crop")) { cropSection }
+                SectionBox(title: "Output", expanded: binding("output")) { outputSection }
             }
-            .frame(minHeight: 120, idealHeight: 380)
-            controls
-                .frame(minHeight: 200)
         }
         .frame(minWidth: 320, idealWidth: 400, maxWidth: 480)
     }
 
-    private var controls: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
-                SectionBox(title: "Stretch", subtitle: model.settings.stretch.method.displayName) { stretchSection }
-                SectionBox(title: "Normalisation", subtitle: model.settings.normalization.method.displayName) { normalizationSection }
-                SectionBox(title: "Channels") { channelsSection }
-                SectionBox(title: "Luminance", subtitle: model.settings.luminance.enabled ? (model.settings.luminance.resolvedExpression(available: model.availableKinds) ?? "unavailable") : "off") { luminanceSection }
-                SectionBox(title: "Colour") { colourSection }
-                SectionBox(title: "RGB stars", subtitle: model.settings.stars.enabled ? "on" : "off") { starsSection }
-                SectionBox(title: "Crop", subtitle: model.crop.map { String($0.width) + "×" + String($0.height) } ?? "none") { cropSection }
-                SectionBox(title: "Output") { outputSection }
-            }
-            .padding(8)
+    private var channelsSubtitle: String {
+        let kinds = ChannelKind.allCases.filter { model.sources[$0] != nil }
+        return kinds.isEmpty ? "none" : kinds.map(\.shortName).joined(separator: " ")
+    }
+
+    // MARK: Colour bands
+
+    @ViewBuilder var colorBandsSection: some View {
+        Text("Selective colour: hue, saturation and lightness per hue band (Camera Raw HSL).").font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        HStack(spacing: 6) {
+            Text("").frame(width: 74)
+            Text("Hue").font(.caption2).frame(maxWidth: .infinity)
+            Text("Saturation").font(.caption2).frame(maxWidth: .infinity)
+            Text("Lightness").font(.caption2).frame(maxWidth: .infinity)
         }
+        ForEach(ColorBand.allCases) { band in
+            ColorBandRow(model: model, band: band)
+        }
+        Button("Reset bands") { model.settings.colorBands = ColorBandsSettings() }.controlSize(.small)
+            .disabled(model.settings.colorBands.isNeutral)
+    }
+
+    // MARK: Detail
+
+    @ViewBuilder var detailSection: some View {
+        let d = $model.settings.detail
+        SliderRow(title: "Clarity", value: d.clarity, range: -1...1, defaultValue: 0, help: "Mid-tone local contrast (radius ≈ 1.5 % of the width).")
+        SliderRow(title: "Dehaze", value: d.dehaze, range: -1...1, defaultValue: 0, help: "Subtracts the large-scale haze component (radius ≈ 12 % of the width); negative adds haze.")
+        Text("Applied last, on the luminance of the final image. Radii scale with the image so preview and export match.").font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
     }
 
     // MARK: Stretch
@@ -282,5 +308,48 @@ struct ChannelAdjustView: View {
             }
         }
         .padding(.vertical, 2)
+    }
+}
+
+
+struct ColorBandRow: View {
+    @Bindable var model: ProjectModel
+    let band: ColorBand
+
+    private var adjust: Binding<ColorBandAdjust> {
+        Binding(get: { model.settings.colorBands.adjust(band) }, set: { model.settings.colorBands.set(band, $0) })
+    }
+
+    var body: some View {
+        let a = adjust
+        HStack(spacing: 6) {
+            HStack(spacing: 4) {
+                Circle().fill(Color(hue: Double(band.hue) / 360, saturation: 0.85, brightness: 0.95)).frame(width: 9, height: 9)
+                Text(band.displayName).font(.caption)
+            }
+            .frame(width: 74, alignment: .leading)
+            .onTapGesture(count: 2) { model.settings.colorBands.set(band, ColorBandAdjust()) }
+            .help("Double-click to reset \(band.displayName)")
+            MiniSlider(value: a.hue, range: -60...60, format: "%+.0f°")
+            MiniSlider(value: a.saturation, range: -1...1, format: "%+.2f")
+            MiniSlider(value: a.lightness, range: -1...1, format: "%+.2f")
+        }
+    }
+}
+
+/// Slider with a tiny value label below it; double-click the label to reset to 0.
+struct MiniSlider: View {
+    @Binding var value: Float
+    var range: ClosedRange<Float>
+    var format: String
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Slider(value: Binding(get: { Double(value) }, set: { value = Float($0) }), in: Double(range.lowerBound)...Double(range.upperBound))
+                .controlSize(.mini)
+            Text(String(format: format, value)).font(.system(size: 9, design: .monospaced)).foregroundStyle(value == 0 ? .tertiary : .secondary)
+                .onTapGesture(count: 2) { value = 0 }
+        }
+        .frame(maxWidth: .infinity)
     }
 }

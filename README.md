@@ -46,8 +46,12 @@ at full resolution.
   Missing channels are dropped and the weights renormalised (Hα → L fallback);
   injected via L*a*b* or RGB ratio with an amount slider. Works in both stretch
   stages (stretched channels mixed, or linear mix auto-stretched).
+* **Colour bands** (Camera Raw style selective colour): hue, saturation and
+  lightness per band — reds, oranges, yellows, greens, teals, blues, magentas.
 * **Colour**: saturation, vibrance, SCNR green removal, hue rotation,
-  black/white point, gamma; RGB star blending (screen / lighten / add with a luminance mask,
+  black/white point, gamma. **Detail**: clarity (mid-tone local contrast) and
+  dehaze, with radii relative to the image so preview and export agree.
+  RGB star blending (screen / lighten / add with a luminance mask,
   linear or already-stretched star images detected automatically).
 * **Crop**: one rectangle shared by every channel, drawn on the preview or
   typed in, or detected automatically from the empty registration borders. The

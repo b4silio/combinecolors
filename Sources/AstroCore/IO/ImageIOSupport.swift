@@ -199,6 +199,27 @@ public enum RasterWriter {
         makeDisplayImage(rgb: RGBImage(r: gray, g: gray, b: gray))
     }
 
+    /// Small PNG (8-bit) in memory, e.g. for preset thumbnails.
+    public static func pngData(rgb: RGBImage, maxWidth: Int = 160) throws -> Data {
+        var img = rgb
+        while img.width > maxWidth * 2 { img = img.downsampled2x() }
+        if img.width > maxWidth {
+            let h = max(1, img.height * maxWidth / img.width)
+            img = RGBImage(r: img.r.resized(width: maxWidth, height: h), g: img.g.resized(width: maxWidth, height: h), b: img.b.resized(width: maxWidth, height: h))
+        }
+        let cg = try makeCGImage(planes: img.planes, bitsPerComponent: 8)
+        let data = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else { throw ImageIOError.cannotWrite("png") }
+        CGImageDestinationAddImage(dest, cg, nil)
+        guard CGImageDestinationFinalize(dest) else { throw ImageIOError.cannotWrite("png finalize") }
+        return data as Data
+    }
+
+    public static func cgImage(fromPNG data: Data) -> CGImage? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        return CGImageSourceCreateImageAtIndex(src, 0, nil)
+    }
+
     public static func write(planes: [PlanarImage], to url: URL, format: Format, jpegQuality: Double = 0.92) throws {
         switch format {
         case .fits32: try FITSWriter.write(planes: planes, to: url, depth: .float32)

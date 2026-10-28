@@ -114,6 +114,28 @@ extension CombineSettings {
         normalization = c.value("normalization", d.normalization); stretch = c.value("stretch", d.stretch)
         stretchStage = c.value("stretchStage", d.stretchStage); luminance = c.value("luminance", d.luminance)
         post = c.value("post", d.post); stars = c.value("stars", d.stars)
+        colorBands = c.value("colorBands", d.colorBands); detail = c.value("detail", d.detail)
+    }
+}
+
+extension ColorBandAdjust {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: AnyKey.self)
+        hue = c.value("hue", 0); saturation = c.value("saturation", 0); lightness = c.value("lightness", 0)
+    }
+}
+
+extension ColorBandsSettings {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: AnyKey.self)
+        bands = c.value("bands", [:])
+    }
+}
+
+extension DetailSettings {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: AnyKey.self)
+        clarity = c.value("clarity", 0); dehaze = c.value("dehaze", 0)
     }
 }
 
@@ -135,5 +157,14 @@ extension ProjectDocument {
         let d = ProjectDocument()
         version = c.value("version", d.version); channels = c.value("channels", d.channels); settings = c.value("settings", d.settings)
         starsFile = c.optionalValue("starsFile", d.starsFile); crop = c.optionalValue("crop", d.crop)
+        presets = c.value("presets", d.presets)
+    }
+}
+
+extension SettingsPreset {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: AnyKey.self)
+        id = c.value("id", UUID()); name = c.value("name", "Preset"); settings = c.value("settings", CombineSettings())
+        thumbnailPNG = c.optionalValue("thumbnailPNG", nil); date = c.value("date", Date())
     }
 }

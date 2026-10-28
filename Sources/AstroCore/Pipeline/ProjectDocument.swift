@@ -1,5 +1,18 @@
 import Foundation
 
+/// A named snapshot of the combination settings with a small preview image.
+public struct SettingsPreset: Codable, Identifiable, Equatable {
+    public var id: UUID = UUID()
+    public var name: String
+    public var settings: CombineSettings
+    public var thumbnailPNG: Data?
+    public var date: Date = Date()
+
+    public init(name: String, settings: CombineSettings, thumbnailPNG: Data? = nil) {
+        self.name = name; self.settings = settings; self.thumbnailPNG = thumbnailPNG
+    }
+}
+
 /// Saved project: channel file paths + settings.
 public struct ProjectDocument: Codable {
     public struct ChannelRef: Codable {
@@ -14,6 +27,8 @@ public struct ProjectDocument: Codable {
     public var starsFile: String? = nil
     /// Shared crop applied to every channel (statistics, thumbnails, export).
     public var crop: PixelRect? = nil
+    /// Saved presets (settings + thumbnail) for quick switching.
+    public var presets: [SettingsPreset] = []
 
     public init() {}
 

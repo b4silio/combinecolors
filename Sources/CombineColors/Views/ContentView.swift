@@ -27,6 +27,8 @@ struct ContentView: View {
                     }
                 }
                 Divider()
+                PresetBarView(model: model)
+                Divider()
                 StatusBar(model: model)
             }
             .frame(minWidth: 600)
@@ -105,8 +107,8 @@ struct ContentView: View {
         HStack(spacing: 4) {
             if model.cropEditing {
                 Text("Crop: drag to draw, Return to apply, Esc to cancel").font(.caption).padding(.horizontal, 6)
-                Button("Apply") { model.commitCropEditing() }
-                Button("Cancel") { model.cancelCropEditing() }
+                Button("Apply") { model.commitCropEditing() }.keyboardShortcut(.return, modifiers: [])
+                Button("Cancel") { model.cancelCropEditing() }.keyboardShortcut(.escape, modifiers: [])
             } else {
                 Button { model.beginCropEditing() } label: { Label("Crop", systemImage: "crop") }.disabled(model.sources.isEmpty)
                 if model.crop != nil {
@@ -114,11 +116,7 @@ struct ContentView: View {
                 }
                 Toggle(isOn: $showHistogram) { Label("Histogram", systemImage: "chart.bar.xaxis") }
                 Divider().frame(height: 14)
-                Button("Store A") { model.snapshotA = model.settings; model.showingSnapshot = false }.disabled(model.sources.isEmpty)
-                Toggle(isOn: $model.showingSnapshot) { Text("Show A") }.disabled(model.snapshotA == nil)
-                if model.snapshotA != nil {
-                    Button("Restore A") { if let a = model.snapshotA { model.showingSnapshot = false; model.settings = a } }
-                }
+                Button("Save preset") { model.savePreset() }.disabled(model.sources.isEmpty || model.frame == nil)
                 Divider().frame(height: 14)
                 Button { zoom(.zoomOut) } label: { Image(systemName: "minus.magnifyingglass") }
                 Button { zoom(.zoomIn) } label: { Image(systemName: "plus.magnifyingglass") }

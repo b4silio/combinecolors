@@ -92,6 +92,10 @@ Reproducing the project means implementing phases 1–8 plus everything below.
 | F11 | Inspector split in two panes with independent scrolling (palettes above, controls below, draggable divider) | `InspectorView` (VSplitView) | screenshot |
 | F12 | Hide palettes: eye button per thumbnail, Favourites / All switch, persisted in UserDefaults | `ProjectModel.hiddenPaletteIDs/paletteFilter`, `PaletteGridView` | PaletteVisibilityTests |
 | F13 | Mono palettes skip luminance injection (would all look identical); then replaced by one **Monochrome** palette = weighted average of every loaded channel (Weight sliders, disabled channels dropped), `CombineMode.monochrome` + `monoChannels` subset | `Palettes.swift`, `Settings.swift`, `Renderer.combine` | MonoLuminanceTests, MonochromeModeTests |
+| F15 | Colour bands (Camera Raw "HSL / selective colour"): per band (reds, oranges, yellows, greens, teals, blues, magentas) hue ±60°, saturation ±1, lightness ±1; band weights interpolate linearly between centres, fade for neutral pixels; applied after luminance, before the global Colour block | `ColorBand*` in `Settings.swift`, `PostProcess.colorBands`, `InspectorView.colorBandsSection` + `ColorBandRow`/`MiniSlider` | ColorBandsAndDetailTests |
+| F16 | Detail: clarity (mid-tone local contrast, radius 1.5 % of width) and dehaze (large-scale haze subtraction, radius 12 %), pyramid blur with radii relative to the image width so levels/export agree; applied last; strip export renders strips without it then applies it to the assembled image | `DetailSettings`, `PostProcess.detail/pyramidBlur`, `RenderRequest.applyDetail`, `Renderer.renderFull` | ColorBandsAndDetailTests (strips == whole) |
+| F17 | Inspector as an accordion: one block open at a time (Palette keeps its own state), compact headers with tinted bar + divider, order Palette · Channels · Stretch · Normalisation · Luminance · Colour bands · Colour · Detail · RGB stars · Crop · Output; vertical split removed | `SectionBox` (bound expansion), `InspectorView.body` | screenshot |
+| F18 | Presets bar under the preview (replaces Store A / Show A): Save preset captures settings + thumbnail; click applies, active one highlighted; rename / update / delete via context menu; saved in the project file | `SettingsPreset`, `ProjectDocument.presets`, `ProjectModel.savePreset…`, `PresetBarView` | ProjectModelTests.testPresetsAndUndo, screenshot |
 | F14 | Press-and-hold a channel thumbnail → main preview shows that channel alone (grayscale, own auto-stretch), released → normal view; implemented as a temporary monochrome settings override (`peekSettings`) | `ProjectModel.peekChannel`, `ChannelStripView` gesture | PeekTests, screenshot |
 
 ### Corrections
@@ -111,6 +115,7 @@ Reproducing the project means implementing phases 1–8 plus everything below.
 | C11 | Post-combine stretch parameters drifted with zoom level / strip | derived from full-resolution analysis samples (`Renderer.analysisSamples`) |
 | C12 | `AutoCrop` over-trimmed sides touched by another side's border | grow-back pass after shrinking |
 | C13 | Natural palette needed Hβ and was never available | Hβ term removed |
+| C14 | Crop Apply/Cancel keyboard shortcuts lived only in the (possibly collapsed) Crop block | shortcuts also on the preview-toolbar buttons |
 
 ### Process rule
 
@@ -119,7 +124,7 @@ commit (see the project memory note).
 
 ## Status
 
-* 92 tests pass (`swift test`): core, pipeline, luminance presets, monochrome, model flows, recent sets, palette visibility, peek.
+* 96 tests pass (`swift test`): core, pipeline, luminance presets, monochrome, colour bands/detail, model flows, presets, recent sets, palette visibility, peek.
 * Verified on the Soul Core FITS set (6 × 7272×5478 float32) and the Lowers Nebula
   16-bit TIFF set: loading ≈ 1 s for six channels, preview renders 1–30 ms, full-resolution
   Foraxx export ≈ 0.5 s, auto-crop 20–30 ms.

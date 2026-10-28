@@ -192,21 +192,45 @@ final class ProjectModelTests: XCTestCase {
         XCTAssertNil(m.exportProgress)
     }
 
-    func testSnapshotCompareAndUndo() async throws {
+    func testPresetsAndUndo() async throws {
         let m = try await loadedModel()
         let um = UndoManager()
         m.undoManager = um
+        m.viewport = Viewport(visibleRect: CGRect(x: 0, y: 0, width: 200, height: 150), scale: 1)
+        await wait { m.frame != nil }
         let original = m.settings
+        let a = m.savePreset()
+        XCTAssertEqual(a.name, "Preset 1")
+        XCTAssertNotNil(a.thumbnailPNG)
+        XCTAssertNotNil(m.presetThumbnail(a))
+        XCTAssertEqual(m.activePresetID, a.id)
         m.settings.post.hueShift = 30
         XCTAssertTrue(um.canUndo)
-        m.snapshotA = original
-        m.showingSnapshot = true
-        XCTAssertEqual(m.displayedSettings, original)
-        m.showingSnapshot = false
-        XCTAssertEqual(m.displayedSettings.post.hueShift, 30)
-        um.undo()
-        await wait { m.settings == original }
+        XCTAssertNil(m.activePresetID)
+        let b = m.savePreset(name: "Warm")
+        XCTAssertEqual(m.presets.count, 2)
+        m.applyPreset(a)
         XCTAssertEqual(m.settings, original)
+        m.applyPreset(b)
+        XCTAssertEqual(m.settings.post.hueShift, 30)
+        m.renamePreset(b, to: "Warmer")
+        XCTAssertEqual(m.presets[1].name, "Warmer")
+        m.settings.post.saturation = 2
+        m.updatePreset(b)
+        XCTAssertEqual(m.presets[1].settings.post.saturation, 2)
+        // Presets travel with the project.
+        let url = dir.appendingPathComponent("presets.json")
+        try m.saveProject(to: url)
+        let m2 = ProjectModel()
+        m2.openProject(from: url)
+        await wait { m2.presets.count == 2 }
+        XCTAssertEqual(m2.presets.map(\.name), ["Preset 1", "Warmer"])
+        XCTAssertNotNil(m2.presetThumbnail(m2.presets[0]))
+        m.deletePreset(a)
+        XCTAssertEqual(m.presets.count, 1)
+        um.undo()
+        await wait { m.settings.post.saturation != 2 }
+        XCTAssertNotEqual(m.settings.post.saturation, 2)
     }
 
     func testHoverReadout() async throws {

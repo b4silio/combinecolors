@@ -431,3 +431,72 @@ final class MonochromeModeTests: XCTestCase {
         XCTAssertEqual(back, s)
     }
 }
+
+final class ColorBandsAndDetailTests: XCTestCase {
+    func testHSLRoundTrip() {
+        for (r, g, b) in [(0.8, 0.2, 0.2), (0.1, 0.9, 0.3), (0.2, 0.2, 0.9), (0.5, 0.5, 0.5), (1, 0.6, 0), (0.3, 0.8, 0.8)] as [(Float, Float, Float)] {
+            let (h, s, l) = PostProcess.rgbToHSL(r, g, b)
+            let (r2, g2, b2) = PostProcess.hslToRGB(h, s, l)
+            XCTAssertEqual(r2, r, accuracy: 1e-4); XCTAssertEqual(g2, g, accuracy: 1e-4); XCTAssertEqual(b2, b, accuracy: 1e-4)
+        }
+        XCTAssertEqual(PostProcess.rgbToHSL(1, 0, 0).0, 0)
+        XCTAssertEqual(PostProcess.rgbToHSL(0, 1, 0).0, 120)
+        XCTAssertEqual(PostProcess.rgbToHSL(0, 0, 1).0, 240)
+    }
+
+    func testBandWeightsPartitionUnity() {
+        let centers = ColorBand.allCases.map(\.hue)
+        for h in stride(from: 0, to: 360, by: 7) {
+            let sum = (0..<centers.count).map { PostProcess.bandWeight(hue: Float(h), index: $0, centers: centers) }.reduce(0, +)
+            XCTAssertEqual(sum, 1, accuracy: 1e-4, "hue \(h)")
+        }
+        XCTAssertEqual(PostProcess.bandWeight(hue: 0, index: 0, centers: centers), 1)
+        XCTAssertEqual(PostProcess.bandWeight(hue: 15, index: 0, centers: centers), 0.5, accuracy: 1e-5)
+        XCTAssertEqual(PostProcess.bandWeight(hue: 330, index: 0, centers: centers), 0.5, accuracy: 1e-5)
+        XCTAssertEqual(PostProcess.bandWeight(hue: 120, index: 0, centers: centers), 0)
+    }
+
+    func testSelectiveColourAffectsOnlyItsBand() {
+        let img = RGBImage(width: 3, height: 1)
+        img.r.pointer.update(from: [0.8, 0.2, 0.5], count: 3)   // red, blue, grey
+        img.g.pointer.update(from: [0.2, 0.2, 0.5], count: 3)
+        img.b.pointer.update(from: [0.2, 0.9, 0.5], count: 3)
+        var s = ColorBandsSettings()
+        var a = ColorBandAdjust(); a.saturation = -1; s.set(.reds, a)
+        PostProcess.colorBands(img, settings: s)
+        XCTAssertEqual(img.r[0, 0], img.g[0, 0], accuracy: 1e-4, "red pixel fully desaturated")
+        XCTAssertEqual(img.b[1, 0], 0.9, accuracy: 1e-5, "blue pixel untouched")
+        XCTAssertEqual(img.r[2, 0], 0.5, accuracy: 1e-5, "grey untouched")
+        var hueShift = ColorBandsSettings(); var ha = ColorBandAdjust(); ha.hue = 60; hueShift.set(.blues, ha)
+        let img2 = RGBImage(width: 1, height: 1); img2.r.pointer[0] = 0.2; img2.g.pointer[0] = 0.2; img2.b.pointer[0] = 0.9
+        PostProcess.colorBands(img2, settings: hueShift)
+        XCTAssertEqual(PostProcess.rgbToHSL(img2.r[0, 0], img2.g[0, 0], img2.b[0, 0]).0, 300, accuracy: 0.5)
+        XCTAssertTrue(ColorBandsSettings().isNeutral)
+    }
+
+    func testDetailChangesLocalContrastAndStripsMatch() throws {
+        let sources: [ChannelKind: ChannelSource] = [.ha: Synth.source(.ha), .oiii: Synth.source(.oiii, scale: 0.4, seed: 2)]
+        let planes = sources.mapValues { $0.image }
+        var s = CombineSettings(); s.select(palette: Palettes.palette(id: "hoo")!)
+        let ctx = RenderContext.make(settings: s.normalization, sources: sources)
+        let samples = Renderer.analysisSamples(sources: sources)
+        let plain = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: samples, settings: s, context: ctx))
+        s.detail.clarity = 0.8; s.detail.dehaze = 0.5
+        let det = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: samples, settings: s, context: ctx))
+        XCTAssertGreaterThan(det.image.r.maxAbsDifference(plain.image.r), 0.01)
+        for p in det.image.planes { let (lo, hi) = p.minMax(); XCTAssertGreaterThanOrEqual(lo, 0); XCTAssertLessThanOrEqual(hi, 1) }
+        // Clarity raises the local contrast: the std-dev of the high-pass grows.
+        func highPassStd(_ p: PlanarImage) -> Float { let b = PostProcess.pyramidBlur(p, levels: 2); var sum: Float = 0; for i in 0..<p.count { let d = p.pointer[i] - b.pointer[i]; sum += d * d }; return (sum / Float(p.count)).squareRoot() }
+        var onlyClarity = s; onlyClarity.detail = DetailSettings(); onlyClarity.detail.clarity = 0.8
+        let cl = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: samples, settings: onlyClarity, context: ctx))
+        XCTAssertGreaterThan(highPassStd(cl.image.luma()), highPassStd(plain.image.luma()))
+        // Strip-wise export equals the whole render.
+        let strips = try Renderer.renderFull(sources: sources, settings: s, context: ctx, postStretch: det.postStretch, stripPixels: 256 * 40)!
+        for (p, q) in zip(det.image.planes, strips.planes) { XCTAssertLessThan(p.maxAbsDifference(q), 1e-4) }
+        XCTAssertEqual(PostProcess.blurLevels(width: 7272, relativeRadius: 0.015), 7)
+        XCTAssertEqual(PostProcess.blurLevels(width: 3636, relativeRadius: 0.015), 6)
+        // Settings round trip with bands.
+        var ba = ColorBandAdjust(); ba.hue = 12; s.colorBands.set(.teals, ba)
+        XCTAssertEqual(try JSONDecoder().decode(CombineSettings.self, from: try JSONEncoder().encode(s)), s)
+    }
+}

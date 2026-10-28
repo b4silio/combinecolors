@@ -98,6 +98,142 @@ public enum PostProcess {
         }
     }
 
+    // MARK: - Selective colour (HSL bands)
+
+    /// Per-band hue/saturation/lightness. Band weights interpolate linearly between the band
+    /// centres around the hue circle and fade out for nearly neutral pixels.
+    public static func colorBands(_ img: RGBImage, settings s: ColorBandsSettings) {
+        guard !s.isNeutral else { return }
+        let bands = ColorBand.allCases
+        let centers = bands.map(\.hue)
+        let adj = bands.map { s.adjust($0) }
+        let n = img.width * img.height
+        let r = img.r.pointer, g = img.g.pointer, b = img.b.pointer
+        for i in 0..<n {
+            var (h, sat, l) = rgbToHSL(r[i], g[i], b[i])
+            guard sat > 1e-4 else { continue }
+            // Band weights.
+            var dh: Float = 0, ds: Float = 0, dl: Float = 0
+            for k in 0..<bands.count {
+                let a = adj[k]
+                if a.isNeutral { continue }
+                let w = bandWeight(hue: h, index: k, centers: centers)
+                if w <= 0 { continue }
+                dh += w * a.hue; ds += w * a.saturation; dl += w * a.lightness
+            }
+            if dh == 0 && ds == 0 && dl == 0 { continue }
+            let t = min(sat / 0.25, 1)
+            let f = t * t * (3 - 2 * t)          // fade for nearly grey pixels
+            h = fmodf(h + f * dh + 360, 360)
+            sat = min(max(sat * (1 + f * ds), 0), 1)
+            let dlf = f * dl
+            l = dlf >= 0 ? l + dlf * 0.5 * (1 - l) : l + dlf * 0.5 * l
+            (r[i], g[i], b[i]) = hslToRGB(h, sat, min(max(l, 0), 1))
+        }
+    }
+
+    /// Piecewise-linear interpolation weight of band `index` at `hue` (degrees).
+    static func bandWeight(hue: Float, index: Int, centers: [Float]) -> Float {
+        let c = centers[index]
+        let prev = centers[(index + centers.count - 1) % centers.count]
+        let next = centers[(index + 1) % centers.count]
+        let toPrev = fmodf(c - prev + 360, 360), toNext = fmodf(next - c + 360, 360)
+        let d = fmodf(hue - c + 540, 360) - 180      // signed distance in (−180, 180]
+        if d >= 0 { return toNext > 0 ? max(0, 1 - d / toNext) : 0 }
+        return toPrev > 0 ? max(0, 1 + d / toPrev) : 0
+    }
+
+    @inline(__always) static func rgbToHSL(_ r: Float, _ g: Float, _ b: Float) -> (Float, Float, Float) {
+        let mx = max(r, g, b), mn = min(r, g, b)
+        let l = (mx + mn) / 2
+        let d = mx - mn
+        guard d > 1e-6 else { return (0, 0, l) }
+        let s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn)
+        var h: Float
+        if mx == r { h = (g - b) / d + (g < b ? 6 : 0) }
+        else if mx == g { h = (b - r) / d + 2 }
+        else { h = (r - g) / d + 4 }
+        return (h * 60, min(s, 1), l)
+    }
+
+    @inline(__always) static func hslToRGB(_ h: Float, _ s: Float, _ l: Float) -> (Float, Float, Float) {
+        guard s > 0 else { return (l, l, l) }
+        let q = l < 0.5 ? l * (1 + s) : l + s - l * s
+        let p = 2 * l - q
+        func f(_ t0: Float) -> Float {
+            var t = t0
+            if t < 0 { t += 1 } else if t > 1 { t -= 1 }
+            if t < 1 / 6 { return p + (q - p) * 6 * t }
+            if t < 1 / 2 { return q }
+            if t < 2 / 3 { return p + (q - p) * (2 / 3 - t) * 6 }
+            return p
+        }
+        let hk = h / 360
+        return (f(hk + 1 / 3), f(hk), f(hk - 1 / 3))
+    }
+
+    // MARK: - Local contrast (clarity / dehaze)
+
+    /// Large-radius blur by box-pyramid down-sampling and bilinear up-sampling.
+    /// `levels` halves the size that many times, i.e. a radius of about 2^levels pixels.
+    static func pyramidBlur(_ p: PlanarImage, levels: Int) -> PlanarImage {
+        var cur = p
+        var n = 0
+        while n < levels && cur.width > 4 && cur.height > 4 { cur = cur.downsampled2x(); n += 1 }
+        return n == 0 ? p.copy() : cur.resized(width: p.width, height: p.height)
+    }
+
+    /// Number of pyramid levels giving a radius of `relativeRadius × width` pixels.
+    public static func blurLevels(width: Int, relativeRadius: Float) -> Int {
+        max(1, Int((log2(max(Float(width) * relativeRadius, 1))).rounded()))
+    }
+
+    public static let clarityRadius: Float = 0.015
+    public static let dehazeRadius: Float = 0.12
+
+    /// Clarity (mid-tone local contrast) and dehaze (large-scale haze subtraction), applied to the
+    /// luminance and propagated to RGB by ratio. Radii are relative to the image width so every
+    /// pyramid level and the export agree.
+    public static func detail(_ img: RGBImage, settings d: DetailSettings) {
+        guard !d.isNeutral else { return }
+        let n = img.width * img.height
+        let y = img.luma()
+        let target = y.copy()
+        let t = target.pointer, yp = y.pointer
+        if d.dehaze != 0 {
+            let haze = pyramidBlur(y, levels: blurLevels(width: img.width, relativeRadius: dehazeRadius))
+            let hp = haze.pointer
+            let k = d.dehaze * 0.6
+            for i in 0..<n {
+                // Remove a fraction of the local haze level, renormalise so bright areas stay put.
+                let v = (t[i] - k * hp[i]) / max(1 - k, 0.05)
+                t[i] = min(max(v, 0), 1)
+            }
+        }
+        if d.clarity != 0 {
+            let blur = pyramidBlur(target, levels: blurLevels(width: img.width, relativeRadius: clarityRadius))
+            let bp = blur.pointer
+            let a = d.clarity * 1.2
+            for i in 0..<n {
+                let l = t[i]
+                let w = 4 * l * (1 - l)           // mid-tone weight
+                t[i] = min(max(l + a * w * (l - bp[i]), 0), 1)
+            }
+        }
+        let r = img.r.pointer, g = img.g.pointer, b = img.b.pointer
+        for i in 0..<n {
+            let base = yp[i]
+            if base > 1e-5 {
+                let ratio = min(t[i] / base, 8)
+                r[i] *= ratio; g[i] *= ratio; b[i] *= ratio
+            } else {
+                r[i] = t[i]; g[i] = t[i]; b[i] = t[i]
+            }
+        }
+        if d.dehaze > 0 { saturation(img, factor: 1 + 0.15 * d.dehaze) }
+        img.clamp01()
+    }
+
     // MARK: - Luminance injection
 
     /// Replaces the luminance of `img` with `lum` (both in [0,1]) by `amount`.

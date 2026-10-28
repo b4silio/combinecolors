@@ -53,31 +53,36 @@ struct SliderRow: View {
     }
 }
 
+/// Collapsible block with a distinct header bar; the expansion state is owned by the caller
+/// so that the inspector can behave like an accordion.
 struct SectionBox<Content: View>: View {
     let title: String
     var subtitle: String? = nil
+    @Binding var expanded: Bool
     @ViewBuilder var content: Content
-    @State private var expanded = true
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Button { withAnimation(.easeOut(duration: 0.15)) { expanded.toggle() } } label: {
-                HStack {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.caption).frame(width: 10)
-                    Text(title).font(.headline)
+        VStack(alignment: .leading, spacing: 0) {
+            Button { withAnimation(.easeOut(duration: 0.12)) { expanded.toggle() } } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.caption2).frame(width: 10)
+                    Text(title).font(.subheadline).bold()
                     if let s = subtitle { Text(s).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
                     Spacer()
                 }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(expanded ? Color.accentColor.opacity(0.18) : Color(nsColor: .controlBackgroundColor).opacity(0.7))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             if expanded {
-                VStack(alignment: .leading, spacing: 6) { content }
-                    .padding(.leading, 4)
+                VStack(alignment: .leading, spacing: 5) { content }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
             }
+            Divider()
         }
-        .padding(8)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .controlBackgroundColor).opacity(0.5)))
     }
 }
 

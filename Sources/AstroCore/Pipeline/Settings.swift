@@ -155,6 +155,54 @@ public enum StarsBlendMode: String, Codable, CaseIterable, Identifiable {
     public var displayName: String { rawValue.capitalized }
 }
 
+/// Camera-Raw style "selective colour": per hue band hue/saturation/lightness.
+public enum ColorBand: String, Codable, CaseIterable, Identifiable, CodingKeyRepresentable {
+    case reds, oranges, yellows, greens, teals, blues, magentas
+    public var id: String { rawValue }
+    public var displayName: String { rawValue.capitalized }
+    /// Centre hue in degrees.
+    public var hue: Float {
+        switch self {
+        case .reds: return 0
+        case .oranges: return 30
+        case .yellows: return 60
+        case .greens: return 120
+        case .teals: return 180
+        case .blues: return 240
+        case .magentas: return 300
+        }
+    }
+}
+
+public struct ColorBandAdjust: Codable, Equatable, Hashable {
+    /// Hue shift in degrees (−60…60).
+    public var hue: Float = 0
+    /// Saturation change (−1…1).
+    public var saturation: Float = 0
+    /// Lightness change (−1…1).
+    public var lightness: Float = 0
+    public init() {}
+    public var isNeutral: Bool { hue == 0 && saturation == 0 && lightness == 0 }
+}
+
+public struct ColorBandsSettings: Codable, Equatable, Hashable {
+    public var bands: [ColorBand: ColorBandAdjust] = [:]
+    public init() {}
+    public func adjust(_ b: ColorBand) -> ColorBandAdjust { bands[b] ?? ColorBandAdjust() }
+    public mutating func set(_ b: ColorBand, _ a: ColorBandAdjust) { if a.isNeutral { bands.removeValue(forKey: b) } else { bands[b] = a } }
+    public var isNeutral: Bool { bands.values.allSatisfy(\.isNeutral) }
+}
+
+/// Local-contrast operations (Camera Raw "Clarity" and "Dehaze").
+public struct DetailSettings: Codable, Equatable, Hashable {
+    /// −1…1: mid-tone local contrast (radius ≈ 1.5 % of the image width).
+    public var clarity: Float = 0
+    /// −1…1: removes (or adds) the large-scale haze component (radius ≈ 12 % of the width).
+    public var dehaze: Float = 0
+    public init() {}
+    public var isNeutral: Bool { clarity == 0 && dehaze == 0 }
+}
+
 public enum StarsStretchMode: String, Codable, CaseIterable, Identifiable {
     case auto, none, autoSTF
     public var id: String { rawValue }
@@ -195,7 +243,9 @@ public struct CombineSettings: Codable, Equatable, Hashable {
     public var stretch = StretchSettings()
     public var stretchStage: StretchStage = .preCombine
     public var luminance = LuminanceSettings()
+    public var colorBands = ColorBandsSettings()
     public var post = PostSettings()
+    public var detail = DetailSettings()
     public var stars = StarsBlendSettings()
 
     public init() {}
