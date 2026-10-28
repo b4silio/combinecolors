@@ -563,7 +563,8 @@ final class ProjectModel {
         }
     }
 
-    func cancelCropEditing() { cropEditing = false; cropDraft = crop }
+    /// Keeps a draft around (the fields are hidden anyway) so bindings created while editing stay valid.
+    func cancelCropEditing() { cropEditing = false; cropDraft = crop ?? cropDraft }
 
     func clearCrop() { crop = nil; cropDraft = nil; cropEditing = false }
 

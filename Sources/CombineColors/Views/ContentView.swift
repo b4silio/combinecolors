@@ -127,7 +127,10 @@ struct ContentView: View {
                     Button("1:1") { zoom(.actualSize) }
                 }
             }
-            if model.cropEditing, let d = Binding($model.cropDraft) {
+            if model.cropEditing, model.cropDraft != nil {
+                // Not a force-unwrapping Binding($model.cropDraft): the fields can still be updated after
+                // Cancel sets the draft to nil (focused text field committing), which would trap.
+                let d = Binding(get: { model.cropDraft ?? PixelRect(x: 0, y: 0, width: 0, height: 0) }, set: { model.cropDraft = $0 })
                 Grid(alignment: .trailing, horizontalSpacing: 4, verticalSpacing: 2) {
                     GridRow { Text("X"); TextField("x", value: d.x, format: .number).frame(width: 56) }
                     GridRow { Text("Y"); TextField("y", value: d.y, format: .number).frame(width: 56) }

@@ -128,6 +128,10 @@ final class ProjectModelTests: XCTestCase {
         m.beginCropEditing()
         XCTAssertTrue(m.cropEditing)
         XCTAssertNotNil(m.cropDraft)
+        // Cancel without a crop keeps a draft (the toolbar fields may still be bound to it).
+        m.cancelCropEditing()
+        XCTAssertFalse(m.cropEditing); XCTAssertNil(m.crop); XCTAssertNotNil(m.cropDraft)
+        m.beginCropEditing()
         m.cropDraft = PixelRect(x: 10, y: 20, width: 100, height: 80)
         m.commitCropEditing()
         XCTAssertFalse(m.cropEditing)
