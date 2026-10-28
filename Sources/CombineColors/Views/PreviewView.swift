@@ -204,15 +204,17 @@ final class ZoomPanNSView: NSView {
 
     override func scrollWheel(with event: NSEvent) {
         guard imageSize != .zero else { return }
+        // Scrolling zooms around the pointer; hold ⌘ or ⌥ (or drag) to pan.
         if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.option) {
-            let factor = pow(1.0025, -event.scrollingDeltaY)
-            setZoom(zoom * factor, anchor: topLeftPoint(event))
-        } else {
             let dx = event.scrollingDeltaX, dy = event.scrollingDeltaY
             origin.x += event.hasPreciseScrollingDeltas ? dx : dx * 10
             origin.y += event.hasPreciseScrollingDeltas ? dy : dy * 10
             clampOrigin()
             needsLayout = true
+        } else {
+            let dy = event.scrollingDeltaY
+            let factor = event.hasPreciseScrollingDeltas ? pow(1.004, dy) : pow(1.15, dy)
+            setZoom(zoom * factor, anchor: topLeftPoint(event))
         }
     }
 

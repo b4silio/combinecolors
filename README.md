@@ -58,8 +58,8 @@ at full resolution.
   borders. The crop drives statistics, channel thumbnails and the export; its
   limits can be shown on top of the full preview. *Rotate* (⌘R) turns every
   channel, the crop and the previews by 90° clockwise (stored in the project).
-* **Preview**: zoom/pan with trackpad or mouse (⌘-scroll or pinch to zoom,
-  double-click toggles 1:1/fit), press-and-hold a channel thumbnail to see that
+* **Preview**: scroll or pinch to zoom around the pointer, drag (or ⌘-scroll)
+  to pan, double-click toggles 1:1/fit, press-and-hold a channel thumbnail to see that
   channel alone (keep the button down and move over the other slots to switch),
   pixel read-out of every channel and of the result under the cursor, a
   histogram under the channel column, a **preset row** under the palettes (Save

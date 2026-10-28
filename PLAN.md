@@ -124,6 +124,8 @@ Reproducing the project means implementing phases 1–8 plus everything below.
 | C13 | Natural palette needed Hβ and was never available | Hβ term removed |
 | C14 | Crop Apply/Cancel keyboard shortcuts lived only in the (possibly collapsed) Crop block | shortcuts also on the preview-toolbar buttons |
 | C15 | Channel-strip thumbnails kept showing the whole frame after a crop | `ChannelSource.displayPlane` honours the source region (level chosen from the region size); `ProjectModel` rebuilds slot thumbnails on crop change and on load with an existing crop (DisplayPlaneTests, testCropFlow) |
+| C16 | After a rotation, clicking a palette preview selected the one below: the portrait thumbnail drawn with `.fill` overflowed its cell (clipped visually, not for hit-testing) and the later cell caught the click | thumbnails are `allowsHitTesting(false)`, cells `clipped()` with an explicit content shape (palette grid and preset row) |
+| C17 | Plain scrolling panned the preview; zooming needed ⌘ | scroll zooms around the pointer (pinch too); ⌘/⌥-scroll or dragging pans |
 
 ### Process rule
 

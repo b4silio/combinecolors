@@ -88,9 +88,12 @@ struct PaletteCell: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 4).fill(Color.black.opacity(0.5))
                 if let img = image {
+                    // Decorative only: a portrait (rotated) image overflows the cell with `.fill`
+                    // and must not steal clicks from the neighbouring cells.
                     Image(decorative: img, scale: 1).resizable().aspectRatio(contentMode: .fill)
                         .frame(height: height).clipShape(RoundedRectangle(cornerRadius: 4))
                         .opacity(hidden ? 0.35 : 1)
+                        .allowsHitTesting(false)
                 } else {
                     ProgressView().controlSize(.mini)
                 }
@@ -118,6 +121,8 @@ struct PaletteCell: View {
                 }
             }
             .frame(height: height)
+            .clipped()
+            .contentShape(Rectangle())
             Text(palette.name).font(.caption2).lineLimit(1).foregroundStyle(selected ? Color.accentColor : (hidden ? Color.secondary : Color.primary))
         }
         .onHover { hovering = $0 }

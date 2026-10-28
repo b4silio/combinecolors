@@ -31,10 +31,12 @@ struct PresetBarView: View {
                                 if let img = model.presetThumbnail(p) {
                                     Image(decorative: img, scale: 1).resizable().aspectRatio(contentMode: .fill)
                                         .frame(width: 84, height: 50).clipShape(RoundedRectangle(cornerRadius: 4))
+                                        .allowsHitTesting(false)
                                 }
                                 RoundedRectangle(cornerRadius: 4).strokeBorder(active ? Color.accentColor : Color.white.opacity(0.15), lineWidth: active ? 2 : 1)
                             }
                             .frame(width: 84, height: 50)
+                            .clipped()
                             Text(p.name).font(.caption2).lineLimit(1).frame(width: 84).foregroundStyle(active ? Color.accentColor : .primary)
                         }
                         .contentShape(Rectangle())
