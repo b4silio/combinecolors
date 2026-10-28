@@ -11,6 +11,8 @@ struct ControlsStripView: View {
 
     static let height: CGFloat = 204
 
+    private var hasRGB: Bool { model.sources[.red] != nil && model.sources[.green] != nil && model.sources[.blue] != nil }
+
     private func binding(_ id: String) -> Binding<Bool> {
         Binding(get: { !collapsed.split(separator: ",").contains(Substring(id)) },
                 set: { open in
@@ -30,7 +32,8 @@ struct ControlsStripView: View {
                 ControlBlock(title: "Colour bands", width: 226, expanded: binding("bands"), dragScroll: dragScroll, minHeight: Self.height - 14) { colorBandsSection }
                 ControlBlock(title: "Colour", width: 250, expanded: binding("colour"), dragScroll: dragScroll, minHeight: Self.height - 14) { colourSection }
                 ControlBlock(title: "Detail", width: 266, expanded: binding("detail"), dragScroll: dragScroll, minHeight: Self.height - 14) { detailSection }
-                ControlBlock(title: "RGB stars", width: 262, expanded: binding("stars"), dragScroll: dragScroll, minHeight: Self.height - 14) { starsSection }
+                // Stays collapsed while no R, G and B channels are loaded (nothing to blend).
+                ControlBlock(title: "RGB stars", width: 262, expanded: hasRGB ? binding("stars") : .constant(false), dragScroll: dragScroll, minHeight: Self.height - 14) { starsSection }
             }
             .padding(.horizontal, 6)
             .padding(.top, 10)
@@ -213,7 +216,6 @@ struct ControlsStripView: View {
 
     @ViewBuilder var starsSection: some View {
         let s = $model.settings.stars
-        let hasRGB = model.sources[.red] != nil && model.sources[.green] != nil && model.sources[.blue] != nil
         Toggle("Blend RGB stars into the result", isOn: s.enabled).disabled(!hasRGB)
         if !hasRGB { Text("Load R, G and B channels (or a colour stars image) to enable.").font(.caption2).foregroundStyle(.secondary) }
         if model.settings.stars.enabled {
