@@ -1,38 +1,41 @@
 import SwiftUI
 import AstroCore
 
+/// Window layout: channel column | preview | palettes + presets, with the processing strip underneath.
 struct ContentView: View {
     @Bindable var model: ProjectModel
     @Environment(\.undoManager) private var undoManager
     @State private var showMatrixEditor = false
     @State private var showPixelMath = false
-    @State private var showExport = false
-    @State private var showDualBand = false
     @State private var dropTargeted = false
     @State private var zoomRequest: (ZoomAction, Int)? = nil
     @State private var zoomCounter = 0
-    @State private var showHistogram = true
 
     var body: some View {
-        HSplitView {
-            VStack(spacing: 0) {
-                ChannelStripView(model: model)
-                Divider()
-                ZStack(alignment: .topTrailing) {
-                    PreviewView(model: model, zoomRequest: $zoomRequest)
-                    if model.sources.isEmpty { emptyState }
-                    previewToolbar
-                    if showHistogram, !model.histogram.isEmpty {
-                        VStack { Spacer(); HStack { HistogramView(histogram: model.histogram).frame(width: 220, height: 70).padding(8); Spacer() } }
+        VStack(spacing: 0) {
+            HSplitView {
+                HStack(spacing: 0) {
+                    ChannelStripView(model: model)
+                    Divider()
+                    ZStack(alignment: .topTrailing) {
+                        PreviewView(model: model, zoomRequest: $zoomRequest)
+                        if model.sources.isEmpty { emptyState }
+                        previewToolbar
                     }
                 }
-                Divider()
-                PresetBarView(model: model)
-                Divider()
-                StatusBar(model: model)
+                .frame(minWidth: 560)
+                .layoutPriority(1)
+                VStack(spacing: 0) {
+                    PaletteGridView(model: model, showMatrixEditor: $showMatrixEditor, showPixelMath: $showPixelMath)
+                    Divider()
+                    PresetBarView(model: model)
+                }
+                .frame(minWidth: 380, idealWidth: 460, maxWidth: 760)
             }
-            .frame(minWidth: 600)
-            InspectorView(model: model, showMatrixEditor: $showMatrixEditor, showPixelMath: $showPixelMath, showExport: $showExport, showDualBand: $showDualBand)
+            Divider()
+            ControlsStripView(model: model)
+            Divider()
+            StatusBar(model: model)
         }
         .frame(minWidth: 1100, minHeight: 700)
         .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
@@ -48,11 +51,9 @@ struct ContentView: View {
         .onChange(of: undoManager) { _, um in model.undoManager = um }
         .sheet(isPresented: $showMatrixEditor) { MatrixEditorView(model: model) }
         .sheet(isPresented: $showPixelMath) { PixelMathEditorView(model: model) }
-        .sheet(isPresented: $showExport) { ExportSheet(model: model) }
-        .sheet(isPresented: $showDualBand) { DualBandSplitView(model: model) }
-        .sheet(isPresented: $showDualBandFile) { DualBandSplitView(model: model, initialFile: dualBandFile) }
+        .sheet(isPresented: $model.exportRequested) { ExportSheet(model: model) }
         .sheet(item: $model.pendingColorFile) { pending in
-            colorFileSheet(pending)
+            ColorFileSheet(model: model, pending: pending)
         }
         .sheet(item: Binding(get: { model.pendingFiles.first }, set: { _ in })) { pending in
             assignSheet(pending)
@@ -68,11 +69,8 @@ struct ContentView: View {
         VStack(spacing: 10) {
             Image(systemName: "photo.stack").font(.system(size: 48)).foregroundStyle(.secondary)
             Text("Drop stacked FITS or TIFF channels here").font(.title2)
-            Text("Hα, OIII, SII, Hβ, L, R, G, B are detected from the FITS FILTER keyword or the file name.\nColour images can be split into their dual-band lines.").multilineTextAlignment(.center).foregroundStyle(.secondary)
-            HStack {
-                Button("Open images…") { Panels.openImages { model.loadFiles($0) } }
-                Button("Split dual-band…") { showDualBand = true }
-            }
+            Text("Hα, OIII, SII, Hβ, L, R, G, B are detected from the FITS FILTER keyword or the file name.\nA colour image can be used as RGB or split into its dual-band lines.").multilineTextAlignment(.center).foregroundStyle(.secondary)
+            Button("Open images…") { Panels.openImages { model.loadFiles($0) } }
             if !model.recentSets.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Recent sets").font(.headline).padding(.top, 12)
@@ -114,9 +112,10 @@ struct ContentView: View {
                 if model.crop != nil {
                     Toggle(isOn: $model.showCropOverlay) { Label("Limits", systemImage: "rectangle.dashed") }
                 }
-                Toggle(isOn: $showHistogram) { Label("Histogram", systemImage: "chart.bar.xaxis") }
+                Button { model.rotateClockwise() } label: { Label("Rotate", systemImage: "rotate.right") }
+                    .disabled(model.sources.isEmpty || model.isLoading)
                 Divider().frame(height: 14)
-                Button("Save preset") { model.savePreset() }.disabled(model.sources.isEmpty || model.frame == nil)
+                Toggle(isOn: $model.highQualityPreview) { Label("HQ", systemImage: "sparkles") }
                 Divider().frame(height: 14)
                 Button { zoom(.zoomOut) } label: { Image(systemName: "minus.magnifyingglass") }
                 Button { zoom(.zoomIn) } label: { Image(systemName: "plus.magnifyingglass") }
@@ -133,33 +132,11 @@ struct ContentView: View {
     @ToolbarContentBuilder private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
             Button { Panels.openImages { model.loadFiles($0) } } label: { Label("Add images", systemImage: "plus") }.help("Add channel images")
-            Button { showExport = true } label: { Label("Export", systemImage: "square.and.arrow.up") }.disabled(model.sources.isEmpty)
+            Button { model.exportRequested = true } label: { Label("Export", systemImage: "square.and.arrow.up") }.disabled(model.sources.isEmpty)
         }
     }
 
     private func zoom(_ a: ZoomAction) { zoomCounter += 1; zoomRequest = (a, zoomCounter) }
-
-    private func colorFileSheet(_ pending: PendingFile) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("\(pending.file.fileName) is a colour image").font(.headline)
-            Text("Use it as the R, G and B channels (e.g. an RGB stars image), or split it into its dual-band emission lines first.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            HStack {
-                Button("Cancel") { model.pendingColorFile = nil }.keyboardShortcut(.cancelAction)
-                Spacer()
-                Button("Split dual-band…") {
-                    dualBandFile = pending.file
-                    model.pendingColorFile = nil
-                    // Present after the current sheet has gone away.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showDualBandFile = true }
-                }
-                Button("Use as RGB") { model.assignColorFileAsRGB(pending) }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
-            }
-        }
-        .padding(16).frame(width: 440)
-    }
-
-    @State private var dualBandFile: LoadedFile? = nil
-    @State private var showDualBandFile = false
 
     private func assignSheet(_ pending: PendingFile) -> some View {
         VStack(alignment: .leading, spacing: 12) {

@@ -29,6 +29,8 @@ public struct ProjectDocument: Codable {
     public var crop: PixelRect? = nil
     /// Saved presets (settings + thumbnail) for quick switching.
     public var presets: [SettingsPreset] = []
+    /// Quarter turns clockwise applied to every channel at load (0…3); the crop is in rotated coordinates.
+    public var rotation: Int = 0
 
     public init() {}
 

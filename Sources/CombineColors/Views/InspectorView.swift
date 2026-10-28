@@ -1,40 +1,41 @@
 import SwiftUI
 import AstroCore
 
-struct InspectorView: View {
+/// Horizontal strip of processing blocks under the preview. Every block collapses on its own
+/// (several can be open at once); the collapsed set is remembered.
+struct ControlsStripView: View {
     @Bindable var model: ProjectModel
-    @Binding var showMatrixEditor: Bool
-    @Binding var showPixelMath: Bool
-    @Binding var showExport: Bool
-    @Binding var showDualBand: Bool
 
-    /// Accordion: one open block at a time (the palette block keeps its own state).
-    @AppStorage("inspectorOpenSection") private var openSection: String = "channels"
-    @AppStorage("paletteSectionOpen") private var paletteOpen: Bool = true
+    @AppStorage("collapsedBlocks") private var collapsed: String = ""
+
+    static let height: CGFloat = 250
 
     private func binding(_ id: String) -> Binding<Bool> {
-        Binding(get: { openSection == id }, set: { openSection = $0 ? id : "" })
+        Binding(get: { !collapsed.split(separator: ",").contains(Substring(id)) },
+                set: { open in
+                    var set = Set(collapsed.split(separator: ",").map(String.init))
+                    if open { set.remove(id) } else { set.insert(id) }
+                    collapsed = set.sorted().joined(separator: ",")
+                })
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                SectionBox(title: "Palette", subtitle: model.currentPalette?.name ?? (model.settings.mode == .pixelMath ? "custom Pixel Math" : "custom matrix"), expanded: $paletteOpen) {
-                    PaletteGridView(model: model, showMatrixEditor: $showMatrixEditor, showPixelMath: $showPixelMath)
-                }
-                SectionBox(title: "Channels", subtitle: channelsSubtitle, expanded: binding("channels")) { channelsSection }
-                SectionBox(title: "Stretch", subtitle: model.settings.stretch.method.displayName, expanded: binding("stretch")) { stretchSection }
-                SectionBox(title: "Normalisation", subtitle: model.settings.normalization.method.displayName, expanded: binding("normalisation")) { normalizationSection }
-                SectionBox(title: "Luminance", subtitle: model.settings.luminance.enabled ? (model.settings.luminance.resolvedExpression(available: model.availableKinds) ?? "unavailable") : "off", expanded: binding("luminance")) { luminanceSection }
-                SectionBox(title: "Colour bands", subtitle: model.settings.colorBands.isNeutral ? "neutral" : "adjusted", expanded: binding("bands")) { colorBandsSection }
-                SectionBox(title: "Colour", subtitle: model.settings.post == PostSettings() ? "neutral" : "adjusted", expanded: binding("colour")) { colourSection }
-                SectionBox(title: "Detail", subtitle: model.settings.detail.isNeutral ? "neutral" : String(format: "clarity %.2f · dehaze %.2f", model.settings.detail.clarity, model.settings.detail.dehaze), expanded: binding("detail")) { detailSection }
-                SectionBox(title: "RGB stars", subtitle: model.settings.stars.enabled ? "on" : "off", expanded: binding("stars")) { starsSection }
-                SectionBox(title: "Crop", subtitle: model.crop.map { String($0.width) + "×" + String($0.height) } ?? "none", expanded: binding("crop")) { cropSection }
-                SectionBox(title: "Output", expanded: binding("output")) { outputSection }
+        ScrollView(.horizontal, showsIndicators: true) {
+            HStack(alignment: .top, spacing: 6) {
+                ControlBlock(title: "Channels", subtitle: channelsSubtitle, width: 300, expanded: binding("channels")) { channelsSection }
+                ControlBlock(title: "Stretch", subtitle: model.settings.stretch.method.displayName, width: 310, expanded: binding("stretch")) { stretchSection }
+                ControlBlock(title: "Normalisation", subtitle: model.settings.normalization.method.displayName, width: 330, expanded: binding("normalisation")) { normalizationSection }
+                ControlBlock(title: "Luminance", subtitle: model.settings.luminance.enabled ? (model.settings.luminance.resolvedExpression(available: model.availableKinds) ?? "unavailable") : "off", width: 300, expanded: binding("luminance")) { luminanceSection }
+                ControlBlock(title: "Colour bands", subtitle: model.settings.colorBands.isNeutral ? "neutral" : "adjusted", width: 350, expanded: binding("bands")) { colorBandsSection }
+                ControlBlock(title: "Colour", subtitle: model.settings.post == PostSettings() ? "neutral" : "adjusted", width: 300, expanded: binding("colour")) { colourSection }
+                ControlBlock(title: "Detail", subtitle: model.settings.detail.isNeutral ? "neutral" : String(format: "clarity %.2f · dehaze %.2f", model.settings.detail.clarity, model.settings.detail.dehaze), width: 290, expanded: binding("detail")) { detailSection }
+                ControlBlock(title: "RGB stars", subtitle: model.settings.stars.enabled ? "on" : "off", width: 300, expanded: binding("stars")) { starsSection }
+                ControlBlock(title: "Crop", subtitle: model.crop.map { String($0.width) + "×" + String($0.height) } ?? "none", width: 260, expanded: binding("crop")) { cropSection }
             }
+            .padding(6)
+            .frame(height: Self.height)
         }
-        .frame(minWidth: 320, idealWidth: 400, maxWidth: 480)
+        .frame(height: Self.height)
     }
 
     private var channelsSubtitle: String {
@@ -231,6 +232,7 @@ struct InspectorView: View {
                 Button(model.crop == nil ? "Set crop…" : "Edit crop…") { model.beginCropEditing() }
                 Button("Auto trim") { model.autoCrop() }.help("Removes the empty borders left by registration in any channel.")
                 if model.crop != nil { Button("Clear") { model.clearCrop() } }
+                Button { model.rotateClockwise() } label: { Image(systemName: "rotate.right") }.help("Rotate every channel 90° clockwise").disabled(model.isLoading)
             }
         }
         .controlSize(.small)
@@ -252,22 +254,6 @@ struct InspectorView: View {
         }
     }
 
-    // MARK: Output
-
-    @ViewBuilder var outputSection: some View {
-        Toggle("High quality preview (more pixels)", isOn: $model.highQualityPreview)
-        HStack {
-            Button("Combine & Export…") { showExport = true }
-                .buttonStyle(.borderedProminent)
-                .disabled(model.sources.isEmpty || model.exportProgress != nil)
-            Button("Split dual-band…") { showDualBand = true }
-        }
-        .controlSize(.regular)
-        if let p = model.exportProgress {
-            ProgressView(value: p).controlSize(.small)
-        }
-        Button("Reset all settings") { var s = CombineSettings(); if let pal = model.currentPalette { s.select(palette: pal) }; model.settings = s }.controlSize(.small)
-    }
 }
 
 struct ChannelAdjustView: View {

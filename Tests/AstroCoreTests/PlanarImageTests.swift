@@ -48,4 +48,22 @@ final class PlanarImageTests: XCTestCase {
         XCTAssertEqual(r.width, 16)
         XCTAssertEqual(r.mean(), 0.25, accuracy: 1e-5)
     }
+
+    func testRotated90CW() {
+        // 3×2 image:  0 1 2       rotated CW (2×3):  3 0
+        //             3 4 5                          4 1
+        //                                            5 2
+        let img = PlanarImage(width: 3, height: 2, pixels: [0, 1, 2, 3, 4, 5])
+        let r = img.rotated90CW()
+        XCTAssertEqual(r.width, 2); XCTAssertEqual(r.height, 3)
+        XCTAssertEqual(r.toArray(), [3, 0, 4, 1, 5, 2])
+        // Four turns give the original back.
+        let back = r.rotated90CW().rotated90CW().rotated90CW()
+        XCTAssertEqual(back.toArray(), img.toArray())
+        // A rectangle follows the pixels it covers.
+        let rect = PixelRect(x: 1, y: 0, width: 2, height: 1)   // pixels 1,2
+        let rr = rect.rotated90CW(imageWidth: 3, imageHeight: 2)
+        XCTAssertEqual(rr, PixelRect(x: 1, y: 1, width: 1, height: 2))
+        XCTAssertEqual([r[rr.x, rr.y], r[rr.x, rr.y + 1]], [1, 2])
+    }
 }

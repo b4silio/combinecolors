@@ -164,10 +164,10 @@ final class PipelineTests: XCTestCase {
         let data = try JSONEncoder().encode(s)
         let back = try JSONDecoder().decode(CombineSettings.self, from: data)
         XCTAssertEqual(back, s)
-        var doc = ProjectDocument(); doc.settings = s; doc.channels = [.init(kind: .ha, path: "/tmp/ha.fits")]
+        var doc = ProjectDocument(); doc.settings = s; doc.channels = [.init(kind: .ha, path: "/tmp/ha.fits")]; doc.rotation = 3
         let d2 = try doc.data()
         let docBack = try JSONDecoder().decode(ProjectDocument.self, from: d2)
-        XCTAssertEqual(docBack.settings, s); XCTAssertEqual(docBack.channels.first?.kind, .ha)
+        XCTAssertEqual(docBack.settings, s); XCTAssertEqual(docBack.channels.first?.kind, .ha); XCTAssertEqual(docBack.rotation, 3)
     }
 
     func testPalettesAvailability() {
@@ -328,6 +328,7 @@ final class TolerantDecodingTests: XCTestCase {
         XCTAssertEqual(doc.settings.stretch.ghsLogD, 3.5)
         XCTAssertEqual(doc.settings.stretch.targetBackground, StretchSettings().targetBackground)
         XCTAssertEqual(doc.settings.normalization.method, NormalizationSettings().method)   // unknown value → default
+        XCTAssertEqual(doc.rotation, 0)                                                    // missing → no rotation
         XCTAssertEqual(doc.settings.post.saturation, 1.5)
         XCTAssertEqual(doc.settings.adjust(.oiii).gain, 2)
         XCTAssertEqual(doc.crop, PixelRect(x: 1, y: 2, width: 30, height: 40))

@@ -198,6 +198,41 @@ final class ProjectModelTests: XCTestCase {
         XCTAssertNil(m.exportProgress)
     }
 
+    func testRotateClockwise() async throws {
+        let m = try await loadedModel()
+        let haBefore = m.sources[.ha]!.image
+        m.cropDraft = PixelRect(x: 10, y: 20, width: 100, height: 80); m.cropEditing = true; m.commitCropEditing()
+        await wait { m.sources[.ha]?.region == m.crop && !m.isLoading && m.context != nil }
+        m.rotateClockwise()
+        await wait { m.imageSize == CGSize(width: 150, height: 200) && !m.isLoading && m.context != nil }
+        XCTAssertEqual(m.rotation, 1)
+        XCTAssertEqual(m.imageSize, CGSize(width: 150, height: 200))
+        // The crop follows the rotation: (x 10, y 20, 100×80) in 200×150 → (x 150−100, y 10, 80×100).
+        XCTAssertEqual(m.crop, PixelRect(x: 50, y: 10, width: 80, height: 100))
+        XCTAssertEqual(m.sources[.ha]?.region, m.crop)
+        // Pixels moved as a clockwise turn: source (x, y) → (H−1−y, x).
+        let haAfter = m.sources[.ha]!.image
+        XCTAssertEqual(haAfter[149 - 20, 10], haBefore[10, 20])
+        XCTAssertEqual(m.slotThumbnails[.ha]?.width, 80); XCTAssertEqual(m.slotThumbnails[.ha]?.height, 100)
+        // Saved in the project; three more turns bring the original orientation back.
+        XCTAssertEqual(m.projectDocument().rotation, 1)
+        for _ in 0..<3 {
+            m.rotateClockwise()
+            await wait { !m.isLoading && m.context != nil }
+        }
+        XCTAssertEqual(m.rotation, 0)
+        XCTAssertEqual(m.imageSize, CGSize(width: 200, height: 150))
+        XCTAssertEqual(m.crop, PixelRect(x: 10, y: 20, width: 100, height: 80))
+        XCTAssertEqual(m.sources[.ha]!.image[10, 20], haBefore[10, 20])
+        // A channel added while rotated is rotated the same way.
+        m.rotateClockwise()
+        await wait { m.rotation == 1 && !m.isLoading && m.context != nil }
+        let url = try makeChannel("x-Hb.fits", kind: .hb, scale: 0.2, seed: 4)
+        m.loadFiles([url])
+        await wait { m.sources[.hb] != nil && !m.isLoading }
+        XCTAssertEqual(m.sources[.hb]?.width, 150); XCTAssertEqual(m.sources[.hb]?.height, 200)
+    }
+
     func testPresetsAndUndo() async throws {
         let m = try await loadedModel()
         let um = UndoManager()

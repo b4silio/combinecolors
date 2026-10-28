@@ -37,6 +37,11 @@ public struct PixelRect: Codable, Equatable, Hashable {
     public static func full(width: Int, height: Int) -> PixelRect { PixelRect(x: 0, y: 0, width: width, height: height) }
 
     /// Scaled to a pyramid level (divides by 2^level, rounding outwards).
+    /// The same rectangle after the image (`imageWidth` × `imageHeight`) is rotated 90° clockwise.
+    public func rotated90CW(imageWidth: Int, imageHeight: Int) -> PixelRect {
+        PixelRect(x: imageHeight - (y + height), y: x, width: height, height: width)
+    }
+
     public func scaled(level: Int) -> PixelRect {
         guard level > 0 else { return self }
         let s = 1 << level

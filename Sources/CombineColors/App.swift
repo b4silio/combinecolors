@@ -38,6 +38,8 @@ struct CombineColorsApp: App {
                 }.keyboardShortcut("s").disabled(model.sources.isEmpty)
                 Button("Save Project As…") { saveProjectAs() }.keyboardShortcut("s", modifiers: [.command, .shift]).disabled(model.sources.isEmpty)
                 Divider()
+                Button("Export Combined Image…") { model.exportRequested = true }.keyboardShortcut("e").disabled(model.sources.isEmpty)
+                Divider()
                 Button("Remove All Channels") { model.removeAll() }.disabled(model.sources.isEmpty)
             }
             CommandMenu("View") {
@@ -45,6 +47,7 @@ struct CombineColorsApp: App {
                 Toggle("High Quality Preview", isOn: Binding(get: { model.highQualityPreview }, set: { model.highQualityPreview = $0 }))
                 Toggle("Show Crop Limits", isOn: Binding(get: { model.showCropOverlay }, set: { model.showCropOverlay = $0 }))
                 Divider()
+                Button("Rotate Clockwise") { model.rotateClockwise() }.keyboardShortcut("r").disabled(model.sources.isEmpty || model.isLoading)
                 Button("Auto Trim Borders") { model.autoCrop() }.disabled(model.sources.isEmpty)
             }
         }

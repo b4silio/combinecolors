@@ -53,17 +53,20 @@ at full resolution.
   dehaze, with radii relative to the image so preview and export agree.
   RGB star blending (screen / lighten / add with a luminance mask,
   linear or already-stretched star images detected automatically).
-* **Crop**: one rectangle shared by every channel, drawn on the preview or
-  typed in, or detected automatically from the empty registration borders. The
-  crop drives statistics, thumbnails and the export; its limits can be shown
-  on top of the full preview.
+* **Crop and rotation**: one rectangle shared by every channel, drawn on the
+  preview or typed in, or detected automatically from the empty registration
+  borders. The crop drives statistics, channel thumbnails and the export; its
+  limits can be shown on top of the full preview. *Rotate* (⌘R) turns every
+  channel, the crop and the previews by 90° clockwise (stored in the project).
 * **Preview**: zoom/pan with trackpad or mouse (⌘-scroll or pinch to zoom,
   double-click toggles 1:1/fit), press-and-hold a channel thumbnail to see that
-  channel alone, pixel read-out of every channel and of the result under the
-  cursor, histogram, a **preset bar** (Save preset stores settings with a
-  thumbnail; click to switch, right-click to rename/update/delete; presets are
-  saved in the project), undo/redo of every adjustment. Channels that are already
-  stretched (TIFF exports) are detected and the stretch is switched off.
+  channel alone (keep the button down and move over the other slots to switch),
+  pixel read-out of every channel and of the result under the cursor, a
+  histogram under the channel column, a **preset row** under the palettes (Save
+  preset stores settings with a thumbnail; click to switch, right-click to
+  rename/update/delete; presets are saved in the project), undo/redo of every
+  adjustment. Channels that are already stretched (TIFF exports) are detected
+  and the stretch is switched off.
 * **Export**: TIFF 16-bit / 32-bit float, PNG 8/16-bit, JPEG, FITS 32-bit float
   / 16-bit; stretched or linear (normalised + combined only, for further
   processing elsewhere). Full resolution, rendered in strips, with the exact
@@ -91,22 +94,27 @@ scheme runs the app).
 ## Using the app
 
 1. **Load channels** — drop files or a folder on the window (or ⌘O). Drop a
-   file on a specific slot to force its channel. A colour file asks whether it
-   is an RGB (stars) image or a dual-band image to split.
+   file on a specific slot (left column) to force its channel. A colour file
+   opens a dialog: use it as RGB (stars/broadband) or split it as a dual-band
+   image (choose the filter pair, e.g. Hα + OIII, with live previews of both
+   lines; the weights and cross-talk are under *Advanced*).
 2. **Crop** (optional but recommended for registered stacks with empty
    borders) — *Auto trim* finds the borders; or press the crop button, drag a
    rectangle, adjust it with the handles, press Return. The crop applies to all
    channels at once.
-3. **Pick a palette** from the thumbnails in the upper part of the right pane.
-   The pane is split: palettes above, controls below, each with its own scroll
-   (drag the divider), so thumbnails stay visible while you move sliders. They
-   are re-rendered with the current settings from the whole image, the crop or
-   the current view (*From* menu). Hide palettes you never use with the eye
-   button (Favourites / All switch shows them again).
-4. **Tune**: stretch, normalisation, per-channel balance, colour. Everything
-   updates live; double-click a slider label to reset it; ⌘Z undoes.
-   *Save preset* keeps a look in the bar under the preview to compare later.
-5. **Export** (⌘E / Combine & Export…) at full resolution.
+3. **Pick a palette** from the thumbnails in the right pane (the slider at the
+   top changes their size). They are re-rendered with the current settings from
+   the whole image, the crop or the current view (*From* menu). Hide palettes
+   you never use with the eye button (Favourites / All switch shows them again).
+   *Reset all* returns every setting to the palette defaults.
+4. **Tune** in the strip of blocks under the preview (Channels, Stretch,
+   Normalisation, Luminance, Colour bands, Colour, Detail, RGB stars, Crop):
+   click a block's vertical title to collapse or expand it, scroll sideways for
+   the others. Everything updates live; double-click a slider label to reset
+   it; ⌘Z undoes. *Save preset* keeps a look in the row under the palettes to
+   compare later.
+5. **Export** (⌘E, File menu or toolbar) at full resolution; *HQ* in the
+   preview toolbar renders the preview with more pixels.
 6. **Save the project** (⌘S) to come back later.
 
 ### Pixel Math quick reference
@@ -222,7 +230,8 @@ Sources/AstroCore            processing library (no UI)
   Pipeline/                  CombineSettings, ChannelSource, Renderer, ProjectDocument
 Sources/CombineColors        SwiftUI app (model, coordinators, views)
 Sources/combinecolors-cli    headless renderer
-Tests/AstroCoreTests         XCTest suite (70+ tests, real-data tests skip when the data is absent)
+Tests/AstroCoreTests         XCTest suite (real-data tests skip when the data is absent)
+Tests/CombineColorsTests     model-level app tests (loading, crop, rotation, presets, peek, recent sets)
 scripts/                     make_app.sh, make_icon.py
 ```
 

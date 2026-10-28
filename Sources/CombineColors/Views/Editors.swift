@@ -174,73 +174,85 @@ struct PixelMathEditorView: View {
     }
 }
 
-// MARK: - Dual-band splitter
+// MARK: - Colour file sheet (RGB or dual-band split)
 
-struct DualBandSplitView: View {
+/// Shown when a colour image is dropped: use it as R/G/B or split it into two emission lines.
+struct ColorFileSheet: View {
     @Bindable var model: ProjectModel
-    var initialFile: LoadedFile? = nil
-    @Environment(\.dismiss) private var dismiss
-    @State private var file: LoadedFile? = nil
+    let pending: PendingFile
+
+    enum Mode: String, CaseIterable, Identifiable {
+        case rgb, dualBand
+        var id: String { rawValue }
+    }
+
+    @AppStorage("colorFileMode") private var modeRaw = Mode.rgb.rawValue
     @State private var settings = DualBandSettings()
     @State private var previews: (CGImage, CGImage)? = nil
     @State private var working = false
+    @State private var showAdvanced = false
     @State private var message: String? = nil
-    @State private var targeted = false
+
+    private var mode: Mode { Mode(rawValue: modeRaw) ?? .rgb }
+    private var file: LoadedFile { pending.file }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Split a dual-band colour image").font(.title3).bold()
-            Text("One-shot-colour images taken through a dual-band filter hold one emission line in the red channel and the other in green/blue. This step extracts them into two monochrome channels that can then be combined like any other narrowband data.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            HStack(alignment: .top, spacing: 14) {
-                VStack(alignment: .leading, spacing: 8) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 6).strokeBorder(targeted ? Color.accentColor : Color.secondary.opacity(0.4), style: StrokeStyle(lineWidth: 1, dash: [5, 3]))
-                        if let f = file {
-                            VStack { Text(f.fileName).bold(); Text(verbatim: "\(f.width) × \(f.height) · \(f.formatDescription)").font(.caption).foregroundStyle(.secondary) }
-                        } else {
-                            VStack { Image(systemName: "square.and.arrow.down"); Text("Drop a colour FITS/TIFF here").font(.caption) }
+            Text("\(file.fileName) is a colour image").font(.title3).bold()
+            Text(verbatim: "\(file.width) × \(file.height) · \(file.formatDescription)").font(.caption).foregroundStyle(.secondary)
+            Picker("", selection: $modeRaw) {
+                Text("RGB").tag(Mode.rgb.rawValue)
+                Text("Dual-band").tag(Mode.dualBand.rawValue)
+            }
+            .pickerStyle(.segmented).labelsHidden().frame(width: 220)
+            if mode == .rgb {
+                Text("The red, green and blue planes become the R, G and B channels (broadband colour or an RGB stars image).")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("One-shot-colour images taken through a dual-band filter hold one emission line in the red channel and the other in green/blue. They are extracted into two monochrome channels.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .top, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        MenuPicker(title: "Filter", selection: $settings.preset, options: DualBandSettings.Preset.allCases) { $0.displayName }
+                        if settings.preset == .custom {
+                            MenuPicker(title: "First (red)", selection: $settings.customFirst, options: ChannelKind.allCases) { $0.displayName }
+                            MenuPicker(title: "Second (green/blue)", selection: $settings.customSecond, options: ChannelKind.allCases) { $0.displayName }
                         }
+                        DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("\(settings.outputKinds.0.displayName) from camera R/G/B").font(.caption).bold()
+                                weightRow("R", $settings.firstWeights[0]); weightRow("G", $settings.firstWeights[1]); weightRow("B", $settings.firstWeights[2])
+                                Text("\(settings.outputKinds.1.displayName) from camera R/G/B").font(.caption).bold()
+                                weightRow("R", $settings.secondWeights[0]); weightRow("G", $settings.secondWeights[1]); weightRow("B", $settings.secondWeights[2])
+                                SliderRow(title: "Cross-talk →2", value: $settings.crosstalkSecond, range: 0...1, defaultValue: 0, help: "Fraction of the first line subtracted from the second.")
+                                SliderRow(title: "Cross-talk →1", value: $settings.crosstalkFirst, range: 0...1, defaultValue: 0, help: "Fraction of the second line subtracted from the first.")
+                            }
+                        }
+                        .font(.caption)
                     }
-                    .frame(height: 70)
-                    .onDrop(of: [.fileURL], isTargeted: $targeted) { providers in
-                        DropHelpers.urls(from: providers) { urls in if let u = urls.first { load(u) } }
-                        return true
-                    }
-                    Button("Choose file…") { Panels.openImages { urls in if let u = urls.first { load(u) } } }.controlSize(.small)
-                    Picker("Filter", selection: $settings.preset) { ForEach(DualBandSettings.Preset.allCases) { p in Text(p.displayName).tag(p) } }
-                    if settings.preset == .custom {
-                        Picker("First", selection: $settings.customFirst) { ForEach(ChannelKind.allCases) { k in Text(k.displayName).tag(k) } }
-                        Picker("Second", selection: $settings.customSecond) { ForEach(ChannelKind.allCases) { k in Text(k.displayName).tag(k) } }
-                    }
-                    Group {
-                        Text("\(settings.outputKinds.0.displayName) from camera R/G/B").font(.caption).bold()
-                        weightRow("R", $settings.firstWeights[0]); weightRow("G", $settings.firstWeights[1]); weightRow("B", $settings.firstWeights[2])
-                        Text("\(settings.outputKinds.1.displayName) from camera R/G/B").font(.caption).bold()
-                        weightRow("R", $settings.secondWeights[0]); weightRow("G", $settings.secondWeights[1]); weightRow("B", $settings.secondWeights[2])
-                        SliderRow(title: "Cross-talk →2", value: $settings.crosstalkSecond, range: 0...1, defaultValue: 0, help: "Fraction of the first line subtracted from the second.")
-                        SliderRow(title: "Cross-talk →1", value: $settings.crosstalkFirst, range: 0...1, defaultValue: 0, help: "Fraction of the second line subtracted from the first.")
+                    .frame(width: 330)
+                    HStack(spacing: 6) {
+                        previewBox(previews?.0, settings.outputKinds.0.displayName)
+                        previewBox(previews?.1, settings.outputKinds.1.displayName)
                     }
                 }
-                .frame(width: 340)
-                VStack(spacing: 6) {
-                    previewBox(previews?.0, settings.outputKinds.0.displayName)
-                    previewBox(previews?.1, settings.outputKinds.1.displayName)
-                }
-                .frame(width: 300)
             }
             if let m = message { Text(m).font(.caption).foregroundStyle(.secondary) }
             HStack {
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Cancel") { model.pendingColorFile = nil }.keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("Save as FITS…") { saveFITS() }.disabled(file == nil || working)
-                Button("Add to channels") { addToChannels() }.buttonStyle(.borderedProminent).disabled(file == nil || working)
+                if mode == .dualBand {
+                    Button("Save split channels as FITS…") { saveFITS() }.disabled(working)
+                }
+                Button(mode == .rgb ? "Use as RGB" : "Add \(settings.outputKinds.0.shortName) + \(settings.outputKinds.1.shortName)") { add() }
+                    .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(working)
             }
         }
         .padding(16)
-        .frame(width: 700)
-        .onAppear { if let f = initialFile { file = f; refreshPreview() } }
+        .frame(width: mode == .rgb ? 460 : 720)
+        .onAppear { if mode == .dualBand { refreshPreview() } }
         .onChange(of: settings) { _, _ in refreshPreview() }
+        .onChange(of: modeRaw) { _, _ in if mode == .dualBand && previews == nil { refreshPreview() } }
     }
 
     private func weightRow(_ label: String, _ value: Binding<Float>) -> some View {
@@ -254,28 +266,13 @@ struct DualBandSplitView: View {
                 if let img { Image(decorative: img, scale: 1).resizable().aspectRatio(contentMode: .fit) }
                 else if working { ProgressView() }
             }
-            .frame(height: 150)
+            .frame(width: 160, height: 120)
             Text(title).font(.caption)
         }
     }
 
-    private func load(_ url: URL) {
-        working = true
-        Task.detached {
-            do {
-                let f = try ImageLoader.load(url: url)
-                await MainActor.run {
-                    working = false
-                    if f.isColor { file = f; message = nil; refreshPreview() }
-                    else { message = "\(f.fileName) is a monochrome image; a colour (RGB) image is needed." }
-                }
-            } catch { await MainActor.run { working = false; message = error.localizedDescription } }
-        }
-    }
-
     private func refreshPreview() {
-        guard let f = file else { return }
-        let s = settings
+        let f = file, s = settings
         working = true
         Task.detached {
             // Work on a small version for the preview.
@@ -291,22 +288,25 @@ struct DualBandSplitView: View {
         }
     }
 
-    private func split() -> (PlanarImage, PlanarImage)? {
-        guard let f = file else { return nil }
-        return DualBand.split(r: f.planes[0], g: f.planes[1], b: f.planes[2], settings: settings)
+    private func split() -> (PlanarImage, PlanarImage) {
+        DualBand.split(r: file.planes[0], g: file.planes[1], b: file.planes[2], settings: settings)
     }
 
-    private func addToChannels() {
-        guard let f = file, let (a, b) = split() else { return }
-        let kinds = settings.outputKinds
-        model.addSplitChannels(first: (kinds.0, a), second: (kinds.1, b), fileName: f.fileName)
-        dismiss()
+    private func add() {
+        if mode == .rgb {
+            model.assignColorFileAsRGB(pending)
+        } else {
+            let (a, b) = split()
+            let kinds = settings.outputKinds
+            model.pendingColorFile = nil
+            model.addSplitChannels(first: (kinds.0, a), second: (kinds.1, b), fileName: file.fileName)
+        }
     }
 
     private func saveFITS() {
-        guard let f = file, let (a, b) = split() else { return }
+        let (a, b) = split()
         let kinds = settings.outputKinds
-        let base = f.url.deletingPathExtension()
+        let base = file.url.deletingPathExtension()
         let p = NSOpenPanel()
         p.canChooseDirectories = true; p.canChooseFiles = false; p.canCreateDirectories = true
         p.prompt = "Save here"

@@ -97,6 +97,11 @@ Reproducing the project means implementing phases 1–8 plus everything below.
 | F17 | Inspector as an accordion: one block open at a time (Palette keeps its own state), compact headers with tinted bar + divider, order Palette · Channels · Stretch · Normalisation · Luminance · Colour bands · Colour · Detail · RGB stars · Crop · Output; vertical split removed | `SectionBox` (bound expansion), `InspectorView.body` | screenshot |
 | F18 | Presets bar under the preview (replaces Store A / Show A): Save preset captures settings + thumbnail; click applies, active one highlighted; rename / update / delete via context menu; saved in the project file | `SettingsPreset`, `ProjectDocument.presets`, `ProjectModel.savePreset…`, `PresetBarView` | ProjectModelTests.testPresetsAndUndo, screenshot |
 | F19 | Compact channel strip: 80 pt tiles, channel identified by a coloured frame + small badge instead of dot + label, slot menu as an overlay icon on the thumbnail, filename/stats moved to the tooltip; empty slots 96 pt wide with a dashed frame in the channel colour; strip height 142 → 90 pt | `ChannelSlotView` | screenshot |
+| F20 | New window layout: channel column on the left (with the always-on histogram underneath), preview in the middle, palettes + preset row on the right, processing blocks in a horizontal strip at the bottom; each block has a vertical title that collapses/expands it independently (collapsed set remembered); Output block removed (HQ toggle in the preview toolbar, Export in the File menu ⌘E and toolbar, Reset all in the palette pane); "Save preset" removed from the preview toolbar | `ContentView`, `ControlsStripView` + `ControlBlock`, `PaletteGridView`, `ChannelStripView` | screenshot |
+| F21 | Palette preview zoom slider (70–220 pt thumbnails, remembered) | `PaletteGridView` | screenshot |
+| F22 | Rotate 90° clockwise (toolbar, Crop block, View menu ⌘R): rotates every channel, the crop and the thumbnails; statistics and star masks rebuilt; channels added later are rotated the same way; stored in the project | `PlanarImage.rotated90CW` (vImage), `PixelRect.rotated90CW`, `ProjectModel.rotateClockwise`, `ProjectDocument.rotation` | PlanarImageTests.testRotated90CW, ProjectModelTests.testRotateClockwise, PipelineTests (document round-trip) |
+| F23 | Peek switching: keep the mouse button down on a channel slot and move over other slots to view each in turn | `ChannelStripView` column gesture | — |
+| F24 | Colour-file dialog on drop: RGB or Dual-band (filter pair picker, live previews of both lines, Advanced weights/cross-talk, save split FITS); the standalone "Split dual-band…" entry points are gone | `ColorFileSheet` | — |
 | F14 | Press-and-hold a channel thumbnail → main preview shows that channel alone (grayscale, own auto-stretch), released → normal view; implemented as a temporary monochrome settings override (`peekSettings`) | `ProjectModel.peekChannel`, `ChannelStripView` gesture | PeekTests, screenshot |
 
 ### Corrections
@@ -126,7 +131,7 @@ commit (see the project memory note).
 
 ## Status
 
-* 96 tests pass (`swift test`): core, pipeline, luminance presets, monochrome, colour bands/detail, model flows, presets, recent sets, palette visibility, peek.
+* 98 tests pass (`swift test`): core, pipeline, luminance presets, monochrome, colour bands/detail, rotation, model flows, presets, recent sets, palette visibility, peek.
 * Verified on the Soul Core FITS set (6 × 7272×5478 float32) and the Lowers Nebula
   16-bit TIFF set: loading ≈ 1 s for six channels, preview renders 1–30 ms, full-resolution
   Foraxx export ≈ 0.5 s, auto-crop 20–30 ms.

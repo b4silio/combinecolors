@@ -1,57 +1,73 @@
 import SwiftUI
 import AstroCore
 
+/// Palette previews (right pane): a header row of controls, then the thumbnails grouped by family.
 struct PaletteGridView: View {
     @Bindable var model: ProjectModel
     @Binding var showMatrixEditor: Bool
     @Binding var showPixelMath: Bool
+    /// Thumbnail width in points (zoom).
+    @AppStorage("paletteThumbSize") private var thumbSize: Double = 100
 
     var body: some View {
         let palettes = model.visiblePalettes
         let hiddenCount = Palettes.available(for: model.availableKinds).filter { model.isPaletteHidden($0.id) }.count
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                MenuPicker(title: "From", selection: $model.thumbnailRegion, options: ThumbnailRegion.allCases) { $0.displayName }
-                    .controlSize(.small)
-                Spacer()
-                Button("Matrix…") { showMatrixEditor = true }.controlSize(.small)
-                Button("Pixel Math…") { showPixelMath = true }.controlSize(.small)
-            }
-            HStack {
-                Picker("", selection: $model.paletteFilter) {
-                    Text("Favourites").tag(ProjectModel.PaletteFilter.favorites)
-                    Text("All").tag(ProjectModel.PaletteFilter.all)
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    MenuPicker(title: "From", selection: $model.thumbnailRegion, options: ThumbnailRegion.allCases) { $0.displayName }
+                    Picker("", selection: $model.paletteFilter) {
+                        Text("Favourites").tag(ProjectModel.PaletteFilter.favorites)
+                        Text("All").tag(ProjectModel.PaletteFilter.all)
+                    }
+                    .pickerStyle(.segmented).labelsHidden().frame(width: 130)
+                    Spacer(minLength: 0)
+                    Image(systemName: "photo").font(.system(size: 8)).foregroundStyle(.secondary)
+                    Slider(value: $thumbSize, in: 70...220).frame(minWidth: 50, idealWidth: 80, maxWidth: 110).help("Preview size")
+                    Image(systemName: "photo").font(.system(size: 12)).foregroundStyle(.secondary)
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .controlSize(.small)
-                .frame(width: 160)
-                Text(hiddenCount == 0 ? "Hover a thumbnail and click the eye to hide it." : "\(hiddenCount) hidden")
-                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                Spacer()
+                HStack(spacing: 6) {
+                    Button("Matrix…") { showMatrixEditor = true }
+                    Button("Pixel Math…") { showPixelMath = true }
+                    Text(hiddenCount == 0 ? "" : "\(hiddenCount) hidden").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer(minLength: 0)
+                    Button("Reset all") {
+                        var s = CombineSettings(); if let pal = model.currentPalette { s.select(palette: pal) }; model.settings = s
+                    }
+                    .help("Reset all settings to the defaults for the current palette (the crop and presets stay).")
+                }
             }
-            if palettes.isEmpty {
-                Text(model.sources.isEmpty ? "Load channels to see palettes." : "Everything is hidden — switch to All and click the eye icons.").font(.caption).foregroundStyle(.secondary)
-            }
-            ForEach(Palettes.groups, id: \.self) { group in
-                let items = palettes.filter { $0.group == group }
-                if !items.isEmpty {
-                    Text(group).font(.caption).foregroundStyle(.secondary).padding(.top, 2)
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 92, maximum: 120), spacing: 6)], spacing: 6) {
-                        ForEach(items) { p in
-                            PaletteCell(palette: p, image: model.thumbnails[p.id], selected: model.settings.paletteID == p.id,
-                                        hidden: model.isPaletteHidden(p.id), showEye: model.paletteFilter == .all,
-                                        toggleHidden: { model.setPalette(p.id, hidden: !model.isPaletteHidden(p.id)) })
-                                .onTapGesture { model.select(palette: p) }
+            .controlSize(.small)
+            .padding(.horizontal, 8).padding(.vertical, 6)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 4) {
+                    if palettes.isEmpty {
+                        Text(model.sources.isEmpty ? "Load channels to see palettes." : "Everything is hidden — switch to All and click the eye icons.").font(.caption).foregroundStyle(.secondary)
+                    }
+                    ForEach(Palettes.groups, id: \.self) { group in
+                        let items = palettes.filter { $0.group == group }
+                        if !items.isEmpty {
+                            Text(group).font(.caption).foregroundStyle(.secondary).padding(.top, 2)
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: thumbSize, maximum: thumbSize * 1.3), spacing: 6)], spacing: 6) {
+                                ForEach(items) { p in
+                                    PaletteCell(palette: p, image: model.thumbnails[p.id], selected: model.settings.paletteID == p.id,
+                                                hidden: model.isPaletteHidden(p.id), showEye: model.paletteFilter == .all,
+                                                height: thumbSize * 0.64,
+                                                toggleHidden: { model.setPalette(p.id, hidden: !model.isPaletteHidden(p.id)) })
+                                        .onTapGesture { model.select(palette: p) }
+                                }
+                            }
                         }
                     }
+                    if let p = model.currentPalette {
+                        Text(p.description).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).padding(.top, 4)
+                    }
+                    let mode = model.settings.mode
+                    Text(mode == .pixelMath ? "Combination: Pixel Math (editable)" : (mode == .monochrome ? "Combination: weighted average of all channels" : "Combination: matrix (editable)")).font(.caption2).foregroundStyle(.tertiary)
                 }
+                .padding(8)
             }
-            if let p = model.currentPalette {
-                Text(p.description).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).padding(.top, 2)
-            }
-            let mode = model.settings.mode
-            Text(mode == .pixelMath ? "Combination: Pixel Math (editable)" : (mode == .monochrome ? "Combination: weighted average of all channels" : "Combination: matrix (editable)")).font(.caption2).foregroundStyle(.tertiary)
         }
     }
 }
@@ -63,6 +79,7 @@ struct PaletteCell: View {
     var hidden: Bool = false
     /// Always show the eye button (All mode); otherwise only while hovering.
     var showEye: Bool = false
+    var height: CGFloat = 64
     var toggleHidden: () -> Void = {}
     @State private var hovering = false
 
@@ -72,7 +89,7 @@ struct PaletteCell: View {
                 RoundedRectangle(cornerRadius: 4).fill(Color.black.opacity(0.5))
                 if let img = image {
                     Image(decorative: img, scale: 1).resizable().aspectRatio(contentMode: .fill)
-                        .frame(height: 64).clipShape(RoundedRectangle(cornerRadius: 4))
+                        .frame(height: height).clipShape(RoundedRectangle(cornerRadius: 4))
                         .opacity(hidden ? 0.35 : 1)
                 } else {
                     ProgressView().controlSize(.mini)
@@ -100,7 +117,7 @@ struct PaletteCell: View {
                     Spacer()
                 }
             }
-            .frame(height: 64)
+            .frame(height: height)
             Text(palette.name).font(.caption2).lineLimit(1).foregroundStyle(selected ? Color.accentColor : (hidden ? Color.secondary : Color.primary))
         }
         .onHover { hovering = $0 }

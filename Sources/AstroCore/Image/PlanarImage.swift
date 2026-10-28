@@ -65,6 +65,24 @@ public final class PlanarImage {
         return out
     }
 
+    /// Rotated by 90° clockwise: pixel (x, y) of the source lands at (height − 1 − y, x).
+    public func rotated90CW() -> PlanarImage {
+        let out = PlanarImage(width: height, height: width)
+        var src = vImage_Buffer(data: pointer, height: vImagePixelCount(height), width: vImagePixelCount(width), rowBytes: width * MemoryLayout<Float>.stride)
+        var dst = vImage_Buffer(data: out.pointer, height: vImagePixelCount(out.height), width: vImagePixelCount(out.width), rowBytes: out.width * MemoryLayout<Float>.stride)
+        // vImage's rotation constants are counter-clockwise quarter turns: 3 = 270° CCW = 90° CW.
+        let err = vImageRotate90_PlanarF(&src, &dst, 3, 0, vImage_Flags(kvImageNoFlags))
+        precondition(err == kvImageNoError, "vImageRotate90_PlanarF failed: \(err)")
+        return out
+    }
+
+    /// Rotated by `times` quarter turns clockwise (0 returns self).
+    public func rotated90CW(times: Int) -> PlanarImage {
+        var img = self
+        for _ in 0..<(((times % 4) + 4) % 4) { img = img.rotated90CW() }
+        return img
+    }
+
     /// 2×2 box-filter down-sample. Odd trailing rows/columns are averaged with
     /// their only neighbour (edge replication), so every level keeps full coverage.
     public func downsampled2x() -> PlanarImage {

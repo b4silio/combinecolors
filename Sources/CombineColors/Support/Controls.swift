@@ -29,7 +29,7 @@ struct SliderRow: View {
     var body: some View {
         HStack(spacing: 6) {
             Text(title)
-                .frame(width: 92, alignment: .leading)
+                .frame(width: 80, alignment: .leading)
                 .lineLimit(1)
                 .onTapGesture(count: 2) { value = defaultValue }
                 .help(help ?? "Double-click to reset")
@@ -53,36 +53,49 @@ struct SliderRow: View {
     }
 }
 
-/// Collapsible block with a distinct header bar; the expansion state is owned by the caller
-/// so that the inspector can behave like an accordion.
-struct SectionBox<Content: View>: View {
+/// Block of the horizontal controls strip: a vertical title bar on the left (click to collapse or
+/// expand) and, when expanded, the parameters in a fixed-width column that scrolls if needed.
+struct ControlBlock<Content: View>: View {
     let title: String
     var subtitle: String? = nil
+    var width: CGFloat = 320
     @Binding var expanded: Bool
     @ViewBuilder var content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        HStack(spacing: 0) {
             Button { withAnimation(.easeOut(duration: 0.12)) { expanded.toggle() } } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.caption2).frame(width: 10)
-                    Text(title).font(.subheadline).bold()
-                    if let s = subtitle { Text(s).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
-                    Spacer()
+                VStack(spacing: 4) {
+                    Text(title.uppercased())
+                        .font(.system(size: 11, weight: .bold))
+                        .tracking(1)
+                    if let s = subtitle, expanded {
+                        Text(s).font(.system(size: 9)).foregroundStyle(.secondary)
+                    }
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(expanded ? Color.accentColor.opacity(0.18) : Color(nsColor: .controlBackgroundColor).opacity(0.7))
+                .lineLimit(1)
+                .fixedSize()
+                .rotationEffect(.degrees(-90))
+                .frame(width: expanded ? 30 : 24)
+                .frame(maxHeight: .infinity)
+                .background(expanded ? Color.accentColor.opacity(0.22) : Color(nsColor: .controlBackgroundColor).opacity(0.8))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .foregroundStyle(expanded ? Color.accentColor : Color.secondary)
+            .help(expanded ? "Collapse \(title)" : "Expand \(title)")
             if expanded {
-                VStack(alignment: .leading, spacing: 5) { content }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 4) { content }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .frame(width: width, alignment: .leading)
+                }
             }
-            Divider()
         }
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.35))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(0.08)))
     }
 }
 

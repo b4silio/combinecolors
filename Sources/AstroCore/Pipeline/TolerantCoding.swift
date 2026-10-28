@@ -158,6 +158,7 @@ extension ProjectDocument {
         version = c.value("version", d.version); channels = c.value("channels", d.channels); settings = c.value("settings", d.settings)
         starsFile = c.optionalValue("starsFile", d.starsFile); crop = c.optionalValue("crop", d.crop)
         presets = c.value("presets", d.presets)
+        rotation = ((c.value("rotation", d.rotation) % 4) + 4) % 4
     }
 }
 
