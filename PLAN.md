@@ -70,9 +70,56 @@ Design decisions:
     resolution-independent luminance stretch in the post-combine stage.
 12. Recent channel sets (UserDefaults MRU, File menu + start screen), scroll-safe drop-downs.
 
+## Iteration log (keep this current — every change lands here)
+
+Each entry: what was added or corrected, where it lives, how it is verified.
+Reproducing the project means implementing phases 1–8 plus everything below.
+
+### Features added after the first build
+
+| # | Feature | Where | Verified by |
+|---|---------|-------|-------------|
+| F1 | Shared crop: one rectangle for all channels, drawn/handled on the preview or typed in; **Auto trim** of empty registration borders; overlay dims outside the crop; drives statistics, thumbnails, export | `Image/PixelRect.swift` (PixelRect, AutoCrop), region-aware `Statistics`, `ChannelSource(_, region:)`, `Renderer.renderFull(region:)`, `PreviewView` crop layers, `InspectorView.cropSection` | CropTests, ProjectModelTests.testCropFlow/testAutoCrop, screenshots |
+| F2 | Headless model tests (test target on the executable) | `Tests/CombineColorsTests` | `swift test` |
+| F3 | Launch with files / "Open With" / `--args` (window must still open: `applicationShouldOpenUntitledFile`) | `App.swift` AppDelegate | manual launch |
+| F4 | CLI `--crop`, `--save-project`, `--lum`, `--stars` | `combinecolors-cli/main.swift` | CLI runs on real data |
+| F5 | Star image stretch detection (`StarsStretchMode` auto/none/autoSTF): already-stretched star-only images are not re-stretched | `Settings.swift`, `Renderer.starsImage` | Lowers stars render |
+| F6 | Already-stretched channel detection → stretch set to none with a status hint | `ProjectModel.sourcesChanged` | Lowers TIFF launch |
+| F7 | A/B snapshot compare (Store A / Show A / Restore A), Reset all settings | `ProjectModel.snapshotA/showingSnapshot`, `ContentView.previewToolbar` | PeekTests/Snapshot test, screenshots |
+| F8 | Lenient (forward/backward compatible) decoding of every settings struct; channel maps encoded as JSON objects (`ChannelKind: CodingKeyRepresentable`) | `Pipeline/TolerantCoding.swift` | TolerantDecodingTests |
+| F9 | Luminance recipes: on by default with Hα; presets Hα, L, 0.8/0.1/0.1, 0.7/0.3 HOO, 0.5/0.25/0.25, 0.5 L + 0.5 Hα, max/mean of lines, custom expression; missing channels dropped and weights renormalised, Hα → L fallback; post-combine luminance stretch derived from analysis samples (resolution independent) | `LuminancePreset`, `LuminanceSettings` in `Settings.swift`, `Renderer.evaluateLuminance`, `InspectorView.luminanceSection` | LuminancePresetTests, strip-vs-whole test |
+| F10 | Recent channel sets: a group of files loaded together is one MRU entry (File ▸ Open Recent Set, start screen) | `Model/RecentSets.swift`, `ProjectModel.openRecentSet` | RecentSetsTests |
+| F11 | Inspector split in two panes with independent scrolling (palettes above, controls below, draggable divider) | `InspectorView` (VSplitView) | screenshot |
+| F12 | Hide palettes: eye button per thumbnail, Favourites / All switch, persisted in UserDefaults | `ProjectModel.hiddenPaletteIDs/paletteFilter`, `PaletteGridView` | PaletteVisibilityTests |
+| F13 | Mono palettes skip luminance injection (would all look identical); then replaced by one **Monochrome** palette = weighted average of every loaded channel (Weight sliders, disabled channels dropped), `CombineMode.monochrome` + `monoChannels` subset | `Palettes.swift`, `Settings.swift`, `Renderer.combine` | MonoLuminanceTests, MonochromeModeTests |
+| F14 | Press-and-hold a channel thumbnail → main preview shows that channel alone (grayscale, own auto-stretch), released → normal view; implemented as a temporary monochrome settings override (`peekSettings`) | `ProjectModel.peekChannel`, `ChannelStripView` gesture | PeekTests, screenshot |
+
+### Corrections
+
+| # | Problem | Fix |
+|---|---------|-----|
+| C1 | Preview layer drew over the channel strip | `layer.masksToBounds = true` on the zoom view |
+| C2 | Launching with file arguments opened no window (SwiftUI treats them as documents) | `applicationShouldOpenUntitledFile` / `applicationShouldHandleReopen` return true |
+| C3 | Nested sheet from the colour-file dialog never appeared | present the dual-band sheet from `ContentView` after a short delay |
+| C4 | Project files saved by an older build failed to decode after a new field was added | lenient decoding (F8) |
+| C5 | Toolbar controls with `.help()` tooltips ignored synthetic clicks (testing only, but labels are clearer anyway) | text labels on the preview toolbar |
+| C6 | Numbers interpolated into SwiftUI `Text` picked up locale grouping ("6'104") | `Text(verbatim:)` / `String()` |
+| C7 | Trackpad scrolling over menu-style `Picker`s changed their value | `MenuPicker` (Menu-based) for every drop-down in scrollable panes |
+| C8 | "From" picker label wrapped onto two lines | `.fixedSize()` on the label |
+| C9 | Status bar jumped between one and two lines while hovering (pixel read-out wrapped) | fixed 24 pt height, single truncating line, fixed-format read-out string |
+| C10 | Unlinked per-channel auto-STF cancels normalisation and linear gain | default changed to linked; explanatory note in the Stretch section |
+| C11 | Post-combine stretch parameters drifted with zoom level / strip | derived from full-resolution analysis samples (`Renderer.analysisSamples`) |
+| C12 | `AutoCrop` over-trimmed sides touched by another side's border | grow-back pass after shrinking |
+| C13 | Natural palette needed Hβ and was never available | Hβ term removed |
+
+### Process rule
+
+Whenever a feature or correction is made, add it to the tables above in the same
+commit (see the project memory note).
+
 ## Status
 
-* 87 tests pass (`swift test`): core, pipeline, luminance presets, model flows, recent sets.
+* 92 tests pass (`swift test`): core, pipeline, luminance presets, monochrome, model flows, recent sets, palette visibility, peek.
 * Verified on the Soul Core FITS set (6 × 7272×5478 float32) and the Lowers Nebula
   16-bit TIFF set: loading ≈ 1 s for six channels, preview renders 1–30 ms, full-resolution
   Foraxx export ≈ 0.5 s, auto-crop 20–30 ms.

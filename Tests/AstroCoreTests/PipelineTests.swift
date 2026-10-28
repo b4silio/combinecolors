@@ -68,7 +68,8 @@ final class PipelineTests: XCTestCase {
 
     func testMedianLandsOnTargetBackground() throws {
         var s = CombineSettings()
-        s.select(palette: Palettes.palette(id: "mono_ha")!)
+        s.select(palette: Palettes.palette(id: "monochrome")!)
+        s.monoChannels = [.ha]
         s.stretch.linked = false
         s.stretch.targetBackground = 0.3
         let r = try render(s)
@@ -102,7 +103,7 @@ final class PipelineTests: XCTestCase {
     }
 
     func testChannelAdjustments() throws {
-        var s = CombineSettings(); s.select(palette: Palettes.palette(id: "mono_ha")!)
+        var s = CombineSettings(); s.select(palette: Palettes.palette(id: "monochrome")!); s.monoChannels = [.ha]
         let base = try render(s).image.r.mean()
         var adj = ChannelAdjust(); adj.weight = 0.5
         s.setAdjust(.ha, adj)
@@ -385,7 +386,7 @@ final class MonoLuminanceTests: XCTestCase {
     func testMonoPalettesIgnoreLuminance() throws {
         let sources: [ChannelKind: ChannelSource] = [.ha: Synth.source(.ha), .oiii: Synth.source(.oiii, scale: 0.4, seed: 2)]
         let planes = sources.mapValues { $0.image }
-        var s = CombineSettings(); s.select(palette: Palettes.palette(id: "mono_oiii")!)
+        var s = CombineSettings(); s.select(palette: Palettes.palette(id: "monochrome")!); s.monoChannels = [.oiii]
         s.luminance.enabled = true; s.luminance.preset = .ha
         XCTAssertFalse(s.luminanceApplies)
         XCTAssertFalse(s.allChannels(available: [.ha, .oiii]).contains(.ha))
@@ -396,5 +397,37 @@ final class MonoLuminanceTests: XCTestCase {
         XCTAssertLessThan(r.image.r.maxAbsDifference(r2.image.r), 1e-6)
         s.select(palette: Palettes.palette(id: "hoo")!)
         XCTAssertTrue(s.luminanceApplies)
+    }
+}
+
+
+final class MonochromeModeTests: XCTestCase {
+    func testMonochromeAveragesAllLoadedChannels() throws {
+        let sources: [ChannelKind: ChannelSource] = [.ha: Synth.source(.ha), .oiii: Synth.source(.oiii, scale: 0.4, seed: 2), .sii: Synth.source(.sii, scale: 0.3, seed: 3)]
+        let planes = sources.mapValues { $0.image }
+        var s = CombineSettings(); s.select(palette: Palettes.palette(id: "monochrome")!)
+        s.stretch.method = .none; s.normalization.method = .none
+        XCTAssertEqual(s.mode, .monochrome)
+        XCTAssertTrue(s.requiredChannels.isEmpty)
+        XCTAssertEqual(s.allChannels(available: [.ha, .oiii, .sii]), [.ha, .oiii, .sii])
+        XCTAssertTrue(Palettes.available(for: [.ha]).contains { $0.isMonochrome })
+        XCTAssertFalse(Palettes.available(for: []).contains { $0.isMonochrome })
+        let ctx = RenderContext.make(settings: s.normalization, sources: sources)
+        let r = try Renderer.render(RenderRequest(planes: planes, settings: s, context: ctx))
+        let expected = (planes[.ha]![10, 10] + planes[.oiii]![10, 10] + planes[.sii]![10, 10]) / 3
+        XCTAssertEqual(r.image.r[10, 10], min(expected, 1), accuracy: 1e-6)
+        XCTAssertEqual(r.image.g[10, 10], r.image.r[10, 10]); XCTAssertEqual(r.image.b[10, 10], r.image.r[10, 10])
+        // Weight sliders and the channel subset are honoured.
+        var adj = ChannelAdjust(); adj.weight = 0.5; s.setAdjust(.ha, adj)
+        s.monoChannels = [.ha, .oiii]
+        let r2 = try Renderer.render(RenderRequest(planes: planes, settings: s, context: ctx))
+        XCTAssertEqual(r2.image.r[10, 10], min((0.5 * planes[.ha]![10, 10] + planes[.oiii]![10, 10]) / 2, 1), accuracy: 1e-6)
+        // Disabled channels drop out of the average.
+        adj = ChannelAdjust(); adj.enabled = false; s.setAdjust(.oiii, adj); s.setAdjust(.ha, ChannelAdjust())
+        let r3 = try Renderer.render(RenderRequest(planes: planes, settings: s, context: ctx))
+        XCTAssertEqual(r3.image.r[10, 10], min(planes[.ha]![10, 10], 1), accuracy: 1e-6)
+        // Round trip.
+        let back = try JSONDecoder().decode(CombineSettings.self, from: try JSONEncoder().encode(s))
+        XCTAssertEqual(back, s)
     }
 }

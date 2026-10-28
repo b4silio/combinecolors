@@ -80,6 +80,7 @@ public enum Renderer {
         let available = Set(req.planes.keys)
         let missing = missingChannels(settings: s, available: available)
         guard missing.isEmpty else { throw RenderError.missingChannels(missing) }
+        if s.mode == .monochrome && s.monochromeChannels(available: available).isEmpty { throw RenderError.noOutput }
         guard let anyPlane = req.planes.values.first else { throw RenderError.noOutput }
         let w = anyPlane.width, h = anyPlane.height
 
@@ -105,14 +106,15 @@ public enum Renderer {
             // 2. Stretch every channel on its own.
             var stretched: [ChannelKind: PlanarImage] = [:]
             var stStats: [ChannelKind: ChannelStats] = [:]
+            let stretchKinds = s.mode == .monochrome ? s.monochromeChannels(available: available) : s.requiredChannels
             let linkedStretch: ResolvedStretch? = s.stretch.linked
-                ? Stretch.resolveLinked(s.stretch, stats: s.requiredChannels.compactMap { linStats[$0] })
+                ? Stretch.resolveLinked(s.stretch, stats: stretchKinds.compactMap { linStats[$0] })
                 : nil
             for k in needed {
                 let p = linear[k]!
                 var r: ResolvedStretch
                 let adj = s.adjust(k)
-                if let l = linkedStretch, s.requiredChannels.contains(k), adj.stretchBoost == 0 {
+                if let l = linkedStretch, stretchKinds.contains(k), adj.stretchBoost == 0 {
                     r = l
                 } else {
                     var ss = s.stretch
@@ -266,6 +268,13 @@ public enum Renderer {
     static func combine(_ planes: [ChannelKind: PlanarImage], stats: [ChannelKind: ChannelStats], settings s: CombineSettings, width w: Int, height h: Int, lum: inout PlanarImage?) throws -> RGBImage {
         let n = vDSP_Length(w * h)
         switch s.mode {
+        case .monochrome:
+            let kinds = s.monochromeChannels(available: Set(planes.keys)).filter { s.adjust($0).enabled }
+            let gray = PlanarImage(width: w, height: h)
+            guard !kinds.isEmpty else { return RGBImage(r: gray, g: gray.copy(), b: gray.copy()) }
+            var k: Float = 1 / Float(kinds.count)
+            for kind in kinds { vDSP_vsma(planes[kind]!.pointer, 1, &k, gray.pointer, 1, gray.pointer, 1, n) }
+            return RGBImage(r: gray, g: gray.copy(), b: gray.copy())
         case .matrix:
             let out = RGBImage(width: w, height: h)
             for (o, dst) in out.planes.enumerated() {

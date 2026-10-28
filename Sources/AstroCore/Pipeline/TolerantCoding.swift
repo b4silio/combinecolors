@@ -110,6 +110,7 @@ extension CombineSettings {
         let d = CombineSettings()
         mode = c.value("mode", d.mode); paletteID = c.value("paletteID", d.paletteID); matrix = c.value("matrix", d.matrix)
         pixelMath = c.value("pixelMath", d.pixelMath); channels = c.value("channels", d.channels)
+        monoChannels = c.optionalValue("monoChannels", d.monoChannels)
         normalization = c.value("normalization", d.normalization); stretch = c.value("stretch", d.stretch)
         stretchStage = c.value("stretchStage", d.stretchStage); luminance = c.value("luminance", d.luminance)
         post = c.value("post", d.post); stars = c.value("stars", d.stars)

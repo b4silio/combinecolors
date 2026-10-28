@@ -24,6 +24,8 @@ public struct ChannelAdjust: Codable, Equatable, Hashable {
 public enum CombineMode: String, Codable, CaseIterable {
     case matrix
     case pixelMath
+    /// Weighted average of channels (see `CombineSettings.monoChannels`).
+    case monochrome
 }
 
 public enum StretchStage: String, Codable, CaseIterable, Identifiable {
@@ -186,6 +188,8 @@ public struct CombineSettings: Codable, Equatable, Hashable {
     public var paletteID: String = "sho"
     public var matrix: PaletteMatrix = Palettes.palette(id: "sho").flatMap { if case .matrix(let m) = $0.kind { return m }; return nil } ?? .empty
     public var pixelMath: PixelMathProgram = PixelMathProgram(red: "SII", green: "Ha", blue: "OIII")
+    /// Channels used by the monochrome mode; nil = every loaded channel.
+    public var monoChannels: Set<ChannelKind>? = nil
     public var channels: [ChannelKind: ChannelAdjust] = [:]
     public var normalization = NormalizationSettings()
     public var stretch = StretchSettings()
@@ -208,6 +212,7 @@ public struct CombineSettings: Codable, Equatable, Hashable {
         switch palette.kind {
         case .matrix(let m): mode = .matrix; matrix = m
         case .pixelMath(let p): mode = .pixelMath; pixelMath = p
+        case .monochrome: mode = .monochrome; monoChannels = nil
         }
         if let l = palette.luminance {
             luminance.enabled = true
@@ -221,17 +226,24 @@ public struct CombineSettings: Codable, Equatable, Hashable {
         switch mode {
         case .matrix: return matrix.requiredChannels
         case .pixelMath: return (try? pixelMath.compile().requiredChannels) ?? []
+        case .monochrome: return monoChannels ?? []
         }
     }
 
     /// Luminance injection is skipped for the mono check palettes (they would all look alike).
     public var luminanceApplies: Bool {
-        luminance.enabled && (Palettes.palette(id: paletteID)?.allowsLuminance ?? true)
+        luminance.enabled && mode != .monochrome && (Palettes.palette(id: paletteID)?.allowsLuminance ?? true)
+    }
+
+    /// Channels averaged by the monochrome mode for the loaded set.
+    public func monochromeChannels(available: Set<ChannelKind>) -> Set<ChannelKind> {
+        (monoChannels ?? available).intersection(available)
     }
 
     /// Every channel the pipeline will read, given what is loaded.
     public func allChannels(available: Set<ChannelKind>) -> Set<ChannelKind> {
         var s = requiredChannels
+        if mode == .monochrome { s.formUnion(monochromeChannels(available: available)) }
         if luminanceApplies { s.formUnion(luminance.requiredChannels(available: available)) }
         if stars.enabled { s.formUnion([.red, .green, .blue]) }
         return s

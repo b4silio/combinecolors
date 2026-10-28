@@ -56,6 +56,12 @@ struct ChannelSlotView: View {
                     .strokeBorder(targeted ? Color.accentColor : (source == nil ? Color.secondary.opacity(0.3) : kind.tint.opacity(0.8)), style: StrokeStyle(lineWidth: targeted ? 2 : 1, dash: source == nil ? [4, 3] : []))
             }
             .frame(width: source == nil ? 86 : 132, height: 88)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in if source != nil && model.peekChannel != kind { model.peekChannel = kind } }
+                    .onEnded { _ in model.peekChannel = nil }
+            )
+            .help(source == nil ? "" : "Press and hold to see this channel full size")
             HStack(spacing: 3) {
                 Circle().fill(kind.tint).frame(width: 7, height: 7)
                 Text(kind.displayName).font(.caption).bold()

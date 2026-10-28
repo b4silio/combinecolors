@@ -21,7 +21,8 @@ at full resolution.
 * **Palettes**: SHO (Hubble), HOO, HSO, HOS (CFHT), OHS, OSH, SOH, HHO, a
   "natural" line-colour palette, blends (SHO Golden, SHO Soft, HOO + SII, …),
   dynamic Pixel-Math palettes (Foraxx SHO/HOO, line-ratio, OIII-protected, …),
-  broadband RGB / LRGB / HαRGB, and mono checks. Every palette is editable:
+  broadband RGB / LRGB / HαRGB, and a Monochrome palette (weighted average of
+  every loaded channel). Every palette is editable:
   matrix palettes open in a weight table, dynamic ones in the Pixel Math editor.
 * **Pixel Math**: expressions per output channel (R, G, B, optional L) with
   `+ - * / % ^ ~`, comparisons, `?:`, 40 functions (`mtf`, `iif`, `lerp`,
@@ -53,7 +54,8 @@ at full resolution.
   crop drives statistics, thumbnails and the export; its limits can be shown
   on top of the full preview.
 * **Preview**: zoom/pan with trackpad or mouse (⌘-scroll or pinch to zoom,
-  double-click toggles 1:1/fit), pixel read-out of every channel and of the
+  double-click toggles 1:1/fit), press-and-hold a channel thumbnail to see that
+  channel alone, pixel read-out of every channel and of the
   result under the cursor, histogram, A/B snapshot comparison (*Store A* /
   *Show A*), undo/redo of every adjustment. Channels that are already
   stretched (TIFF exports) are detected and the stretch is switched off.
@@ -94,7 +96,8 @@ scheme runs the app).
    The pane is split: palettes above, controls below, each with its own scroll
    (drag the divider), so thumbnails stay visible while you move sliders. They
    are re-rendered with the current settings from the whole image, the crop or
-   the current view (*From* menu).
+   the current view (*From* menu). Hide palettes you never use with the eye
+   button (Favourites / All switch shows them again).
 4. **Tune**: stretch, normalisation, per-channel balance, colour. Everything
    updates live; double-click a slider label to reset it; ⌘Z undoes.
    *Store A* / *Show A* compares two states.

@@ -97,8 +97,28 @@ final class ProjectModel {
     /// A/B comparison: a stored snapshot of the settings and whether it is being shown.
     var snapshotA: CombineSettings? = nil
     var showingSnapshot = false { didSet { if showingSnapshot != oldValue { scheduleRender() } } }
-    /// Settings currently displayed (the snapshot while comparing).
-    var displayedSettings: CombineSettings { (showingSnapshot ? snapshotA : nil) ?? settings }
+    /// Channel shown full-size while its slot thumbnail is pressed.
+    var peekChannel: ChannelKind? = nil { didSet { if peekChannel != oldValue { scheduleRender() } } }
+
+    /// Settings currently displayed (the snapshot while comparing, or a single channel while peeking).
+    var displayedSettings: CombineSettings {
+        if let k = peekChannel, sources[k] != nil { return ProjectModel.peekSettings(for: k, base: settings) }
+        return (showingSnapshot ? snapshotA : nil) ?? settings
+    }
+
+    /// Grayscale view of one channel with the current stretch, no colour processing.
+    static func peekSettings(for kind: ChannelKind, base: CombineSettings) -> CombineSettings {
+        var s = base
+        s.mode = .monochrome
+        s.monoChannels = [kind]
+        s.paletteID = "monochrome"
+        var adj = s.adjust(kind); adj.enabled = true; adj.weight = 1; s.setAdjust(kind, adj)
+        s.luminance.enabled = false
+        s.post = PostSettings()
+        s.stars.enabled = false
+        if s.stretch.method == .autoSTF { s.stretch.linked = false }
+        return s
+    }
 
     // MARK: Thumbnails
     private(set) var thumbnails: [String: CGImage] = [:]
@@ -660,6 +680,7 @@ extension CombineSettings {
         x.paletteID = ""; y.paletteID = ""
         x.matrix = .empty; y.matrix = .empty
         x.pixelMath = PixelMathProgram(red: "", green: "", blue: ""); y.pixelMath = x.pixelMath
+        x.monoChannels = nil; y.monoChannels = nil
         return x == y
     }
 }

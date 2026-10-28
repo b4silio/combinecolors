@@ -300,3 +300,27 @@ final class PaletteVisibilityTests: XCTestCase {
         try? await base.tearDown()
     }
 }
+
+
+@MainActor
+final class PeekTests: XCTestCase {
+    func testPeekShowsSingleChannelThenRestores() async throws {
+        let base = ProjectModelTests()
+        try await base.setUp()
+        let m = try await base.loadedModel()
+        m.select(palette: Palettes.palette(id: "sho")!)
+        m.viewport = Viewport(visibleRect: CGRect(x: 0, y: 0, width: 200, height: 150), scale: 1)
+        await base.wait { m.frame != nil }
+        m.peekChannel = .oiii
+        XCTAssertEqual(m.displayedSettings.mode, .monochrome)
+        XCTAssertEqual(m.displayedSettings.monoChannels, [.oiii])
+        XCTAssertEqual(m.settings.mode, .matrix, "peeking must not touch the real settings")
+        await base.wait { m.frame?.settings.mode == .monochrome }
+        let f = m.frame!
+        XCTAssertEqual(f.rgb.r.toArray(), f.rgb.b.toArray(), "peek frame is grayscale")
+        m.peekChannel = nil
+        await base.wait { m.frame?.settings.mode == .matrix }
+        XCTAssertEqual(m.frame?.settings.mode, .matrix)
+        try? await base.tearDown()
+    }
+}

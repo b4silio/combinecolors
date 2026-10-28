@@ -51,7 +51,7 @@ struct PaletteGridView: View {
                 Text(p.description).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).padding(.top, 2)
             }
             let mode = model.settings.mode
-            Text(mode == .pixelMath ? "Combination: Pixel Math (editable)" : "Combination: matrix (editable)").font(.caption2).foregroundStyle(.tertiary)
+            Text(mode == .pixelMath ? "Combination: Pixel Math (editable)" : (mode == .monochrome ? "Combination: weighted average of all channels" : "Combination: matrix (editable)")).font(.caption2).foregroundStyle(.tertiary)
         }
     }
 }

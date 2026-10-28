@@ -35,6 +35,8 @@ public struct PaletteMatrix: Codable, Equatable, Hashable {
 public enum PaletteKind: Equatable, Hashable {
     case matrix(PaletteMatrix)
     case pixelMath(PixelMathProgram)
+    /// Weighted average of every loaded channel (weights = the per-channel Weight sliders).
+    case monochrome
 }
 
 public struct Palette: Identifiable, Equatable, Hashable {
@@ -56,10 +58,12 @@ public struct Palette: Identifiable, Equatable, Hashable {
         switch kind {
         case .matrix(let m): return m.requiredChannels
         case .pixelMath(let p): return (try? p.compile().requiredChannels) ?? []
+        case .monochrome: return []
         }
     }
 
     public var isPixelMath: Bool { if case .pixelMath = kind { return true }; return false }
+    public var isMonochrome: Bool { if case .monochrome = kind { return true }; return false }
 }
 
 public enum Palettes {
@@ -156,17 +160,15 @@ public enum Palettes {
         Palette(id: "haoiiirgb", name: "Hα/OIII + RGB", group: "Broadband", kind: .matrix(m([.red: 0.5, .ha: 0.5], [.green: 0.5, .oiii: 0.5], [.blue: 0.5, .oiii: 0.5])),
                 description: "Hα into red and OIII into green/blue, blended 50/50 with RGB."),
 
-        // --- Mono checks ---
-        Palette(id: "mono_ha", name: "Hα only", group: "Mono", kind: .matrix(m([.ha: 1], [.ha: 1], [.ha: 1])), description: "Grayscale Hα."),
-        Palette(id: "mono_oiii", name: "OIII only", group: "Mono", kind: .matrix(m([.oiii: 1], [.oiii: 1], [.oiii: 1])), description: "Grayscale OIII."),
-        Palette(id: "mono_sii", name: "SII only", group: "Mono", kind: .matrix(m([.sii: 1], [.sii: 1], [.sii: 1])), description: "Grayscale SII."),
-        Palette(id: "mono_l", name: "Luminance only", group: "Mono", kind: .matrix(m([.luminance: 1], [.luminance: 1], [.luminance: 1])), description: "Grayscale luminance."),
+        // --- Mono ---
+        Palette(id: "monochrome", name: "Monochrome", group: "Mono", kind: .monochrome,
+                description: "Weighted average of every loaded channel, each stretched on its own — a synthetic luminance. Balance it with the channel Weight sliders; press and hold a channel thumbnail to see that channel alone."),
     ]
 
     public static func palette(id: String) -> Palette? { all.first { $0.id == id } }
 
     /// Palettes whose required channels are all available.
     public static func available(for channels: Set<ChannelKind>) -> [Palette] {
-        all.filter { !$0.requiredChannels.isEmpty && $0.requiredChannels.isSubset(of: channels) }
+        all.filter { ($0.isMonochrome && !channels.isEmpty) || (!$0.requiredChannels.isEmpty && $0.requiredChannels.isSubset(of: channels)) }
     }
 }
