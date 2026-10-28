@@ -17,7 +17,8 @@ final class ZoomPanNSView: NSView {
     var crop: PixelRect? { didSet { updateOverlay() } }
     var cropEditing = false { didSet { updateOverlay(); updateCursor() } }
     var cropDraft: PixelRect? { didSet { updateOverlay() } }
-    var showCropOverlay = true { didSet { updateOverlay() } }
+    var cropOverlay: CropOverlayMode = .frame { didSet { updateOverlay() } }
+    private var lastBounds: CGRect = .zero
 
     var onViewportChange: ((CGRect, Double) -> Void)?
     var onHover: ((CGPoint?) -> Void)?
@@ -86,6 +87,14 @@ final class ZoomPanNSView: NSView {
 
     override func layout() {
         super.layout()
+        // Keep what was in the middle of the view in the middle when the view is resized.
+        if lastBounds.size != bounds.size {
+            if lastBounds.width > 0, !needsFit {
+                origin.x += (bounds.width - lastBounds.width) / 2
+                origin.y += (bounds.height - lastBounds.height) / 2
+            }
+            lastBounds = bounds
+        }
         if needsFit && imageSize != .zero && bounds.width > 10 {
             fit(rect: crop?.cgRect ?? CGRect(origin: .zero, size: imageSize))
             needsFit = false
@@ -156,7 +165,8 @@ final class ZoomPanNSView: NSView {
     }
 
     private func updateOverlay() {
-        let rect: PixelRect? = cropEditing ? cropDraft : (showCropOverlay ? crop : nil)
+        let rect: PixelRect? = cropEditing ? cropDraft : (cropOverlay == .hidden ? nil : crop)
+        let cropOnly = !cropEditing && cropOverlay == .cropOnly
         guard let r = rect, imageSize != .zero else {
             dimLayers.forEach { $0.isHidden = true }; cropBorder.isHidden = true; handleLayers.forEach { $0.isHidden = true }
             return
@@ -170,8 +180,9 @@ final class ZoomPanNSView: NSView {
             CGRect(x: full.minX, y: c.minY, width: max(0, c.minX - full.minX), height: c.height),
             CGRect(x: c.maxX, y: c.minY, width: max(0, full.maxX - c.maxX), height: c.height),
         ]
-        for (l, p) in zip(dimLayers, parts) { l.isHidden = false; l.frame = toAppKit(p) }
-        cropBorder.isHidden = false
+        let dim = cropOnly ? (layer?.backgroundColor ?? NSColor.black.cgColor) : NSColor(calibratedWhite: 0, alpha: 0.6).cgColor
+        for (l, p) in zip(dimLayers, parts) { l.isHidden = false; l.frame = toAppKit(p); l.backgroundColor = dim }
+        cropBorder.isHidden = cropOnly
         cropBorder.path = CGPath(rect: toAppKit(c), transform: nil)
         cropBorder.strokeColor = cropEditing ? NSColor.systemYellow.cgColor : NSColor.white.cgColor
         for (i, h) in handleLayers.enumerated() {
@@ -314,7 +325,7 @@ struct PreviewView: NSViewRepresentable {
         if v.crop != model.crop { v.crop = model.crop }
         if v.cropEditing != model.cropEditing { v.cropEditing = model.cropEditing }
         if v.cropDraft != model.cropDraft { v.cropDraft = model.cropDraft }
-        if v.showCropOverlay != model.showCropOverlay { v.showCropOverlay = model.showCropOverlay }
+        if v.cropOverlay != model.cropOverlay { v.cropOverlay = model.cropOverlay }
         if context.coordinator.fitRequest != model.fitRequest {
             context.coordinator.fitRequest = model.fitRequest
             DispatchQueue.main.async { v.perform(.fit) }

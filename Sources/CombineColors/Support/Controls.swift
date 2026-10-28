@@ -270,3 +270,50 @@ struct MenuPicker<T: Hashable>: View {
         }
     }
 }
+
+
+/// AppKit checkbox with a mixed state, cycling unchecked → partial → checked on click.
+struct TriStateCheckbox: NSViewRepresentable {
+    let title: String
+    @Binding var mode: CropOverlayMode
+
+    final class Coordinator: NSObject {
+        var mode: Binding<CropOverlayMode>
+        init(mode: Binding<CropOverlayMode>) { self.mode = mode }
+        @objc func clicked(_ b: NSButton) {
+            switch b.state {
+            case .off: mode.wrappedValue = .hidden
+            case .mixed: mode.wrappedValue = .frame
+            default: mode.wrappedValue = .cropOnly
+            }
+        }
+    }
+
+    static func state(_ m: CropOverlayMode) -> NSControl.StateValue {
+        switch m { case .hidden: return .off; case .frame: return .mixed; case .cropOnly: return .on }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(mode: $mode) }
+
+    func makeNSView(context: Context) -> NSButton {
+        let b = NSButton(checkboxWithTitle: title, target: context.coordinator, action: #selector(Coordinator.clicked(_:)))
+        b.allowsMixedState = true
+        b.controlSize = .small
+        b.font = NSFont.systemFont(ofSize: NSFont.systemFontSize(for: .small))
+        b.state = Self.state(mode)
+        b.setContentHuggingPriority(.required, for: .horizontal)
+        return b
+    }
+
+    func updateNSView(_ b: NSButton, context: Context) {
+        context.coordinator.mode = $mode
+        let s = Self.state(mode)
+        if b.state != s { b.state = s }
+    }
+
+    /// Without this the representable asks for all the space it is offered and the toolbar grows
+    /// to the full height of the preview.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView b: NSButton, context: Context) -> CGSize? {
+        b.intrinsicContentSize
+    }
+}

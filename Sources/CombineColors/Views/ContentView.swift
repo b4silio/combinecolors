@@ -22,6 +22,7 @@ struct ContentView: View {
                         if model.sources.isEmpty { emptyState }
                         previewToolbar
                     }
+                    .overlay(alignment: .bottomTrailing) { zoomToolbar }
                 }
                 .frame(minWidth: 560)
                 .layoutPriority(1)
@@ -113,8 +114,10 @@ struct ContentView: View {
                     Button("Auto") { model.autoCrop() }.disabled(model.sources.isEmpty)
                         .help("Crop away the empty borders left by registration")
                     if model.crop != nil {
-                        Toggle(isOn: $model.showCropOverlay) { Label("Limits", systemImage: "rectangle.dashed") }
                         Button("Clear") { model.clearCrop() }.help("Remove the crop")
+                        TriStateCheckbox(title: "Limits", mode: $model.cropOverlay)
+                            .fixedSize()
+                            .help("Crop limits: unchecked hides them, partial shows the dashed frame over the whole image, checked shows only the cropped part")
                     }
                     Button { model.rotateClockwise() } label: { Label("Rotate", systemImage: "rotate.right") }
                         .disabled(model.sources.isEmpty || model.isLoading).help("Rotate every channel 90° clockwise (⌘R)")
@@ -122,13 +125,6 @@ struct ContentView: View {
                         .disabled(model.sources.isEmpty || model.isLoading).help("Flip horizontally (⇧⌘H)")
                     Button { model.flipVertical() } label: { Image(systemName: "arrow.up.and.down.righttriangle.up.righttriangle.down") }
                         .disabled(model.sources.isEmpty || model.isLoading).help("Flip vertically (⇧⌘V)")
-                    Divider().frame(height: 14)
-                    Toggle(isOn: $model.highQualityPreview) { Label("HQ", systemImage: "sparkles") }.help("High quality preview (more pixels)")
-                    Divider().frame(height: 14)
-                    Button { zoom(.zoomOut) } label: { Image(systemName: "minus.magnifyingglass") }
-                    Button { zoom(.zoomIn) } label: { Image(systemName: "plus.magnifyingglass") }
-                    Button("Fit") { zoom(.fit) }
-                    Button("1:1") { zoom(.actualSize) }
                 }
             }
             if model.cropEditing, model.cropDraft != nil {
@@ -149,6 +145,23 @@ struct ContentView: View {
         .padding(6)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
         .padding(8)
+    }
+
+    /// Bottom-right of the preview: quality and zoom.
+    private var zoomToolbar: some View {
+        HStack(spacing: 4) {
+            Toggle(isOn: $model.highQualityPreview) { Label("HQ", systemImage: "sparkles") }.help("High quality preview (more pixels)")
+            Divider().frame(height: 14)
+            Button { zoom(.zoomOut) } label: { Image(systemName: "minus.magnifyingglass") }
+            Button { zoom(.zoomIn) } label: { Image(systemName: "plus.magnifyingglass") }
+            Button("Fit") { zoom(.fit) }
+            Button("1:1") { zoom(.actualSize) }
+        }
+        .controlSize(.small)
+        .padding(6)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+        .padding(8)
+        .opacity(model.sources.isEmpty ? 0 : 1)
     }
 
     @ToolbarContentBuilder private var toolbarContent: some ToolbarContent {

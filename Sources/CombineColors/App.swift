@@ -45,7 +45,9 @@ struct CombineColorsApp: App {
             CommandMenu("View") {
                 Button("Fit to Window") { model.fitRequest += 1 }.keyboardShortcut("0")
                 Toggle("High Quality Preview", isOn: Binding(get: { model.highQualityPreview }, set: { model.highQualityPreview = $0 }))
-                Toggle("Show Crop Limits", isOn: Binding(get: { model.showCropOverlay }, set: { model.showCropOverlay = $0 }))
+                Picker("Crop Limits", selection: Binding(get: { model.cropOverlay }, set: { model.cropOverlay = $0 })) {
+                    ForEach(CropOverlayMode.allCases) { Text($0.displayName).tag($0) }
+                }
                 Divider()
                 Button("Rotate Clockwise") { model.rotateClockwise() }.keyboardShortcut("r").disabled(model.sources.isEmpty || model.isLoading)
                 Button("Flip Horizontal") { model.flipHorizontal() }.keyboardShortcut("h", modifiers: [.command, .shift]).disabled(model.sources.isEmpty || model.isLoading)

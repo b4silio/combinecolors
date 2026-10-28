@@ -52,6 +52,20 @@ struct PostStretchKey: Hashable {
     }
 }
 
+/// How the crop is shown on the preview when not editing it.
+enum CropOverlayMode: String, CaseIterable, Identifiable {
+    /// Nothing drawn.
+    case hidden
+    /// Dashed frame with the outside dimmed.
+    case frame
+    /// Only the cropped part is visible.
+    case cropOnly
+    var id: String { rawValue }
+    var displayName: String {
+        switch self { case .hidden: return "Hide Crop Limits"; case .frame: return "Show Crop Limits"; case .cropOnly: return "Show Only the Cropped Part" }
+    }
+}
+
 @MainActor
 @Observable
 final class ProjectModel {
@@ -75,7 +89,7 @@ final class ProjectModel {
     }
     var cropEditing = false
     var cropDraft: PixelRect? = nil
-    var showCropOverlay = true
+    var cropOverlay: CropOverlayMode = .frame
     /// Rotation / mirroring applied to every channel. Stored in the project; new channels are oriented on load.
     private(set) var orientation = Orientation.identity
     var rotation: Int { orientation.rotation }

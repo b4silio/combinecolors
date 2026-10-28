@@ -60,7 +60,8 @@ at full resolution.
 * **Crop, rotation and flips**: one rectangle shared by every channel, drawn on the
   preview or typed in, or detected automatically from the empty registration
   borders. The crop drives statistics, channel thumbnails and the export; its
-  limits can be shown on top of the full preview. *Rotate* (⌘R) turns every
+  limits can be hidden, shown as a dashed frame over the whole image, or the
+  preview can show only the cropped part (tri-state *Limits* checkbox). *Rotate* (⌘R) turns every
   channel, the crop and the previews by 90° clockwise; the flip buttons
   (⇧⌘H / ⇧⌘V) mirror them. The resulting orientation is stored in the project
   and applied to channels added later.
