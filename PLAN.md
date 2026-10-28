@@ -116,6 +116,7 @@ Reproducing the project means implementing phases 1–8 plus everything below.
 | C12 | `AutoCrop` over-trimmed sides touched by another side's border | grow-back pass after shrinking |
 | C13 | Natural palette needed Hβ and was never available | Hβ term removed |
 | C14 | Crop Apply/Cancel keyboard shortcuts lived only in the (possibly collapsed) Crop block | shortcuts also on the preview-toolbar buttons |
+| C15 | Channel-strip thumbnails kept showing the whole frame after a crop | `ChannelSource.displayPlane` honours the source region (level chosen from the region size); `ProjectModel` rebuilds slot thumbnails on crop change and on load with an existing crop (DisplayPlaneTests, testCropFlow) |
 
 ### Process rule
 

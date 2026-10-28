@@ -71,10 +71,19 @@ public final class ChannelSource {
     }
 
     /// A default auto-stretched grayscale version of a pyramid level (for thumbnails).
+    /// Auto-stretched grayscale preview of the channel, limited to the source's region (crop) when one is set.
     public func displayPlane(maxPixels: Int, settings: StretchSettings = StretchSettings()) -> PlanarImage {
-        let lvl = pyramid.level(pyramid.levelIndex(maxPixels: maxPixels)).copy()
-        let r = Stretch.resolve(settings, stats: stats)
-        r.apply(to: lvl)
-        return lvl
+        let plane: PlanarImage
+        if let region, region != PixelRect.full(width: width, height: height) {
+            // Pick the level at which the region (not the whole image) fits the budget.
+            var level = 0
+            while level + 1 < pyramid.count && region.scaled(level: level).count > maxPixels { level += 1 }
+            let r = region.scaled(level: level)
+            plane = pyramid.level(level).cropped(x: r.x, y: r.y, width: r.width, height: r.height)
+        } else {
+            plane = pyramid.level(pyramid.levelIndex(maxPixels: maxPixels)).copy()
+        }
+        Stretch.resolve(settings, stats: stats).apply(to: plane)
+        return plane
     }
 }

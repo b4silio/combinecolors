@@ -135,11 +135,17 @@ final class ProjectModelTests: XCTestCase {
         await wait { m.sources[.ha]?.region == m.crop && !m.isLoading && m.context != nil }
         XCTAssertEqual(m.sources[.ha]?.region, m.crop)
         XCTAssertTrue(m.sources[.ha]!.pyramid === m.baseSources[.ha]!.pyramid, "crop must not copy the pyramid")
+        // Slot thumbnails follow the crop (5:4 instead of 4:3).
+        for k in [ChannelKind.ha, .oiii, .sii] {
+            XCTAssertEqual(m.slotThumbnails[k]?.width, 100, "\(k)"); XCTAssertEqual(m.slotThumbnails[k]?.height, 80, "\(k)")
+        }
         // Full crop clears it.
         m.cropDraft = PixelRect(x: 0, y: 0, width: 200, height: 150)
         m.cropEditing = true
         m.commitCropEditing()
         XCTAssertNil(m.crop)
+        await wait { m.sources[.ha]?.region == nil && !m.isLoading }
+        XCTAssertEqual(m.slotThumbnails[.ha]?.width, 200)
         m.cancelCropEditing()
         m.clearCrop()
         XCTAssertNil(m.crop)

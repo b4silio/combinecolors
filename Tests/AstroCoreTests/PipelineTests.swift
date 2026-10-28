@@ -178,6 +178,26 @@ final class PipelineTests: XCTestCase {
     }
 }
 
+final class DisplayPlaneTests: XCTestCase {
+    func testDisplayPlaneFollowsRegion() {
+        let img = PlanarImage(width: 400, height: 300, fill: 0.1)
+        let full = ChannelSource(kind: .ha, image: img, fileName: "x")
+        let whole = full.displayPlane(maxPixels: 400 * 300)
+        XCTAssertEqual(whole.width, 400); XCTAssertEqual(whole.height, 300)
+        // A region crops the thumbnail at full resolution when it fits the budget...
+        let region = PixelRect(x: 40, y: 30, width: 200, height: 100)
+        let cropped = ChannelSource(full, region: region)
+        let t0 = cropped.displayPlane(maxPixels: 200 * 100)
+        XCTAssertEqual(t0.width, 200); XCTAssertEqual(t0.height, 100)
+        // ...and picks a coarser level (region-based budget) otherwise.
+        let t1 = cropped.displayPlane(maxPixels: 200 * 100 / 2)
+        XCTAssertEqual(t1.width, 100); XCTAssertEqual(t1.height, 50)
+        // A full-image region behaves like no region.
+        let same = ChannelSource(full, region: PixelRect.full(width: 400, height: 300)).displayPlane(maxPixels: 400 * 300)
+        XCTAssertEqual(same.width, 400)
+    }
+}
+
 final class PostProcessTests: XCTestCase {
     func sample() -> RGBImage {
         let img = RGBImage(width: 4, height: 1)

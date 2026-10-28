@@ -310,8 +310,8 @@ final class ProjectModel {
                 let src = ChannelSource(kind: kind, image: plane, fileName: name, url: url, formatDescription: fmt)
                 lock.lock(); built[i] = src; lock.unlock()
             }
-            let thumbs: [(ChannelKind, CGImage?)] = built.compactMap { $0 }.map { ($0.kind, RasterWriter.makeDisplayImage(gray: $0.displayPlane(maxPixels: 80_000))) }
             let cropped: [ChannelSource] = built.compactMap { $0 }.map { crop == nil ? $0 : ChannelSource($0, region: crop) }
+            let thumbs = cropped.map { ($0.kind, ProjectModel.slotThumbnail($0)) }
             let base = built.compactMap { $0 }
             await MainActor.run {
                 for (b, c) in zip(base, cropped) { self.baseSources[b.kind] = b; self.sources[c.kind] = c }
@@ -320,6 +320,11 @@ final class ProjectModel {
                 self.sourcesChanged()
             }
         }
+    }
+
+    /// Grayscale strip thumbnail of a source (cropped to its region when a crop is set).
+    nonisolated static func slotThumbnail(_ s: ChannelSource) -> CGImage? {
+        RasterWriter.makeDisplayImage(gray: s.displayPlane(maxPixels: 80_000))
     }
 
     func removeChannel(_ kind: ChannelKind) {
@@ -436,8 +441,10 @@ final class ProjectModel {
                 lock.lock(); out[k] = s; lock.unlock()
             }
             let result = out
+            let thumbs = result.values.map { ($0.kind, ProjectModel.slotThumbnail($0)) }
             await MainActor.run {
                 self.sources = result
+                for (k, t) in thumbs { if let t { self.slotThumbnails[k] = t } }
                 self.isLoading = false
                 self.postStretchCache = [:]
                 self.rebuildContext()
