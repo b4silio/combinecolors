@@ -5,6 +5,12 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 (`scripts/bump.sh`). The version lives in `VERSION` and is stamped into the app at build time;
 `scripts/release.sh` tags it and publishes the DMG as a GitHub release.
 
+## [1.0.1] – 2026-10-29
+
+- README screenshot refreshed with the current layout
+- The crop-limits mode (hidden / frame / crop only) is remembered between launches
+- bump.sh writes its changelog section correctly
+
 ## [1.0.0] – 2026-10-29
 
 First release.

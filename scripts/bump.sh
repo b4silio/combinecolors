@@ -16,11 +16,13 @@ case "$kind" in
 esac
 new="$major.$minor.$patch"
 echo "$new" > VERSION
-entries=""
-for e in "$@"; do entries+="- $e"$'\n'; done
+section=$(mktemp)
+{ echo "## [$new] – $(date +%Y-%m-%d)"; echo; for e in "$@"; do echo "- $e"; done; echo; } > "$section"
 # Insert the new section after the intro paragraph (before the first "## [").
-awk -v section="## [$new] – $(date +%Y-%m-%d)"$'\n\n'"$entries" '
-    !done && /^## \[/ { print section; done = 1 }
+awk -v f="$section" '
+    !done && /^## \[/ { while ((getline l < f) > 0) print l; close(f); done = 1 }
     { print }
 ' CHANGELOG.md > CHANGELOG.md.tmp && mv CHANGELOG.md.tmp CHANGELOG.md
+rm -f "$section"
+grep -q "^## \[$new\]" CHANGELOG.md || { echo "changelog entry not written" >&2; exit 1; }
 echo "VERSION $new"
