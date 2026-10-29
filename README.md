@@ -157,6 +157,15 @@ clicks *Done*, then *Open Anyway* in System Settings › Privacy & Security
 The icon is generated from `Resources/AppIcon-source.png` by
 `scripts/make_icon.py` (trimmed and placed on the macOS icon grid).
 
+### Versioning and releases
+
+The version lives in `VERSION` (semantic versioning) and is stamped into the app
+at build time; `CHANGELOG.md` lists what changed. Every `feat` commit bumps the
+minor version and every `fix` / other commit the patch version, in the same
+commit, with `scripts/bump.sh minor|patch "what changed"`. `scripts/release.sh`
+tags the current version, pushes, builds the DMG and publishes it as a GitHub
+release with the changelog section as notes.
+
 ## Using the app
 
 1. **Load channels** — drop files or a folder on the window (or ⌘O). Drop a
@@ -300,7 +309,7 @@ Sources/CombineColors        SwiftUI app (model, coordinators, views)
 Sources/combinecolors-cli    headless renderer
 Tests/AstroCoreTests         XCTest suite (real-data tests skip when the data is absent)
 Tests/CombineColorsTests     model-level app tests (loading, crop, rotation, presets, peek, recent sets)
-scripts/                     make_app.sh (UNIVERSAL=1 for both architectures), make_dmg.sh, make_icon.py
+scripts/                     make_app.sh (UNIVERSAL=1 for both architectures), make_dmg.sh, make_icon.py, bump.sh, release.sh
 ```
 
 See `PLAN.md` for the phase plan and the test matrix.

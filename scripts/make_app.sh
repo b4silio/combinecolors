@@ -16,7 +16,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/CombineColors" "$APP/Contents/MacOS/CombineColors"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
-# Build number = number of commits (CFBundleShortVersionString stays in Resources/Info.plist).
+# Version from the VERSION file (scripts/bump.sh), build number = number of commits.
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $(cat VERSION)" "$APP/Contents/Info.plist"
 if BUILD=$(git rev-list --count HEAD 2>/dev/null); then
     /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" "$APP/Contents/Info.plist" || true
 fi
