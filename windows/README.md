@@ -48,10 +48,12 @@ live in `%LOCALAPPDATA%\CombineColors\preferences.json`.
 
 ## What differs from the Mac build
 
-* **No GPU path.** Metal is replaced by CPU code spread over every core (SIMD kernels in
-  `Vec`, `Parallel.For` for the heavy loops). Non-local means and BM3D run on the CPU: BM3D on a
-  2.5 MP preview takes a few seconds on a 16-core machine instead of a fraction of a second. A
-  DirectX compute port is the obvious next step.
+* **GPU through Direct3D 11 compute shaders** instead of Metal: the non-local means and BM3D
+  kernels are the Metal shaders translated to HLSL (shader model 5, compiled from source at first
+  use, float atomics emulated with compare-exchange), driven through the Vortice bindings on the
+  adapter with the most memory. Everything else runs on the CPU with SIMD kernels (`Vec`) and
+  `Parallel.For`; the CPU ports of non-local means and BM3D remain as the fallback when no GPU is
+  usable (or when `GpuDenoise.Enabled` is off).
 * **TIFF** is read by a built-in reader (8/16/32-bit integer and float, strips or tiles,
   uncompressed / LZW / Deflate / PackBits, predictors, BigTIFF) so values arrive exactly as stored;
   PNG and JPEG go through the Windows Imaging Component. Export writes uncompressed TIFF, PNG and

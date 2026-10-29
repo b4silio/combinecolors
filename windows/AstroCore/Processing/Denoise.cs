@@ -186,11 +186,11 @@ public static class Denoise
                     target = Wavelets(y, sigma, d.Amount, d.Layers);
                     break;
                 case DenoiseMethod.NonLocalMeans:
-                    target = NonLocalMeans(y, sigma, d.Amount * 1.5f * sigma, d.Search);
+                    target = GpuDenoise.NonLocalMeans(y, sigma, d.Amount * 1.5f * sigma, d.Search) ?? NonLocalMeans(y, sigma, d.Amount * 1.5f * sigma, d.Search);
                     break;
                 case DenoiseMethod.Bm3d:
-                    // Falls back to the wavelets when BM3D is disabled (tests) or the image is too small.
-                    target = Bm3dDenoise.Bm3d(y, sigma, d.Amount, d.BlockSearch) ?? Wavelets(y, sigma, d.Amount, 3);
+                    // GPU first, then the CPU port; the wavelets when both are disabled (tests).
+                    target = GpuDenoise.Bm3d(y, sigma, d.Amount, d.BlockSearch) ?? Bm3dDenoise.Bm3d(y, sigma, d.Amount, d.BlockSearch) ?? Wavelets(y, sigma, d.Amount, 3);
                     break;
                 case DenoiseMethod.Guided:
                     target = Guided(y, MathF.Pow(d.Amount * 3 * sigma, 2), d.Radius);

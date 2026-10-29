@@ -303,7 +303,7 @@ public static class DenoiseMethods
         DenoiseMethod.Wavelets => "Wavelets (starlet)",
         DenoiseMethod.NonLocalMeans => "Non-local means",
         DenoiseMethod.Guided => "Guided filter",
-        _ => "BM3D",
+        _ => "BM3D (GPU)",
     };
 
     /// <summary>Short description shown under the Denoise controls.</summary>
@@ -312,7 +312,7 @@ public static class DenoiseMethods
         DenoiseMethod.Wavelets => "Starlet (à trous) wavelets: fine-scale coefficients below k·σ of the measured noise are shrunk. The classic astro method, fast, keeps stars and edges; blotchy sky when pushed.",
         DenoiseMethod.NonLocalMeans => "Weighted mean of the pixels whose 5×5 patch looks alike within the search window (Buades 2005). Keeps fine texture and faint filaments; cost grows with the search radius squared.",
         DenoiseMethod.Guided => "The output is a local linear function of the image itself (He 2010): flat sky is averaged, edges and gradients stay. Fastest and mildest, for light cleanup.",
-        _ => "Similar 8×8 blocks stacked and filtered together (DCT + Haar, hard threshold then Wiener pass; Dabov 2007), on every CPU core. Strongest on fine noise; square artefacts when pushed.",
+        _ => "Similar 8×8 blocks stacked and filtered together (DCT + Haar, hard threshold then Wiener pass; Dabov 2007) on the GPU (Direct3D), or on every CPU core without one. Strongest on fine noise; square artefacts when pushed.",
     };
 }
 

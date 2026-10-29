@@ -2,6 +2,7 @@ using AstroCore;
 
 namespace AstroCore.Tests;
 
+[Collection("denoise-globals")]
 public class DenoiseTests
 {
     /// <summary>Flat sky with Gaussian noise, a soft nebula gradient and a star.</summary>
@@ -98,6 +99,7 @@ public class DenoiseTests
     }
 }
 
+[Collection("denoise-globals")]
 public class Bm3dTests : IDisposable
 {
     /// <summary>Noisy sky with a gradient, a faint nebula blob and a star (luminance plane).</summary>

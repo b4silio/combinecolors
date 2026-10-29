@@ -20,4 +20,9 @@
     <Using Include="System.IO" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
+    <PackageReference Include="Vortice.D3DCompiler" Version="3.8.3" />
+  </ItemGroup>
+
 </Project>

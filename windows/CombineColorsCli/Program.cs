@@ -141,6 +141,8 @@ switch (command)
                 else Console.WriteLine($"bad --dust item {item}");
             }
         }
+        if (Environment.GetEnvironmentVariable("CC_NO_GPU") == "1") GpuDenoise.Enabled = false;
+        if (denoise > 0) Console.WriteLine($"GPU denoise: {(GpuDenoise.IsAvailable ? GpuDenoise.DeviceName : "off (CPU): " + GpuDenoise.UnavailableReason)}");
         Directory.CreateDirectory(outDir);
 
         // Load channels (in parallel).

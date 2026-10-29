@@ -5,6 +5,10 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 (`scripts/bump.sh`). The version lives in `VERSION` and is stamped into the app at build time;
 `scripts/release.sh` tags it and publishes the DMG as a GitHub release.
 
+## [1.2.0] – 2026-10-29
+
+- Windows: GPU noise reduction through Direct3D 11 compute shaders (non-local means and BM3D, the Metal kernels in HLSL), CPU fallback kept
+
 ## [1.1.0] – 2026-10-29
 
 - Windows port (windows/): the processing library, the app (WPF) and the CLI rewritten in C# on .NET 9, with the test suites; project files are interchangeable with the Mac app
