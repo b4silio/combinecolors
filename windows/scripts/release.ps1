@@ -2,7 +2,7 @@
 # tags the current VERSION (if the Mac side has not already), pushes, builds the self-contained zip
 # with publish.ps1 and attaches it to the GitHub release of that tag, creating the release with the
 # matching CHANGELOG section as notes when it does not exist yet. Needs a clean tree and the gh CLI
-# (winget install GitHub.cli, then gh auth login).
+# (winget install GitHub.cli, or the portable zip unpacked into %LOCALAPPDATA%\Programs\gh; then gh auth login).
 #   .\scripts\release.ps1            # release the current VERSION
 #   .\scripts\release.ps1 -NoTag     # only build and upload the zip to an existing release
 param([switch]$NoTag)
@@ -10,10 +10,10 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot          # windows\
 $repo = Split-Path -Parent $root
 Set-Location $repo
-# gh from PATH, or the portable copy in %LOCALAPPDATA%Programsgh (no admin rights needed).
+# gh from PATH, or the portable copy in %LOCALAPPDATA%\Programs\gh (no admin rights needed).
 $gh = (Get-Command gh -ErrorAction SilentlyContinue).Source
-if (-not $gh) { $portable = Join-Path $env:LOCALAPPDATA "Programsghbingh.exe"; if (Test-Path $portable) { $gh = $portable } }
-if (-not $gh) { throw "the GitHub CLI (gh) is not installed: winget install GitHub.cli, or unzip the portable gh into %LOCALAPPDATA%Programsgh" }
+if (-not $gh) { $portable = Join-Path $env:LOCALAPPDATA "Programs\gh\bin\gh.exe"; if (Test-Path $portable) { $gh = $portable } }
+if (-not $gh) { throw "the GitHub CLI (gh) is not installed: winget install GitHub.cli, or unzip the portable gh into %LOCALAPPDATA%\Programs\gh" }
 $version = (Get-Content "VERSION" -Raw).Trim()
 $tag = "v$version"
 if (git status --porcelain) { throw "commit or stash your changes first" }
