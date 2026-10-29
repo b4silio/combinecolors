@@ -33,6 +33,8 @@ public struct ProjectDocument: Codable {
     public var rotation: Int = 0
     /// Horizontal mirror applied before the rotation (see `Orientation`).
     public var flipped: Bool = false
+    /// Dust spots healed on the loaded channels (oriented coordinates) and the estimation parameters.
+    public var dust: DustSettings = DustSettings()
 
     public var orientation: Orientation {
         get { Orientation(rotation: rotation, flipped: flipped) }

@@ -27,6 +27,8 @@ import AstroCore
 //      --assign <file>=<kind> force a channel assignment (kind: L R G B Ha OIII SII Hb)
 //      --crop x,y,w,h         shared crop rectangle (full-resolution pixels); "auto" trims empty borders
 //      --save-project <file>  write a project file (channel paths, crop, settings) instead of/besides rendering
+//      --dust <kind>:x,y,r[;x,y,r…]  heal dust spots on a channel before anything else (repeatable; a project's
+//                             spots are applied too);  --dust-model surface | radial;  --dust-smooth <px>;  --dust-feather <0..0.5>
 
 var args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else {
@@ -107,6 +109,21 @@ case "render":
         let parts = a.split(separator: "=", maxSplits: 1).map(String.init)
         if parts.count == 2, let k = ChannelKind(rawValue: parts[1]) ?? ChannelKind.fromPixelMathIdentifier(parts[1]) { assignments[parts[0]] = k }
     }
+    // Dust spots: from the project file, then from --dust.
+    var projectDoc: ProjectDocument? = nil
+    if let pj = projectArg, let data = FileManager.default.contents(atPath: pj) { projectDoc = try? JSONDecoder().decode(ProjectDocument.self, from: data) }
+    var dust = projectDoc?.dust ?? DustSettings()
+    while let d = option("--dust") {
+        let parts = d.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2, let k = ChannelKind(rawValue: parts[0]) ?? ChannelKind.fromPixelMathIdentifier(parts[0]) else { print("bad --dust \(d)"); continue }
+        for item in parts[1].split(separator: ";") {
+            let v = item.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+            if v.count == 3 { dust.spots[k, default: []].append(DustSpot(x: v[0], y: v[1], radius: v[2])) } else { print("bad --dust item \(item)") }
+        }
+    }
+    if let m = option("--dust-model").flatMap({ DustModel(rawValue: $0) }) { dust.model = m }
+    if let v = option("--dust-smooth").flatMap(Double.init) { dust.smoothness = v }
+    if let v = option("--dust-feather").flatMap(Double.init) { dust.feather = v }
     try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 
     // Load channels (in parallel).
@@ -124,9 +141,13 @@ case "render":
                     lock.lock(); sources[k] = src; lock.unlock()
                 }
             } else if let k = kind {
-                let src = ChannelSource(kind: k, image: f.planes[0], fileName: f.fileName, url: url, formatDescription: f.formatDescription)
+                let spots = dust.spots(for: k)
+                let t1 = Date()
+                let plane = DustRemoval.heal(f.planes[0], spots: spots, options: dust.options)
+                let healMs = Int(Date().timeIntervalSince(t1) * 1000)
+                let src = ChannelSource(kind: k, image: plane, fileName: f.fileName, url: url, formatDescription: f.formatDescription)
                 lock.lock(); sources[k] = src; lock.unlock()
-                print("loaded \(f.fileName) → \(k.rawValue) (\(Int(src.analysisMillis)) ms analysis)")
+                print("loaded \(f.fileName) → \(k.rawValue) (\(Int(src.analysisMillis)) ms analysis\(spots.isEmpty ? "" : ", \(spots.count) dust spots healed in \(healMs) ms"))")
             } else {
                 print("skipped \(f.fileName): channel not recognised (use --assign)")
             }
@@ -151,7 +172,7 @@ case "render":
     var settings = CombineSettings()
     if let pj = projectArg, let data = FileManager.default.contents(atPath: pj) {
         if let s = try? JSONDecoder().decode(CombineSettings.self, from: data) { settings = s }
-        else if let doc = try? JSONDecoder().decode(ProjectDocument.self, from: data) { settings = doc.settings }
+        else if let doc = projectDoc { settings = doc.settings }
     }
     if let n = normArg, let m = NormalizationMethod(rawValue: n) { settings.normalization.method = m }
     if let st = stageArg { settings.stretchStage = st == "post" ? .postCombine : .preCombine }
@@ -178,6 +199,7 @@ case "render":
         if let l = lum { applyLum(l, &s) }
         doc.settings = s
         doc.crop = crop
+        doc.dust = dust
         doc.channels = sources.values.sorted { $0.kind.rawValue < $1.kind.rawValue }.compactMap { src in src.url.map { ProjectDocument.ChannelRef(kind: src.kind, path: $0.path) } }
         try doc.data().write(to: URL(fileURLWithPath: sp))
         print("project written to \(sp)")

@@ -96,6 +96,24 @@ final class ProjectModel {
     /// Set by the File menu to show the export sheet.
     var exportRequested = false
 
+    // MARK: Dust spots
+    /// Loaded (oriented) planes before dust healing; the same instance as the channel image when a
+    /// channel has no spots.
+    private(set) var originalImages: [ChannelKind: PlanarImage] = [:]
+    /// Spots applied to the channels (stored in the project).
+    private(set) var dust = DustSettings()
+    /// Working copy while the dust editor is open; changes are previewed on the edited channel.
+    var dustDraft: DustSettings? = nil {
+        didSet { if dustDraft != oldValue, dustEditing != nil { scheduleDustPreview() } }
+    }
+    /// Channel shown in the dust editor (nil = editor closed).
+    private(set) var dustEditing: ChannelKind? = nil
+    var selectedDustSpot: UUID? = nil
+    private var dustPreviewTimer: Timer?
+    private var dustPreviewGeneration = 0
+    /// Channels whose live source currently shows draft spots (restored on cancel).
+    private var dustPreviewed: Set<ChannelKind> = []
+
     // MARK: Derived state
     private(set) var context: RenderContext? = nil
     private(set) var analysisSamples: [ChannelKind: PlanarImage] = [:]
@@ -123,7 +141,7 @@ final class ProjectModel {
 
     /// Settings currently displayed (a single channel while peeking).
     var displayedSettings: CombineSettings {
-        if let k = peekChannel, sources[k] != nil { return ProjectModel.peekSettings(for: k, base: settings) }
+        if let k = peekChannel ?? dustEditing, sources[k] != nil { return ProjectModel.peekSettings(for: k, base: settings) }
         return settings
     }
 
@@ -326,20 +344,25 @@ final class ProjectModel {
         guard !items.isEmpty else { return }
         isLoading = true
         loadingMessage = "Analysing \(items.map { $0.0.shortName }.joined(separator: ", "))…"
-        let crop = self.crop, orient = orientation
+        let crop = self.crop, orient = orientation, dust = self.dust
         Task.detached(priority: .userInitiated) {
             var built: [ChannelSource?] = Array(repeating: nil, count: items.count)
+            var originals: [PlanarImage?] = Array(repeating: nil, count: items.count)
             let lock = NSLock()
             DispatchQueue.concurrentPerform(iterations: items.count) { i in
                 let (kind, plane, name, url, fmt) = items[i]
-                let src = ChannelSource(kind: kind, image: orient.apply(to: plane), fileName: name, url: url, formatDescription: fmt)
-                lock.lock(); built[i] = src; lock.unlock()
+                let oriented = orient.apply(to: plane)
+                let healed = DustRemoval.heal(oriented, spots: dust.spots(for: kind), options: dust.options)
+                let src = ChannelSource(kind: kind, image: healed, fileName: name, url: url, formatDescription: fmt)
+                lock.lock(); built[i] = src; originals[i] = oriented; lock.unlock()
             }
             let cropped: [ChannelSource] = built.compactMap { $0 }.map { crop == nil ? $0 : ChannelSource($0, region: crop) }
             let thumbs = cropped.map { ($0.kind, ProjectModel.slotThumbnail($0)) }
             let base = built.compactMap { $0 }
+            let origs = originals.compactMap { $0 }
             await MainActor.run {
                 for (b, c) in zip(base, cropped) { self.baseSources[b.kind] = b; self.sources[c.kind] = c }
+                for (b, o) in zip(base, origs) { self.originalImages[b.kind] = o }
                 for (k, t) in thumbs { if let t { self.slotThumbnails[k] = t } }
                 self.isLoading = false
                 self.sourcesChanged()
@@ -356,6 +379,11 @@ final class ProjectModel {
         baseSources.removeValue(forKey: kind)
         sources.removeValue(forKey: kind)
         slotThumbnails.removeValue(forKey: kind)
+        originalImages.removeValue(forKey: kind)
+        dust.spots.removeValue(forKey: kind)
+        dustDraft?.spots.removeValue(forKey: kind)
+        dustPreviewed.remove(kind)
+        if dustEditing == kind { dustEditing = nil; dustDraft = nil }
         if sources.isEmpty { frame = nil; crop = nil; cropDraft = nil; cropEditing = false }
         sourcesChanged()
     }
@@ -363,6 +391,7 @@ final class ProjectModel {
     func removeAll() {
         baseSources = [:]; sources = [:]; slotThumbnails = [:]; frame = nil; thumbnails = [:]
         crop = nil; cropDraft = nil; cropEditing = false; orientation = .identity
+        originalImages = [:]; dust = DustSettings(); dustDraft = nil; dustEditing = nil; dustPreviewed = []
         sourcesChanged()
     }
 
@@ -380,24 +409,34 @@ final class ProjectModel {
         orientation = orientation.applying(op)
         let newCrop = crop?.applying(op, imageWidth: w, imageHeight: h)
         cropDraft = cropDraft?.applying(op, imageWidth: w, imageHeight: h)
+        func mapSpots(_ d: DustSettings) -> DustSettings { var m = d; m.spots = d.spots.mapValues { $0.map { $0.applying(op, imageWidth: w, imageHeight: h) } }; return m }
+        dust = mapSpots(dust)
+        if let d = dustDraft { dustDraft = mapSpots(d) }
+        let dust = self.dust, draft = self.dustDraft, editing = self.dustEditing
+        let originals = originalImages
         isLoading = true
         loadingMessage = op == .rotateClockwise ? "Rotating…" : "Flipping…"
         frame = nil
         Task.detached(priority: .userInitiated) {
             let kinds = Array(base.keys)
-            var newBase: [ChannelKind: ChannelSource] = [:], newCur: [ChannelKind: ChannelSource] = [:]
+            var newBase: [ChannelKind: ChannelSource] = [:], newCur: [ChannelKind: ChannelSource] = [:], newOrig: [ChannelKind: PlanarImage] = [:]
             let lock = NSLock()
             DispatchQueue.concurrentPerform(iterations: kinds.count) { i in
                 let k = kinds[i], old = base[k]!
-                let b = ChannelSource(kind: k, image: old.image.applying(op), fileName: old.fileName, url: old.url, formatDescription: old.formatDescription)
+                let orig = (originals[k] ?? old.image).applying(op)
+                // The edited channel keeps showing its draft spots.
+                let d = (k == editing ? draft : nil) ?? dust
+                let healed = DustRemoval.heal(orig, spots: d.spots(for: k), options: d.options)
+                let b = ChannelSource(kind: k, image: healed, fileName: old.fileName, url: old.url, formatDescription: old.formatDescription)
                 let c = newCrop == nil ? b : ChannelSource(b, region: newCrop)
-                lock.lock(); newBase[k] = b; newCur[k] = c; lock.unlock()
+                lock.lock(); newBase[k] = b; newCur[k] = c; newOrig[k] = orig; lock.unlock()
             }
-            let nb = newBase, nc = newCur
+            let nb = newBase, nc = newCur, no = newOrig
             let thumbs = nc.values.map { ($0.kind, ProjectModel.slotThumbnail($0)) }
             await MainActor.run {
                 self.baseSources = nb
                 self.sources = nc
+                self.originalImages = no
                 for (k, t) in thumbs { if let t { self.slotThumbnails[k] = t } }
                 self.isLoading = false
                 self.postStretchCache = [:]
@@ -416,14 +455,22 @@ final class ProjectModel {
     func reassign(_ kind: ChannelKind, to newKind: ChannelKind) {
         guard kind != newKind, let src = baseSources[kind], let cur = sources[kind] else { return }
         let otherBase = baseSources[newKind], otherCur = sources[newKind], otherThumb = slotThumbnails[newKind]
+        let otherOrig = originalImages[newKind], otherSpots = dust.spots[newKind], otherDraft = dustDraft?.spots[newKind]
         baseSources[newKind] = ChannelSource(src, kind: newKind)
         sources[newKind] = ChannelSource(cur, kind: newKind)
         slotThumbnails[newKind] = slotThumbnails[kind]
+        originalImages[newKind] = originalImages[kind]
+        dust.spots[newKind] = dust.spots[kind]
+        dustDraft?.spots[newKind] = dustDraft?.spots[kind]
         if let ob = otherBase, let oc = otherCur {
             baseSources[kind] = ChannelSource(ob, kind: kind); sources[kind] = ChannelSource(oc, kind: kind); slotThumbnails[kind] = otherThumb
+            originalImages[kind] = otherOrig; dust.spots[kind] = otherSpots; dustDraft?.spots[kind] = otherDraft
         } else {
             baseSources.removeValue(forKey: kind); sources.removeValue(forKey: kind); slotThumbnails.removeValue(forKey: kind)
+            originalImages.removeValue(forKey: kind); dust.spots.removeValue(forKey: kind); dustDraft?.spots.removeValue(forKey: kind)
         }
+        if dustPreviewed.contains(kind) { dustPreviewed.remove(kind); dustPreviewed.insert(newKind) }
+        if dustEditing == kind { dustEditing = newKind }
         sourcesChanged()
     }
 
@@ -511,6 +558,7 @@ final class ProjectModel {
                     self.orientation = st.orientation
                     self.settings = st.settings
                     self.crop = st.crop
+                    self.dust = st.dust
                     self.presets = st.presets
                     self.presetThumbnailCache = [:]
                 }
@@ -571,6 +619,7 @@ final class ProjectModel {
     }
 
     func beginCropEditing() {
+        if dustEditing != nil { cancelDustEditing() }
         cropDraft = crop ?? imageSize.map { PixelRect(x: Int($0.width * 0.1), y: Int($0.height * 0.1), width: Int($0.width * 0.8), height: Int($0.height * 0.8)) }
         cropEditing = true
     }
@@ -756,6 +805,7 @@ final class ProjectModel {
         doc.settings = settings
         doc.crop = crop
         doc.orientation = orientation
+        doc.dust = dust
         doc.presets = presets
         doc.channels = sources.values.sorted { $0.kind.rawValue < $1.kind.rawValue }.compactMap { s in
             s.url.map { ProjectDocument.ChannelRef(kind: s.kind, path: $0.path) }
@@ -778,6 +828,7 @@ final class ProjectModel {
             presetThumbnailCache = [:]
             let refs = doc.channels
             orientation = doc.orientation
+            dust = doc.dust
             guard !refs.isEmpty else { settings = doc.settings; crop = doc.crop; return }
             isLoading = true
             loadingMessage = "Loading project…"
@@ -876,4 +927,171 @@ extension ProjectModel {
 extension ProjectModel {
     /// Histogram of the current preview (256 bins per output channel).
     var histogram: [[Int]] { histogramStorage }
+}
+
+// MARK: - Dust spots
+
+extension ProjectModel {
+    /// Spots the editor currently shows (the draft while editing, else the applied ones).
+    func dustSpots(for kind: ChannelKind) -> [DustSpot] { (dustDraft ?? dust).spots(for: kind) }
+
+    /// Radius given to a new spot when nothing is found around the click (scales with the image).
+    var defaultDustRadius: Double { imageSize.map { max(20, min($0.width, $0.height) / 60) } ?? 30 }
+
+    /// Opens the dust editor on a channel (the preview shows that channel alone, with the draft spots).
+    func beginDustEditing(_ kind: ChannelKind) {
+        guard sources[kind] != nil else { return }
+        if cropEditing { cancelCropEditing() }
+        if dustEditing == nil { dustDraft = dust }
+        dustEditing = kind
+        selectedDustSpot = nil
+        scheduleRender()
+    }
+
+    /// Switches the editor to another loaded channel, keeping every draft.
+    func switchDustChannel(_ kind: ChannelKind) {
+        guard dustEditing != nil, dustEditing != kind, sources[kind] != nil else { return }
+        dustEditing = kind
+        selectedDustSpot = nil
+        scheduleRender()
+    }
+
+    /// Adds a spot at an image point, fitted to the shadow found there (plain spot of the default
+    /// radius when nothing is found).
+    func addDustSpot(at p: CGPoint) {
+        guard let k = dustEditing, var d = dustDraft, let orig = originalImages[k] ?? baseSources[k]?.image else { return }
+        let spot = DustRemoval.fit(image: orig, x: p.x, y: p.y, radius: defaultDustRadius, options: d.options)
+            ?? DustSpot(x: p.x, y: p.y, radius: defaultDustRadius)
+        d.spots[k, default: []].append(spot)
+        dustDraft = d
+        selectedDustSpot = spot.id
+    }
+
+    /// Replaces the spots of the edited channel (moves / resizes from the preview).
+    func updateDustSpots(_ spots: [DustSpot]) {
+        guard let k = dustEditing else { return }
+        dustDraft?.spots[k] = spots
+    }
+
+    func removeSelectedDustSpot() {
+        guard let k = dustEditing, let id = selectedDustSpot else { return }
+        dustDraft?.spots[k]?.removeAll { $0.id == id }
+        selectedDustSpot = nil
+    }
+
+    /// Re-runs the fit from the centre of the selected spot (after moving it by hand, say).
+    func refitSelectedDustSpot() {
+        guard let k = dustEditing, let id = selectedDustSpot, var d = dustDraft, let orig = originalImages[k] ?? baseSources[k]?.image,
+              let i = d.spots[k]?.firstIndex(where: { $0.id == id }) else { return }
+        let s = d.spots[k]![i]
+        guard let f = DustRemoval.fit(image: orig, x: s.x, y: s.y, radius: s.radius / 2, options: d.options) else { statusText = "No shadow found around the spot."; return }
+        d.spots[k]![i] = DustSpot(x: f.x, y: f.y, radius: f.radius, id: id)
+        dustDraft = d
+    }
+
+    func clearDustSpots() {
+        guard let k = dustEditing else { return }
+        dustDraft?.spots[k] = []
+        selectedDustSpot = nil
+    }
+
+    /// Copies the spots of the edited channel to every other loaded channel (dust on the sensor
+    /// window shadows every filter at the same place).
+    func copyDustSpotsToAllChannels() {
+        guard let k = dustEditing, var d = dustDraft else { return }
+        let spots = d.spots(for: k)
+        for other in sources.keys where other != k {
+            d.spots[other] = spots.map { DustSpot(x: $0.x, y: $0.y, radius: $0.radius) }
+        }
+        dustDraft = d
+    }
+
+    /// Applies the draft: channels whose spots (or parameters) changed are healed from the original
+    /// and fully re-analysed; everything downstream is recomputed once.
+    func commitDustEditing() {
+        guard let draft = dustDraft else { dustEditing = nil; return }
+        dustPreviewTimer?.invalidate()
+        dustPreviewGeneration += 1
+        let changed = Set(sources.keys).filter { k in
+            draft.spots(for: k) != dust.spots(for: k) || (!draft.spots(for: k).isEmpty && draft.options != dust.options)
+        }
+        dust = draft
+        dustDraft = nil
+        dustEditing = nil
+        selectedDustSpot = nil
+        rebuildHealed(kinds: changed.union(dustPreviewed))
+        dustPreviewed = []
+        scheduleRecentStateSave()
+    }
+
+    /// Drops the draft and puts the previewed channels back to their applied state.
+    func cancelDustEditing() {
+        dustPreviewTimer?.invalidate()
+        dustPreviewGeneration += 1
+        dustDraft = nil
+        dustEditing = nil
+        selectedDustSpot = nil
+        let previewed = dustPreviewed
+        dustPreviewed = []
+        if previewed.isEmpty { scheduleRender() } else { rebuildHealed(kinds: previewed) }
+    }
+
+    /// Live preview of the draft on the edited channel: heals from the original and swaps the source
+    /// in with the statistics it already has (statistics barely move with a few local spots), so
+    /// only a render follows. Debounced and latest-wins.
+    private func scheduleDustPreview() {
+        dustPreviewTimer?.invalidate()
+        dustPreviewTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.dustPreview() }
+        }
+    }
+
+    private func dustPreview() {
+        guard let k = dustEditing, let d = dustDraft, let orig = originalImages[k], let base = baseSources[k] else { return }
+        dustPreviewGeneration += 1
+        let gen = dustPreviewGeneration
+        let spots = d.spots(for: k), options = d.options, crop = self.crop
+        dustPreviewed.insert(k)
+        Task.detached(priority: .userInitiated) {
+            let healed = DustRemoval.heal(orig, spots: spots, options: options)
+            let b = ChannelSource(base, image: healed)
+            let c = crop == nil ? b : ChannelSource(b, region: crop)
+            await MainActor.run {
+                guard gen == self.dustPreviewGeneration, self.dustEditing == k else { return }
+                self.baseSources[k] = b
+                self.sources[k] = c
+                self.scheduleRender()
+            }
+        }
+    }
+
+    /// Heals `kinds` from their originals with the applied spots and rebuilds their sources
+    /// (statistics, star mask, thumbnails), then the render context.
+    private func rebuildHealed(kinds: Set<ChannelKind>) {
+        let todo = kinds.filter { baseSources[$0] != nil && originalImages[$0] != nil }
+        guard !todo.isEmpty else { scheduleRender(); return }
+        let base = baseSources, originals = originalImages, dust = self.dust, crop = self.crop
+        isLoading = true
+        loadingMessage = "Healing dust spots…"
+        Task.detached(priority: .userInitiated) {
+            let kinds = Array(todo)
+            var out: [ChannelKind: (ChannelSource, ChannelSource)] = [:]
+            let lock = NSLock()
+            DispatchQueue.concurrentPerform(iterations: kinds.count) { i in
+                let k = kinds[i], old = base[k]!
+                let healed = DustRemoval.heal(originals[k]!, spots: dust.spots(for: k), options: dust.options)
+                let b = ChannelSource(kind: k, image: healed, fileName: old.fileName, url: old.url, formatDescription: old.formatDescription)
+                let c = crop == nil ? b : ChannelSource(b, region: crop)
+                lock.lock(); out[k] = (b, c); lock.unlock()
+            }
+            let result = out
+            let thumbs = result.map { ($0.key, ProjectModel.slotThumbnail($0.value.1)) }
+            await MainActor.run {
+                for (k, (b, c)) in result { self.baseSources[k] = b; self.sources[k] = c }
+                for (k, t) in thumbs { if let t { self.slotThumbnails[k] = t } }
+                self.isLoading = false
+                self.sourcesChanged()
+            }
+        }
+    }
 }

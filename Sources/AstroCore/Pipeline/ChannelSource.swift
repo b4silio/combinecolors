@@ -49,6 +49,14 @@ public final class ChannelSource {
         analysisMillis = Date().timeIntervalSince(t0) * 1000
     }
 
+    /// Same source over a different image (new pyramid) but with the statistics and the star mask of
+    /// `other`: for quick previews of local edits (dust spots) that leave the global statistics as they are.
+    public init(_ other: ChannelSource, image: PlanarImage) {
+        kind = other.kind; pyramid = Pyramid(base: image); mask = other.mask; maskLevel = other.maskLevel
+        fileName = other.fileName; url = other.url; formatDescription = other.formatDescription
+        region = other.region; stats = other.stats; maskedStats = other.maskedStats; analysisMillis = other.analysisMillis
+    }
+
     /// Same source with a different channel kind (no recomputation).
     public init(_ other: ChannelSource, kind: ChannelKind) {
         self.kind = kind; pyramid = other.pyramid; mask = other.mask; maskLevel = other.maskLevel

@@ -108,6 +108,19 @@ struct ChannelSlotView: View {
                     .allowsHitTesting(false)
             }
         }
+        .overlay(alignment: .bottomLeading) {
+            let n = model.dustSpots(for: kind).count
+            if source != nil, n > 0 {
+                Label("\(n)", systemImage: "circle.dotted")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 4).padding(.vertical, 1)
+                    .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 3))
+                    .padding(4)
+                    .allowsHitTesting(false)
+                    .help("\(n) dust spot\(n == 1 ? "" : "s") healed on this channel")
+            }
+        }
         .overlay(alignment: .topTrailing) {
             if let s = source {
                 Menu {
@@ -117,6 +130,7 @@ struct ChannelSlotView: View {
                         }
                     }
                     Divider()
+                    Button("Heal Dust Spots…") { model.beginDustEditing(kind) }
                     Button("Save channel as FITS…") {
                         Panels.save(name: s.fileName.replacingOccurrences(of: ".fits", with: "") + "-\(kind.rawValue).fits", type: UTType("public.fits") ?? .data, message: "Save the channel (cropped if a crop is set).") { url in
                             try? model.exportChannel(kind, to: url, format: .fits32)

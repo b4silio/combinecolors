@@ -5,7 +5,8 @@ import AstroCore
 enum ZoomAction { case fit, actualSize, zoomIn, zoomOut }
 
 /// AppKit view that displays the rendered preview with smooth zoom/pan (CALayer composited),
-/// a crop overlay and interactive crop editing.
+/// a crop overlay with interactive crop editing, and the dust-spot editor (circles that can be
+/// added by clicking, moved, resized by their handle and deleted).
 final class ZoomPanNSView: NSView {
     var imageSize: CGSize = .zero { didSet { if imageSize != oldValue { needsFit = true; needsLayout = true } } }
     var zoom: CGFloat = 1
@@ -18,20 +19,36 @@ final class ZoomPanNSView: NSView {
     var cropEditing = false { didSet { updateOverlay(); updateCursor() } }
     var cropDraft: PixelRect? { didSet { updateOverlay() } }
     var cropOverlay: CropOverlayMode = .frame { didSet { updateOverlay() } }
+    var dustEditing = false { didSet { updateDustOverlay(); updateCursor() } }
+    var dustSpots: [DustSpot] = [] { didSet { updateDustOverlay() } }
+    var selectedDustSpot: UUID? = nil { didSet { updateDustOverlay() } }
     private var lastBounds: CGRect = .zero
 
     var onViewportChange: ((CGRect, Double) -> Void)?
     var onHover: ((CGPoint?) -> Void)?
     var onCropDraftChange: ((PixelRect?) -> Void)?
     var onDoubleClick: (() -> Void)?
+    var onDustSpotsChange: (([DustSpot]) -> Void)?
+    var onDustAdd: ((CGPoint) -> Void)?
+    var onDustSelect: ((UUID?) -> Void)?
+    var onDustDelete: (() -> Void)?
 
     private let imageLayer = CALayer()
     private let dimLayers = (0..<4).map { _ in CALayer() }
     private let cropBorder = CAShapeLayer()
     private let handleLayers = (0..<8).map { _ in CALayer() }
+    private let dustLayer = CAShapeLayer()
+    private let dustSelectedLayer = CAShapeLayer()
+    private let dustHandle = CALayer()
     private var trackingArea: NSTrackingArea?
 
-    private enum Drag { case none, pan(CGPoint), move(PixelRect, CGPoint), resize(Int, PixelRect), create(CGPoint) }
+    private enum Drag {
+        case none, pan(CGPoint), move(PixelRect, CGPoint), resize(Int, PixelRect), create(CGPoint)
+        /// Dust editor: a press on empty sky pans, and adds a spot when released without moving.
+        case dustPan(last: CGPoint, start: CGPoint, moved: Bool)
+        case dustMove(UUID, DustSpot, CGPoint)
+        case dustResize(UUID)
+    }
     private var drag: Drag = .none
 
     override init(frame: NSRect) {
@@ -57,9 +74,23 @@ final class ZoomPanNSView: NSView {
             h.cornerRadius = 2
             layer?.addSublayer(h)
         }
+        dustLayer.fillColor = nil
+        dustLayer.strokeColor = NSColor.white.withAlphaComponent(0.85).cgColor
+        dustLayer.lineWidth = 1
+        dustLayer.lineDashPattern = [4, 3]
+        dustSelectedLayer.fillColor = nil
+        dustSelectedLayer.strokeColor = NSColor.systemYellow.cgColor
+        dustSelectedLayer.lineWidth = 1.5
+        dustHandle.backgroundColor = NSColor.systemYellow.cgColor
+        dustHandle.borderColor = NSColor.black.cgColor
+        dustHandle.borderWidth = 1
+        dustHandle.cornerRadius = 5
+        layer?.addSublayer(dustLayer)
+        layer?.addSublayer(dustSelectedLayer)
+        layer?.addSublayer(dustHandle)
         layer?.actions = ["sublayers": NSNull()]
         imageLayer.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull(), "frame": NSNull()]
-        for l in dimLayers + handleLayers + [cropBorder] { l.actions = ["bounds": NSNull(), "position": NSNull(), "frame": NSNull(), "path": NSNull(), "hidden": NSNull()] }
+        for l in dimLayers + handleLayers + [cropBorder, dustLayer, dustSelectedLayer, dustHandle] { l.actions = ["bounds": NSNull(), "position": NSNull(), "frame": NSNull(), "path": NSNull(), "hidden": NSNull()] }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -102,6 +133,7 @@ final class ZoomPanNSView: NSView {
         }
         updateImageLayer()
         updateOverlay()
+        updateDustOverlay()
         notifyViewport()
     }
 
@@ -208,7 +240,79 @@ final class ZoomPanNSView: NSView {
     private func updateCursor() { window?.invalidateCursorRects(for: self) }
 
     override func resetCursorRects() {
-        addCursorRect(bounds, cursor: cropEditing ? .crosshair : .openHand)
+        addCursorRect(bounds, cursor: cropEditing || dustEditing ? .crosshair : .openHand)
+    }
+
+    // MARK: Dust spots
+
+    /// Handle used to resize the selected spot: on its rim, to the right of the centre.
+    private func dustHandlePoint(_ s: DustSpot) -> CGPoint { viewPoint(CGPoint(x: s.x + s.radius, y: s.y)) }
+
+    private func updateDustOverlay() {
+        guard dustEditing, imageSize != .zero else { dustLayer.isHidden = true; dustSelectedLayer.isHidden = true; dustHandle.isHidden = true; return }
+        let others = CGMutablePath(), selected = CGMutablePath()
+        var handle: CGPoint? = nil
+        for s in dustSpots {
+            let c = viewPoint(s.center), r = s.radius * zoom
+            let rect = toAppKit(CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
+            if s.id == selectedDustSpot {
+                selected.addEllipse(in: rect)
+                // Small cross at the centre.
+                let p = toAppKit(CGRect(x: c.x - 4, y: c.y - 4, width: 8, height: 8))
+                selected.move(to: CGPoint(x: p.minX, y: p.midY)); selected.addLine(to: CGPoint(x: p.maxX, y: p.midY))
+                selected.move(to: CGPoint(x: p.midX, y: p.minY)); selected.addLine(to: CGPoint(x: p.midX, y: p.maxY))
+                handle = dustHandlePoint(s)
+            } else {
+                others.addEllipse(in: rect)
+            }
+        }
+        dustLayer.isHidden = false; dustLayer.path = others
+        dustSelectedLayer.isHidden = false; dustSelectedLayer.path = selected
+        if let h = handle { dustHandle.isHidden = false; dustHandle.frame = toAppKit(CGRect(x: h.x - 5, y: h.y - 5, width: 10, height: 10)) }
+        else { dustHandle.isHidden = true }
+    }
+
+    /// The spot under a view point (the smallest one when several overlap).
+    private func dustSpot(at p: CGPoint) -> DustSpot? {
+        let ip = imagePoint(p)
+        return dustSpots.filter { hypot(ip.x - $0.x, ip.y - $0.y) <= $0.radius }.min { $0.radius < $1.radius }
+    }
+
+    private func dustMouseDown(_ p: CGPoint) {
+        if let id = selectedDustSpot, let s = dustSpots.first(where: { $0.id == id }) {
+            let h = dustHandlePoint(s)
+            if hypot(p.x - h.x, p.y - h.y) <= 8 { drag = .dustResize(id); return }
+        }
+        if let s = dustSpot(at: p) {
+            if s.id != selectedDustSpot { onDustSelect?(s.id) }
+            drag = .dustMove(s.id, s, imagePoint(p))
+            return
+        }
+        drag = .dustPan(last: p, start: p, moved: false)
+    }
+
+    private func dustMouseDragged(_ p: CGPoint, _ ip: CGPoint) {
+        switch drag {
+        case .dustPan(let last, let start, let moved):
+            origin.x += p.x - last.x; origin.y += p.y - last.y
+            drag = .dustPan(last: p, start: start, moved: moved || hypot(p.x - start.x, p.y - start.y) > 3)
+            clampOrigin()
+            needsLayout = true
+        case .dustMove(let id, let start, let anchor):
+            guard let i = dustSpots.firstIndex(where: { $0.id == id }) else { return }
+            var spots = dustSpots
+            spots[i].x = min(max(start.x + ip.x - anchor.x, 0), imageSize.width)
+            spots[i].y = min(max(start.y + ip.y - anchor.y, 0), imageSize.height)
+            dustSpots = spots
+            onDustSpotsChange?(spots)
+        case .dustResize(let id):
+            guard let i = dustSpots.firstIndex(where: { $0.id == id }) else { return }
+            var spots = dustSpots
+            spots[i].radius = max(3, hypot(ip.x - spots[i].x, ip.y - spots[i].y))
+            dustSpots = spots
+            onDustSpotsChange?(spots)
+        default: break
+        }
     }
 
     // MARK: Events
@@ -237,6 +341,7 @@ final class ZoomPanNSView: NSView {
         window?.makeFirstResponder(self)
         let p = topLeftPoint(event)
         if event.clickCount == 2 { onDoubleClick?(); return }
+        if dustEditing { dustMouseDown(p); return }
         if cropEditing {
             let ip = imagePoint(p)
             if let d = cropDraft {
@@ -256,6 +361,7 @@ final class ZoomPanNSView: NSView {
         func clampPoint(_ q: CGPoint) -> CGPoint { CGPoint(x: min(max(q.x, 0), imageSize.width), y: min(max(q.y, 0), imageSize.height)) }
         switch drag {
         case .none: break
+        case .dustPan, .dustMove, .dustResize: dustMouseDragged(p, ip)
         case .pan(let last):
             origin.x += p.x - last.x; origin.y += p.y - last.y
             drag = .pan(p)
@@ -281,7 +387,13 @@ final class ZoomPanNSView: NSView {
         }
     }
 
-    override func mouseUp(with event: NSEvent) { drag = .none }
+    override func mouseUp(with event: NSEvent) {
+        if case .dustPan(_, let start, let moved) = drag, !moved {
+            let ip = imagePoint(start)
+            if ip.x >= 0, ip.y >= 0, ip.x < imageSize.width, ip.y < imageSize.height { onDustAdd?(ip) } else { onDustSelect?(nil) }
+        }
+        drag = .none
+    }
 
     override func mouseMoved(with event: NSEvent) {
         let ip = imagePoint(topLeftPoint(event))
@@ -296,6 +408,7 @@ final class ZoomPanNSView: NSView {
         case "-": perform(.zoomOut)
         case "0": perform(.fit)
         case "1": perform(.actualSize)
+        case "\u{7F}", "\u{08}": if dustEditing { onDustDelete?() } else { super.keyDown(with: event) }
         default: super.keyDown(with: event)
         }
     }
@@ -312,6 +425,10 @@ struct PreviewView: NSViewRepresentable {
         }
         v.onHover = { p in Task { @MainActor in model.updateHover(imagePoint: p) } }
         v.onCropDraftChange = { r in Task { @MainActor in model.cropDraft = r } }
+        v.onDustSpotsChange = { spots in Task { @MainActor in model.updateDustSpots(spots) } }
+        v.onDustAdd = { p in Task { @MainActor in model.addDustSpot(at: p) } }
+        v.onDustSelect = { id in Task { @MainActor in model.selectedDustSpot = id } }
+        v.onDustDelete = { Task { @MainActor in model.removeSelectedDustSpot() } }
         v.onDoubleClick = { [weak v] in
             guard let v else { return }
             if abs(v.zoom * v.backing - 1) < 0.01 { v.perform(.fit) } else { v.perform(.actualSize) }
@@ -326,6 +443,11 @@ struct PreviewView: NSViewRepresentable {
         if v.cropEditing != model.cropEditing { v.cropEditing = model.cropEditing }
         if v.cropDraft != model.cropDraft { v.cropDraft = model.cropDraft }
         if v.cropOverlay != model.cropOverlay { v.cropOverlay = model.cropOverlay }
+        let dustEditing = model.dustEditing != nil
+        if v.dustEditing != dustEditing { v.dustEditing = dustEditing }
+        let spots = model.dustEditing.map { model.dustSpots(for: $0) } ?? []
+        if v.dustSpots != spots { v.dustSpots = spots }
+        if v.selectedDustSpot != model.selectedDustSpot { v.selectedDustSpot = model.selectedDustSpot }
         if context.coordinator.fitRequest != model.fitRequest {
             context.coordinator.fitRequest = model.fitRequest
             DispatchQueue.main.async { v.perform(.fit) }

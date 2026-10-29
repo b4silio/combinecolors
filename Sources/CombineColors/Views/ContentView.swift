@@ -104,8 +104,11 @@ struct ContentView: View {
 
     private var previewToolbar: some View {
         VStack(alignment: .trailing, spacing: 4) {
+            if model.dustEditing != nil { dustToolbar }
             HStack(spacing: 4) {
-                if model.cropEditing {
+                if model.dustEditing != nil {
+                    EmptyView()
+                } else if model.cropEditing {
                     Button("Apply") { model.commitCropEditing() }.keyboardShortcut(.return, modifiers: [])
                     Button("Cancel") { model.cancelCropEditing() }.keyboardShortcut(.escape, modifiers: [])
                 } else {
@@ -145,6 +148,60 @@ struct ContentView: View {
         .padding(6)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
         .padding(8)
+    }
+
+    /// Dust-spot editor: channel switch, model and parameters, spot actions.
+    private var dustToolbar: some View {
+        let kind = model.dustEditing ?? .luminance
+        let draft = Binding(get: { model.dustDraft ?? DustSettings() }, set: { model.dustDraft = $0 })
+        let loaded = ChannelKind.allCases.filter { model.sources[$0] != nil }
+        let spots = model.dustSpots(for: kind)
+        return VStack(alignment: .trailing, spacing: 4) {
+            HStack(spacing: 6) {
+                Label("Dust spots", systemImage: "circle.dotted").font(.caption.bold())
+                Picker("", selection: Binding(get: { kind }, set: { model.switchDustChannel($0) })) {
+                    ForEach(loaded) { k in Text(k.shortName).tag(k) }
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
+                .help("Channel shown; the spots of every channel are kept until Apply")
+                Button("Apply") { model.commitDustEditing() }.keyboardShortcut(.return, modifiers: [])
+                Button("Cancel") { model.cancelDustEditing() }.keyboardShortcut(.escape, modifiers: [])
+            }
+            HStack(spacing: 6) {
+                Picker("", selection: draft.model) { ForEach(DustModel.allCases) { Text($0.displayName).tag($0) } }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize()
+                    .help("Local flat: free-form shadow (star-masked smoothing of the ratio to the surrounding sky), follows irregular motes and fringes.\nRadial profile: one transmission per distance to the centre, robust to nebulosity, for round motes and donuts.")
+                SliderRow(title: "Smooth", value: Binding(get: { Float(draft.wrappedValue.smoothness) }, set: { draft.wrappedValue.smoothness = Double($0) }), range: 1...12, defaultValue: 3, format: "%.1f",
+                          help: "Smoothing of the shadow estimate in pixels (σ of the local flat, window of the radial profile)", labelWidth: 46)
+                    .frame(width: 170)
+                SliderRow(title: "Feather", value: Binding(get: { Float(draft.wrappedValue.feather) }, set: { draft.wrappedValue.feather = Double($0) }), range: 0...0.5, defaultValue: 0.2, format: "%.2f",
+                          help: "Fraction of the radius over which the correction fades out at the edge", labelWidth: 46)
+                    .frame(width: 170)
+            }
+            HStack(spacing: 6) {
+                Text("\(spots.count) spot\(spots.count == 1 ? "" : "s")").font(.caption).foregroundStyle(.secondary)
+                Button("Fit") { model.refitSelectedDustSpot() }.disabled(model.selectedDustSpot == nil)
+                    .help("Re-centre and resize the selected spot on the shadow found around it")
+                Button("Delete") { model.removeSelectedDustSpot() }.disabled(model.selectedDustSpot == nil).help("Remove the selected spot (⌫)")
+                Button("Clear") { model.clearDustSpots() }.disabled(spots.isEmpty).help("Remove every spot of this channel")
+                Button("Copy to all") { model.copyDustSpotsToAllChannels() }.disabled(spots.isEmpty || loaded.count < 2)
+                    .help("Give every other loaded channel the same spots (dust on the sensor window shadows every filter alike)")
+            }
+            if let id = model.selectedDustSpot, let i = spots.firstIndex(where: { $0.id == id }) {
+                let s = Binding(get: { model.dustSpots(for: kind)[safe: i] ?? spots[i] }, set: { var all = model.dustSpots(for: kind); if i < all.count { all[i] = $0; model.updateDustSpots(all) } })
+                Grid(alignment: .trailing, horizontalSpacing: 4, verticalSpacing: 2) {
+                    GridRow {
+                        Text("X"); TextField("x", value: s.x, format: .number.precision(.fractionLength(1))).frame(width: 64)
+                        Text("Y"); TextField("y", value: s.y, format: .number.precision(.fractionLength(1))).frame(width: 64)
+                        Text("R"); TextField("r", value: s.radius, format: .number.precision(.fractionLength(1))).frame(width: 56)
+                    }
+                }
+                .font(.caption)
+                .textFieldStyle(.roundedBorder)
+            }
+            Text("Click a shadow to add a fitted spot · drag to move · drag the handle to resize · drag empty sky to pan")
+                .font(.system(size: 9)).foregroundStyle(.secondary)
+        }
     }
 
     /// Bottom-right of the preview: quality and zoom.

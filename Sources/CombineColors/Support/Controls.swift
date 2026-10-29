@@ -339,3 +339,8 @@ struct TriStateCheckbox: NSViewRepresentable {
         b.intrinsicContentSize
     }
 }
+
+extension Array {
+    /// Element at `i` or nil when out of range.
+    subscript(safe i: Int) -> Element? { i >= 0 && i < count ? self[i] : nil }
+}

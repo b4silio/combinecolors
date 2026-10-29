@@ -11,6 +11,8 @@ public enum StarMask {
         public var dilation: Int = 2
         /// Pyramid levels used to estimate the local background (2^n blur radius).
         public var backgroundLevels: Int = 3
+        /// Upper bound on the pixels sampled for the noise estimate.
+        public var maxSamples: Int = 300_000
         public init() {}
     }
 
@@ -26,8 +28,8 @@ public enum StarMask {
         vDSP_vsub(background.pointer, 1, image.pointer, 1, hp.pointer, 1, vDSP_Length(w * h)) // hp = image - background
         // Robust sigma of the residual on a sample excluding zero padding.
         var sampleHP: [Float] = []
-        sampleHP.reserveCapacity(300_000)
-        let step = max(1, (w * h) / 300_000)
+        sampleHP.reserveCapacity(min(w * h, options.maxSamples))
+        let step = max(1, (w * h) / options.maxSamples)
         var i = 0
         while i < w * h { if image.pointer[i] != 0 { sampleHP.append(hp.pointer[i]) }; i += step }
         var sigma: Float = 0

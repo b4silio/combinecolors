@@ -434,3 +434,59 @@ final class PeekTests: XCTestCase {
         try? await base.tearDown()
     }
 }
+
+extension ProjectModelTests {
+    func testDustSpotEditing() async throws {
+        let m = try await loadedModel()
+        let original = m.sources[.ha]!.image
+        XCTAssertTrue(m.originalImages[.ha] === original, "without spots the original is the channel image itself")
+        // Live preview while editing, dropped on cancel.
+        m.beginDustEditing(.ha)
+        XCTAssertEqual(m.dustEditing, .ha); XCTAssertNotNil(m.dustDraft)
+        XCTAssertEqual(m.displayedSettings.mode, .monochrome)
+        m.addDustSpot(at: CGPoint(x: 60, y: 70))
+        XCTAssertEqual(m.dustDraft?.spots(for: .ha).count, 1)
+        XCTAssertNotNil(m.selectedDustSpot)
+        await wait { m.sources[.ha]!.image !== original }
+        XCTAssertTrue(m.sources[.ha]!.image !== original, "the preview heals a copy")
+        m.cancelDustEditing()
+        XCTAssertNil(m.dustEditing); XCTAssertNil(m.dustDraft); XCTAssertTrue(m.dust.isEmpty)
+        await wait { m.sources[.ha]!.image === original && !m.isLoading }
+        XCTAssertTrue(m.sources[.ha]!.image === original, "cancel restores the applied state")
+        // Commit: the spot is healed on every channel it was copied to; pixels far away are untouched.
+        m.beginDustEditing(.ha)
+        m.addDustSpot(at: CGPoint(x: 60, y: 70))
+        m.copyDustSpotsToAllChannels()
+        XCTAssertEqual(m.dustDraft?.spots(for: .oiii).count, 1)
+        XCTAssertEqual(m.dustDraft?.spots(for: .sii).count, 1)
+        let spot = m.dustDraft!.spots(for: .ha)[0]
+        m.commitDustEditing()
+        XCTAssertNil(m.dustEditing)
+        await wait { !m.isLoading && m.sources[.ha]!.image !== original && m.sources[.oiii]!.image !== m.originalImages[.oiii]! && m.context != nil }
+        XCTAssertEqual(m.dust.spots(for: .ha), [spot])
+        XCTAssertEqual(m.sources[.ha]!.image[195, 145], original[195, 145])
+        XCTAssertEqual(m.sources[.oiii]!.image[195, 145], m.originalImages[.oiii]![195, 145])
+        XCTAssertEqual(m.projectDocument().dust, m.dust)
+        // Save / open keeps the spots and heals on load.
+        let url = dir.appendingPathComponent("dust.json")
+        try m.saveProject(to: url)
+        let m2 = ProjectModel()
+        m2.openProject(from: url)
+        await wait { m2.sources.count == 3 && !m2.isLoading && m2.context != nil }
+        XCTAssertEqual(m2.dust, m.dust)
+        var maxDiff: Float = 0
+        for i in 0..<m2.sources[.ha]!.image.count { maxDiff = max(maxDiff, abs(m2.sources[.ha]!.image.pointer[i] - m.sources[.ha]!.image.pointer[i])) }
+        XCTAssertEqual(maxDiff, 0, "the reopened project heals the same spots")
+        // Moving the channel takes its spots along; rotating maps them; removing drops them.
+        m.reassign(.ha, to: .luminance)
+        XCTAssertEqual(m.dust.spots(for: .luminance), [spot]); XCTAssertTrue(m.dust.spots(for: .ha).isEmpty)
+        XCTAssertNotNil(m.originalImages[.luminance]); XCTAssertNil(m.originalImages[.ha])
+        m.rotateClockwise()
+        await wait { !m.isLoading && m.imageSize?.width == 150 }
+        let r = m.dust.spots(for: .luminance)[0]
+        XCTAssertEqual(r.x, 150 - spot.y, accuracy: 1e-9); XCTAssertEqual(r.y, spot.x, accuracy: 1e-9); XCTAssertEqual(r.id, spot.id)
+        XCTAssertEqual(m.sources[.luminance]!.image.width, 150)
+        m.removeChannel(.luminance)
+        XCTAssertTrue(m.dust.spots(for: .luminance).isEmpty); XCTAssertNil(m.originalImages[.luminance])
+    }
+}

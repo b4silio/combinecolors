@@ -68,6 +68,28 @@ at full resolution.
   1:1) and a Camera-Raw-like masking slider that spares the noisy sky.
   RGB star blending (screen / lighten / add with a luminance mask,
   linear or already-stretched star images detected automatically).
+* **Dust spot healing** (channel menu › *Heal Dust Spots…*): removes the shadows of
+  dust motes and donuts from stacks that had no (or shifted) flats. A mote
+  attenuates the light, so the stacked image is the true scene times a
+  transmission map — the same multiplicative error a flat would divide out.
+  Click a shadow and the spot is fitted (centre and extent from the radial
+  profile against the surrounding sky); drag to move, drag the handle to
+  resize, ⌫ deletes, *Copy to all* gives every channel the same spots (dust on
+  the sensor window shadows every filter alike), the segmented control switches
+  the channel so all spots are set in one go. Two models: *Local flat*
+  (default) — the ratio of the pixels to a sky plane fitted around the spot
+  (star-masked, sigma-clipped, neighbouring spots excluded) is smoothed with a
+  star-masked Gaussian; the shadow's own outline is found as the connected
+  region below the sky noise, so elongated and irregular motes are corrected to
+  their real edge, and the correction fades out over a feather band beyond it.
+  *Radial profile* — one transmission per distance to the centre (median per
+  annulus), robust to nebulosity, for round motes and donuts. Stars under a spot
+  get the same gain (they were dimmed by the same shadow). The spots are applied
+  once to the loaded channel — before statistics, normalisation and everything
+  else — and cached; only Apply re-analyses the changed channels, every other
+  adjustment reuses the healed data. Stored in the project and the recent-set
+  state (oriented coordinates, so rotation and flips move them along).
+  CLI: `--dust OIII:x,y,r;x,y,r --dust-model surface|radial --dust-smooth --dust-feather`.
 * **Crop, rotation and flips**: one rectangle shared by every channel, drawn on the
   preview or typed in, or detected automatically from the empty registration
   borders. The crop drives statistics, channel thumbnails and the export; its
@@ -122,6 +144,8 @@ scheme runs the app).
    borders) — *Auto trim* finds the borders; or press the crop button, drag a
    rectangle, adjust it with the handles, press Return. The crop applies to all
    channels at once.
+   *Heal Dust Spots…* in a channel's menu opens the spot editor on that channel
+   (click a shadow, adjust, switch channels, Return applies).
 3. **Pick a palette** from the thumbnails in the right pane (the slider at the
    top changes their size). They are re-rendered with the current settings from
    the whole image, the crop or the current view (*From* menu). Hide palettes
