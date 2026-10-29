@@ -29,6 +29,7 @@ import AstroCore
 //      --save-project <file>  write a project file (channel paths, crop, settings) instead of/besides rendering
 //      --dust <kind>:x,y,r[;x,y,r…]  heal dust spots on a channel before anything else (repeatable; a project's
 //                             spots are applied too);  --dust-model surface | radial;  --dust-smooth <px>;  --dust-feather <0..0.5>
+//                             (the three parameters apply to the spots given with --dust)
 
 var args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else {
@@ -113,17 +114,17 @@ case "render":
     var projectDoc: ProjectDocument? = nil
     if let pj = projectArg, let data = FileManager.default.contents(atPath: pj) { projectDoc = try? JSONDecoder().decode(ProjectDocument.self, from: data) }
     var dust = projectDoc?.dust ?? DustSettings()
+    if let m = option("--dust-model").flatMap({ DustModel(rawValue: $0) }) { dust.model = m }
+    if let v = option("--dust-smooth").flatMap(Double.init) { dust.smoothness = v }
+    if let v = option("--dust-feather").flatMap(Double.init) { dust.feather = v }
     while let d = option("--dust") {
         let parts = d.split(separator: ":", maxSplits: 1).map(String.init)
         guard parts.count == 2, let k = ChannelKind(rawValue: parts[0]) ?? ChannelKind.fromPixelMathIdentifier(parts[0]) else { print("bad --dust \(d)"); continue }
         for item in parts[1].split(separator: ";") {
             let v = item.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
-            if v.count == 3 { dust.spots[k, default: []].append(DustSpot(x: v[0], y: v[1], radius: v[2])) } else { print("bad --dust item \(item)") }
+            if v.count == 3 { dust.spots[k, default: []].append(dust.newSpot(x: v[0], y: v[1], radius: v[2])) } else { print("bad --dust item \(item)") }
         }
     }
-    if let m = option("--dust-model").flatMap({ DustModel(rawValue: $0) }) { dust.model = m }
-    if let v = option("--dust-smooth").flatMap(Double.init) { dust.smoothness = v }
-    if let v = option("--dust-feather").flatMap(Double.init) { dust.feather = v }
     try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 
     // Load channels (in parallel).
@@ -143,7 +144,7 @@ case "render":
             } else if let k = kind {
                 let spots = dust.spots(for: k)
                 let t1 = Date()
-                let plane = DustRemoval.heal(f.planes[0], spots: spots, options: dust.options)
+                let plane = DustRemoval.heal(f.planes[0], spots: spots)
                 let healMs = Int(Date().timeIntervalSince(t1) * 1000)
                 let src = ChannelSource(kind: k, image: plane, fileName: f.fileName, url: url, formatDescription: f.formatDescription)
                 lock.lock(); sources[k] = src; lock.unlock()

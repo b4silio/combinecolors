@@ -150,12 +150,24 @@ struct ContentView: View {
         .padding(8)
     }
 
-    /// Dust-spot editor: channel switch, model and parameters, spot actions.
+    /// Dust-spot editor: channel switch, model and parameters (of the selected spot, else of new
+    /// spots), spot actions, before / after toggle.
     private var dustToolbar: some View {
         let kind = model.dustEditing ?? .luminance
         let draft = Binding(get: { model.dustDraft ?? DustSettings() }, set: { model.dustDraft = $0 })
         let loaded = ChannelKind.allCases.filter { model.sources[$0] != nil }
         let spots = model.dustSpots(for: kind)
+        let selected = model.selectedDustSpotValue
+        // Parameters: the selected spot's, or those given to new spots.
+        let modelBinding = Binding<DustModel>(
+            get: { selected?.model ?? draft.wrappedValue.model },
+            set: { v in if var sp = model.selectedDustSpotValue { sp.model = v; model.updateSelectedDustSpot(sp) } else { draft.wrappedValue.model = v } })
+        let smoothBinding = Binding<Float>(
+            get: { Float(selected?.smoothness ?? draft.wrappedValue.smoothness) },
+            set: { v in if var sp = model.selectedDustSpotValue { sp.smoothness = Double(v); model.updateSelectedDustSpot(sp) } else { draft.wrappedValue.smoothness = Double(v) } })
+        let featherBinding = Binding<Float>(
+            get: { Float(selected?.feather ?? draft.wrappedValue.feather) },
+            set: { v in if var sp = model.selectedDustSpotValue { sp.feather = Double(v); model.updateSelectedDustSpot(sp) } else { draft.wrappedValue.feather = Double(v) } })
         return VStack(alignment: .trailing, spacing: 4) {
             HStack(spacing: 6) {
                 Label("Dust spots", systemImage: "circle.dotted").font(.caption.bold())
@@ -164,31 +176,35 @@ struct ContentView: View {
                 }
                 .pickerStyle(.segmented).labelsHidden().fixedSize()
                 .help("Channel shown; the spots of every channel are kept until Apply")
+                Toggle(isOn: $model.dustBypass) { Text("Original") }
+                    .toggleStyle(.button).keyboardShortcut("b", modifiers: [])
+                    .help("Show the channel without any spot, to compare before and after (B)")
                 Button("Apply") { model.commitDustEditing() }.keyboardShortcut(.return, modifiers: [])
                 Button("Cancel") { model.cancelDustEditing() }.keyboardShortcut(.escape, modifiers: [])
             }
             HStack(spacing: 6) {
-                Picker("", selection: draft.model) { ForEach(DustModel.allCases) { Text($0.displayName).tag($0) } }
+                Text(selected == nil ? "New spots" : "Selected").font(.caption).foregroundStyle(.secondary).frame(width: 60, alignment: .trailing)
+                Picker("", selection: modelBinding) { ForEach(DustModel.allCases) { Text($0.displayName).tag($0) } }
                     .pickerStyle(.segmented).labelsHidden().fixedSize()
-                    .help("Local flat: free-form shadow (star-masked smoothing of the ratio to the surrounding sky), follows irregular motes and fringes.\nRadial profile: one transmission per distance to the centre, robust to nebulosity, for round motes and donuts.")
-                SliderRow(title: "Smooth", value: Binding(get: { Float(draft.wrappedValue.smoothness) }, set: { draft.wrappedValue.smoothness = Double($0) }), range: 1...12, defaultValue: 3, format: "%.1f",
-                          help: "Smoothing of the shadow estimate in pixels (σ of the local flat, window of the radial profile)", labelWidth: 46)
+                    .help("Local flat: free-form shadow (star-masked, multi-scale estimate of the ratio to the surrounding sky, noise left untouched), follows irregular motes and fringes.\nRadial profile: one transmission per distance to the centre, robust to nebulosity, for round motes and donuts.\nEdits the selected spot, or the parameters given to new spots.")
+                SliderRow(title: "Smooth", value: smoothBinding, range: 1...12, defaultValue: 3, format: "%.1f",
+                          help: "Finest scale of the shadow estimate in pixels (σ of the local flat, window of the radial profile)", labelWidth: 46)
                     .frame(width: 170)
-                SliderRow(title: "Feather", value: Binding(get: { Float(draft.wrappedValue.feather) }, set: { draft.wrappedValue.feather = Double($0) }), range: 0...0.5, defaultValue: 0.2, format: "%.2f",
-                          help: "Fraction of the radius over which the correction fades out at the edge", labelWidth: 46)
+                SliderRow(title: "Feather", value: featherBinding, range: 0...0.5, defaultValue: 0.2, format: "%.2f",
+                          help: "Fraction of the radius over which the correction fades out beyond the shadow", labelWidth: 46)
                     .frame(width: 170)
             }
             HStack(spacing: 6) {
                 Text("\(spots.count) spot\(spots.count == 1 ? "" : "s")").font(.caption).foregroundStyle(.secondary)
-                Button("Fit") { model.refitSelectedDustSpot() }.disabled(model.selectedDustSpot == nil)
+                Button("Fit") { model.refitSelectedDustSpot() }.disabled(selected == nil)
                     .help("Re-centre and resize the selected spot on the shadow found around it")
-                Button("Delete") { model.removeSelectedDustSpot() }.disabled(model.selectedDustSpot == nil).help("Remove the selected spot (⌫)")
+                Button("Delete") { model.removeSelectedDustSpot() }.disabled(selected == nil).help("Remove the selected spot (⌫)")
                 Button("Clear") { model.clearDustSpots() }.disabled(spots.isEmpty).help("Remove every spot of this channel")
                 Button("Copy to all") { model.copyDustSpotsToAllChannels() }.disabled(spots.isEmpty || loaded.count < 2)
                     .help("Give every other loaded channel the same spots (dust on the sensor window shadows every filter alike)")
             }
-            if let id = model.selectedDustSpot, let i = spots.firstIndex(where: { $0.id == id }) {
-                let s = Binding(get: { model.dustSpots(for: kind)[safe: i] ?? spots[i] }, set: { var all = model.dustSpots(for: kind); if i < all.count { all[i] = $0; model.updateDustSpots(all) } })
+            if let sel = selected {
+                let s = Binding(get: { model.selectedDustSpotValue ?? sel }, set: { model.updateSelectedDustSpot($0) })
                 Grid(alignment: .trailing, horizontalSpacing: 4, verticalSpacing: 2) {
                     GridRow {
                         Text("X"); TextField("x", value: s.x, format: .number.precision(.fractionLength(1))).frame(width: 64)

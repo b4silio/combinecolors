@@ -109,6 +109,8 @@ final class ProjectModel {
     /// Channel shown in the dust editor (nil = editor closed).
     private(set) var dustEditing: ChannelKind? = nil
     var selectedDustSpot: UUID? = nil
+    /// Shows the edited channel without any spot (before / after comparison).
+    var dustBypass = false { didSet { if dustBypass != oldValue, dustEditing != nil { scheduleDustPreview() } } }
     private var dustPreviewTimer: Timer?
     private var dustPreviewGeneration = 0
     /// Channels whose live source currently shows draft spots (restored on cancel).
@@ -352,7 +354,7 @@ final class ProjectModel {
             DispatchQueue.concurrentPerform(iterations: items.count) { i in
                 let (kind, plane, name, url, fmt) = items[i]
                 let oriented = orient.apply(to: plane)
-                let healed = DustRemoval.heal(oriented, spots: dust.spots(for: kind), options: dust.options)
+                let healed = DustRemoval.heal(oriented, spots: dust.spots(for: kind))
                 let src = ChannelSource(kind: kind, image: healed, fileName: name, url: url, formatDescription: fmt)
                 lock.lock(); built[i] = src; originals[i] = oriented; lock.unlock()
             }
@@ -426,7 +428,7 @@ final class ProjectModel {
                 let orig = (originals[k] ?? old.image).applying(op)
                 // The edited channel keeps showing its draft spots.
                 let d = (k == editing ? draft : nil) ?? dust
-                let healed = DustRemoval.heal(orig, spots: d.spots(for: k), options: d.options)
+                let healed = DustRemoval.heal(orig, spots: d.spots(for: k))
                 let b = ChannelSource(kind: k, image: healed, fileName: old.fileName, url: old.url, formatDescription: old.formatDescription)
                 let c = newCrop == nil ? b : ChannelSource(b, region: newCrop)
                 lock.lock(); newBase[k] = b; newCur[k] = c; newOrig[k] = orig; lock.unlock()
@@ -935,17 +937,18 @@ extension ProjectModel {
     /// Spots the editor currently shows (the draft while editing, else the applied ones).
     func dustSpots(for kind: ChannelKind) -> [DustSpot] { (dustDraft ?? dust).spots(for: kind) }
 
-    /// Radius given to a new spot when nothing is found around the click (scales with the image).
-    var defaultDustRadius: Double { imageSize.map { max(20, min($0.width, $0.height) / 60) } ?? 30 }
+    /// Radius given to a new spot when nothing is found around the click (small: the fit grows it
+    /// to the shadow, and a stray click must not cost a huge window).
+    var defaultDustRadius: Double { imageSize.map { max(12, min($0.width, $0.height) / 150) } ?? 20 }
 
     /// Opens the dust editor on a channel (the preview shows that channel alone, with the draft spots).
     func beginDustEditing(_ kind: ChannelKind) {
         guard sources[kind] != nil else { return }
         if cropEditing { cancelCropEditing() }
-        if dustEditing == nil { dustDraft = dust }
+        if dustEditing == nil { dustDraft = dust; dustBypass = false }
         dustEditing = kind
         selectedDustSpot = nil
-        scheduleRender()
+        if dustBypass { scheduleDustPreview() } else { scheduleRender() }
     }
 
     /// Switches the editor to another loaded channel, keeping every draft.
@@ -953,15 +956,15 @@ extension ProjectModel {
         guard dustEditing != nil, dustEditing != kind, sources[kind] != nil else { return }
         dustEditing = kind
         selectedDustSpot = nil
-        scheduleRender()
+        if dustBypass { scheduleDustPreview() } else { scheduleRender() }
     }
 
     /// Adds a spot at an image point, fitted to the shadow found there (plain spot of the default
     /// radius when nothing is found).
     func addDustSpot(at p: CGPoint) {
         guard let k = dustEditing, var d = dustDraft, let orig = originalImages[k] ?? baseSources[k]?.image else { return }
-        let spot = DustRemoval.fit(image: orig, x: p.x, y: p.y, radius: defaultDustRadius, options: d.options)
-            ?? DustSpot(x: p.x, y: p.y, radius: defaultDustRadius)
+        var spot = d.newSpot(x: p.x, y: p.y, radius: defaultDustRadius)
+        if let f = DustRemoval.fit(image: orig, x: p.x, y: p.y, radius: defaultDustRadius, smoothness: d.smoothness) { spot.x = f.x; spot.y = f.y; spot.radius = f.radius }
         d.spots[k, default: []].append(spot)
         dustDraft = d
         selectedDustSpot = spot.id
@@ -983,10 +986,23 @@ extension ProjectModel {
     func refitSelectedDustSpot() {
         guard let k = dustEditing, let id = selectedDustSpot, var d = dustDraft, let orig = originalImages[k] ?? baseSources[k]?.image,
               let i = d.spots[k]?.firstIndex(where: { $0.id == id }) else { return }
-        let s = d.spots[k]![i]
-        guard let f = DustRemoval.fit(image: orig, x: s.x, y: s.y, radius: s.radius / 2, options: d.options) else { statusText = "No shadow found around the spot."; return }
-        d.spots[k]![i] = DustSpot(x: f.x, y: f.y, radius: f.radius, id: id)
+        var s = d.spots[k]![i]
+        guard let f = DustRemoval.fit(image: orig, x: s.x, y: s.y, radius: s.radius / 2, smoothness: s.smoothness) else { statusText = "No shadow found around the spot."; return }
+        s.x = f.x; s.y = f.y; s.radius = f.radius
+        d.spots[k]![i] = s
         dustDraft = d
+    }
+
+    /// The selected spot of the edited channel (nil when none).
+    var selectedDustSpotValue: DustSpot? {
+        guard let k = dustEditing, let id = selectedDustSpot else { return nil }
+        return dustDraft?.spots(for: k).first { $0.id == id }
+    }
+
+    /// Replaces the selected spot (parameter edits from the toolbar).
+    func updateSelectedDustSpot(_ spot: DustSpot) {
+        guard let k = dustEditing, let i = dustDraft?.spots[k]?.firstIndex(where: { $0.id == spot.id }) else { return }
+        dustDraft?.spots[k]?[i] = spot
     }
 
     func clearDustSpots() {
@@ -1001,7 +1017,7 @@ extension ProjectModel {
         guard let k = dustEditing, var d = dustDraft else { return }
         let spots = d.spots(for: k)
         for other in sources.keys where other != k {
-            d.spots[other] = spots.map { DustSpot(x: $0.x, y: $0.y, radius: $0.radius) }
+            d.spots[other] = spots.map { var c = $0; c.id = UUID(); return c }
         }
         dustDraft = d
     }
@@ -1012,13 +1028,12 @@ extension ProjectModel {
         guard let draft = dustDraft else { dustEditing = nil; return }
         dustPreviewTimer?.invalidate()
         dustPreviewGeneration += 1
-        let changed = Set(sources.keys).filter { k in
-            draft.spots(for: k) != dust.spots(for: k) || (!draft.spots(for: k).isEmpty && draft.options != dust.options)
-        }
+        let changed = Set(sources.keys).filter { draft.spots(for: $0) != dust.spots(for: $0) }
         dust = draft
         dustDraft = nil
         dustEditing = nil
         selectedDustSpot = nil
+        dustBypass = false
         rebuildHealed(kinds: changed.union(dustPreviewed))
         dustPreviewed = []
         scheduleRecentStateSave()
@@ -1031,6 +1046,7 @@ extension ProjectModel {
         dustDraft = nil
         dustEditing = nil
         selectedDustSpot = nil
+        dustBypass = false
         let previewed = dustPreviewed
         dustPreviewed = []
         if previewed.isEmpty { scheduleRender() } else { rebuildHealed(kinds: previewed) }
@@ -1050,10 +1066,10 @@ extension ProjectModel {
         guard let k = dustEditing, let d = dustDraft, let orig = originalImages[k], let base = baseSources[k] else { return }
         dustPreviewGeneration += 1
         let gen = dustPreviewGeneration
-        let spots = d.spots(for: k), options = d.options, crop = self.crop
+        let spots = dustBypass ? [] : d.spots(for: k), crop = self.crop
         dustPreviewed.insert(k)
         Task.detached(priority: .userInitiated) {
-            let healed = DustRemoval.heal(orig, spots: spots, options: options)
+            let healed = DustRemoval.heal(orig, spots: spots)
             let b = ChannelSource(base, image: healed)
             let c = crop == nil ? b : ChannelSource(b, region: crop)
             await MainActor.run {
@@ -1079,7 +1095,7 @@ extension ProjectModel {
             let lock = NSLock()
             DispatchQueue.concurrentPerform(iterations: kinds.count) { i in
                 let k = kinds[i], old = base[k]!
-                let healed = DustRemoval.heal(originals[k]!, spots: dust.spots(for: k), options: dust.options)
+                let healed = DustRemoval.heal(originals[k]!, spots: dust.spots(for: k))
                 let b = ChannelSource(kind: k, image: healed, fileName: old.fileName, url: old.url, formatDescription: old.formatDescription)
                 let c = crop == nil ? b : ChannelSource(b, region: crop)
                 lock.lock(); out[k] = (b, c); lock.unlock()

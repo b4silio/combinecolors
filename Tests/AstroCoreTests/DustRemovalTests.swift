@@ -53,8 +53,8 @@ final class DustRemovalTests: XCTestCase {
         let before1 = blockError(shaded, truth, cx: 150, cy: 120, radius: 36)
         let before2 = blockError(shaded, truth, cx: 310, cy: 210, radius: 40)
         XCTAssertGreaterThan(before1.median, 0.1); XCTAssertGreaterThan(before2.max, 0.1)
-        let spots = [DustSpot(x: 150, y: 120, radius: 55), DustSpot(x: 310, y: 210, radius: 48)]
-        let healed = DustRemoval.heal(shaded, spots: spots, options: .init(model: .radial, smoothness: 3, feather: 0.15))
+        let spots = [DustSpot(x: 150, y: 120, radius: 55, model: .radial, smoothness: 3, feather: 0.15), DustSpot(x: 310, y: 210, radius: 48, model: .radial, smoothness: 3, feather: 0.15)]
+        let healed = DustRemoval.heal(shaded, spots: spots)
         XCTAssertFalse(healed === shaded)
         let after1 = blockError(healed, truth, cx: 150, cy: 120, radius: 36)
         let after2 = blockError(healed, truth, cx: 310, cy: 210, radius: 40)
@@ -74,7 +74,7 @@ final class DustRemovalTests: XCTestCase {
         for y in 90..<150 { for x in 120..<180 where truth[x, y] > best.2 && hypot(Float(x) - 150, Float(y) - 120) < 28 { best = (x, y, truth[x, y]) } }
         guard best.2 > 0.05 else { throw XCTSkip("no star under the test spot") }
         let shaded = shade(truth, disc: (150, 120, 40, 0.2), donut: nil)
-        let healed = DustRemoval.heal(shaded, spots: [DustSpot(x: 150, y: 120, radius: 55)], options: .init())
+        let healed = DustRemoval.heal(shaded, spots: [DustSpot(x: 150, y: 120, radius: 55)])
         XCTAssertEqual(healed[best.0, best.1] / best.2, 1, accuracy: 0.05, "star peak restored by the same gain as the sky")
     }
 
@@ -85,10 +85,9 @@ final class DustRemovalTests: XCTestCase {
             let dx = (Float(x) + 0.5 - 320) / 36, dy = (Float(y) + 0.5 - 240) / 18
             img[x, y] = truth[x, y] * (1 - 0.2 * exp(-pow(dx * dx + dy * dy, 2)))
         } }
-        let spot = [DustSpot(x: 320, y: 240, radius: 62)]
-        let radial = DustRemoval.heal(img, spots: spot, options: .init(model: .radial, smoothness: 3, feather: 0.15))
+        let radial = DustRemoval.heal(img, spots: [DustSpot(x: 320, y: 240, radius: 62, model: .radial, smoothness: 3, feather: 0.15)])
         // A sharp-edged mote wants little smoothing (the Gaussian blurs the edge of the shadow estimate).
-        let surface = DustRemoval.heal(img, spots: spot, options: .init(model: .surface, smoothness: 2.5, feather: 0.15))
+        let surface = DustRemoval.heal(img, spots: [DustSpot(x: 320, y: 240, radius: 62, model: .surface, smoothness: 2.5, feather: 0.15)])
         let er = blockError(radial, truth, cx: 320, cy: 240, radius: 40), es = blockError(surface, truth, cx: 320, cy: 240, radius: 40)
         XCTAssertLessThan(es.median, 0.015); XCTAssertLessThan(es.max, 0.04)
         XCTAssertLessThan(es.max, er.max, "the surface model must beat the radial one on an elongated mote")
@@ -98,14 +97,14 @@ final class DustRemovalTests: XCTestCase {
         let truth = scene()
         let shaded = shade(truth, disc: (150, 120, 40, 0.12), donut: (310, 210, 28, 7, 0.25))
         // Click off-centre on the disc with a small starting radius.
-        let s1 = DustRemoval.fit(image: shaded, x: 158, y: 113, radius: 15, options: .init())
+        let s1 = DustRemoval.fit(image: shaded, x: 158, y: 113, radius: 15)
         XCTAssertNotNil(s1)
         if let s = s1 {
             XCTAssertEqual(s.x, 150, accuracy: 3); XCTAssertEqual(s.y, 120, accuracy: 3)
             XCTAssertGreaterThan(s.radius, 42); XCTAssertLessThan(s.radius, 62)
         }
         // Donut: click near the centre where the shadow is weak.
-        let s2 = DustRemoval.fit(image: shaded, x: 306, y: 214, radius: 20, options: .init())
+        let s2 = DustRemoval.fit(image: shaded, x: 306, y: 214, radius: 20)
         XCTAssertNotNil(s2)
         if let s = s2 {
             XCTAssertEqual(s.x, 310, accuracy: 5); XCTAssertEqual(s.y, 210, accuracy: 5)
@@ -114,16 +113,16 @@ final class DustRemovalTests: XCTestCase {
         // Nothing on plain sky (without nebulosity: a nebular bump next to the click is a shallow
         // "shadow" to the fit, which only matters for the radius it proposes).
         let plain = Synth.channel(width: 300, height: 200, background: 0.01, nebula: 0, stars: 0.3, noise: 0.0002, seed: 5, gradient: 0.002)
-        XCTAssertNil(DustRemoval.fit(image: plain, x: 140, y: 100, radius: 20, options: .init()))
+        XCTAssertNil(DustRemoval.fit(image: plain, x: 140, y: 100, radius: 20))
     }
 
     func testSpotsAtTheBorderAndOutsideAreHandled() {
         let truth = scene()
         let shaded = shade(truth, disc: (12, 160, 30, 0.15), donut: nil)
-        let healed = DustRemoval.heal(shaded, spots: [DustSpot(x: 12, y: 160, radius: 42), DustSpot(x: -500, y: 10, radius: 20)], options: .init())
+        let healed = DustRemoval.heal(shaded, spots: [DustSpot(x: 12, y: 160, radius: 42), DustSpot(x: -500, y: 10, radius: 20)])
         XCTAssertLessThan(blockError(healed, truth, cx: 12, cy: 160, radius: 26).median, 0.03)
         let z = PlanarImage(width: 64, height: 64)
-        XCTAssertFalse(DustRemoval.heal(inPlace: z, spot: DustSpot(x: 32, y: 32, radius: 10), options: .init()), "all-zero window has no background")
+        XCTAssertFalse(DustRemoval.heal(inPlace: z, spot: DustSpot(x: 32, y: 32, radius: 10)), "all-zero window has no background")
     }
 
     func testOrientationMapsSpotsLikePixels() {
@@ -150,13 +149,15 @@ final class DustRemovalTests: XCTestCase {
 
     func testDocumentRoundTripAndDefaults() throws {
         var doc = ProjectDocument()
-        doc.dust.spots[.oiii] = [DustSpot(x: 10.5, y: 20.25, radius: 33)]
-        doc.dust.model = .surface
+        doc.dust.spots[.oiii] = [DustSpot(x: 10.5, y: 20.25, radius: 33, model: .radial, smoothness: 6, feather: 0.1)]
+        doc.dust.model = .radial
         doc.dust.smoothness = 6
         let back = try JSONDecoder().decode(ProjectDocument.self, from: doc.data())
         XCTAssertEqual(back.dust, doc.dust)
         let old = try JSONDecoder().decode(ProjectDocument.self, from: Data("{\"version\":1}".utf8))
         XCTAssertTrue(old.dust.isEmpty); XCTAssertEqual(old.dust.model, .surface)
+        let bare = try JSONDecoder().decode(DustSpot.self, from: Data("{\"x\":1,\"y\":2,\"radius\":3}".utf8))
+        XCTAssertEqual(bare.model, .surface); XCTAssertEqual(bare.smoothness, 3); XCTAssertEqual(bare.feather, 0.2)
     }
 }
 
@@ -171,7 +172,7 @@ extension DustRemovalTests {
             img[x, y] = truth[x, y] * t1 * t2
         } }
         let spots = [DustSpot(x: 150, y: 160, radius: 50), DustSpot(x: 250, y: 160, radius: 50)]
-        let healed = DustRemoval.heal(img, spots: spots, options: .init())
+        let healed = DustRemoval.heal(img, spots: spots)
         var errs: [Float] = []
         for y in 130..<190 { for x in 120..<280 where truth[x, y] < 0.03 && (hypot(Float(x) + 0.5 - 150, Float(y) + 0.5 - 160) < 35 || hypot(Float(x) + 0.5 - 250, Float(y) + 0.5 - 160) < 35) {
             errs.append(abs(healed[x, y] / truth[x, y] - 1))
@@ -180,7 +181,7 @@ extension DustRemovalTests {
         XCTAssertLessThan(errs[errs.count / 2], 0.025, "median error under the pair")
         // Healing one alone, with the other spot not excluded, is clearly worse.
         let alone = img.copy()
-        DustRemoval.heal(inPlace: alone, spot: spots[0], options: .init())
+        DustRemoval.heal(inPlace: alone, spot: spots[0])
         var e2: [Float] = []
         for y in 130..<190 { for x in 120..<180 where truth[x, y] < 0.03 && hypot(Float(x) + 0.5 - 150, Float(y) + 0.5 - 160) < 35 { e2.append(abs(alone[x, y] / truth[x, y] - 1)) } }
         e2.sort()
@@ -188,5 +189,28 @@ extension DustRemovalTests {
         for y in 130..<190 { for x in 120..<180 where truth[x, y] < 0.03 && hypot(Float(x) + 0.5 - 150, Float(y) + 0.5 - 160) < 35 { e1.append(abs(healed[x, y] / truth[x, y] - 1)) } }
         e1.sort()
         XCTAssertLessThan(e1[e1.count / 2], e2[e2.count / 2])
+    }
+}
+
+extension DustRemovalTests {
+    /// With a small smoothing scale the noise must pass through the correction unchanged: the
+    /// transmission map keeps the shadow's structure but not the noise, so the grain under the spot
+    /// matches the sky around it.
+    func testLocalFlatKeepsTheNoiseGrain() {
+        let noise: Float = 0.0005
+        let truth = Synth.channel(width: 420, height: 320, background: 0.01, nebula: 0, stars: 0.3, noise: noise, seed: 21, gradient: 0.001)
+        let img = truth.copy()
+        for y in 0..<img.height { for x in 0..<img.width {
+            let d = hypot(Float(x) + 0.5 - 200, Float(y) + 0.5 - 160)
+            img[x, y] = truth[x, y] * (1 - 0.05 * exp(-pow(d / 50, 4)))
+        } }
+        let healed = DustRemoval.heal(img, spots: [DustSpot(x: 200, y: 160, radius: 70, model: .surface, smoothness: 1, feather: 0.2)])
+        var res: [Float] = [], tru: [Float] = []
+        for y in 130..<190 { for x in 170..<230 where truth[x, y] < 0.03 { res.append(healed[x, y] - truth[x, y]); tru.append(truth[x, y]) }
+        }
+        func std(_ v: [Float]) -> Float { let m = v.reduce(0, +) / Float(v.count); return (v.map { ($0 - m) * ($0 - m) }.reduce(0, +) / Float(v.count)).squareRoot() }
+        // Plain σ = 1 smoothing would leave ≈ 28 % of the noise std in the residual (its coarse part).
+        XCTAssertLessThan(std(res), 0.12 * noise, "residual against the truth, i.e. the part of the grain the correction ate")
+        XCTAssertEqual(std(tru) > 0 ? std(res) / std(tru) : 1, 0, accuracy: 0.12)
     }
 }

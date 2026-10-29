@@ -8,12 +8,20 @@ public struct DustSpot: Codable, Equatable, Hashable, Identifiable {
     public var x: Double
     public var y: Double
     public var radius: Double
+    /// How this spot's shadow is modelled.
+    public var model: DustModel
+    /// Finest scale of the shadow estimate in pixels (Gaussian σ for `surface`, profile window for `radial`).
+    public var smoothness: Double
+    /// Fraction of the radius over which the correction fades out beyond the shadow.
+    public var feather: Double
 
-    public init(x: Double, y: Double, radius: Double, id: UUID = UUID()) {
+    public init(x: Double, y: Double, radius: Double, model: DustModel = .surface, smoothness: Double = 3, feather: Double = 0.2, id: UUID = UUID()) {
         self.id = id; self.x = x; self.y = y; self.radius = radius
+        self.model = model; self.smoothness = smoothness; self.feather = feather
     }
 
     public var center: CGPoint { CGPoint(x: x, y: y) }
+    var options: DustRemoval.Options { DustRemoval.Options(model: model, smoothness: smoothness, feather: feather) }
 
     /// The spot after the image (`imageWidth` × `imageHeight`) has undergone `op`.
     public func applying(_ op: Orientation.Op, imageWidth: Int, imageHeight: Int) -> DustSpot {
@@ -50,21 +58,26 @@ public enum DustModel: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-/// Dust spots per channel plus the shared estimation parameters. Stored in the project, applied to
-/// the loaded channel once (before statistics, normalisation and everything else).
+/// Dust spots per channel (each with its own parameters) plus the parameters given to new spots.
+/// Stored in the project, applied to the loaded channel once (before statistics, normalisation and
+/// everything else).
 public struct DustSettings: Codable, Equatable {
     public var spots: [ChannelKind: [DustSpot]] = [:]
+    /// Model given to new spots.
     public var model: DustModel = .surface
-    /// Smoothing of the shadow estimate in pixels (Gaussian σ for `surface`, profile window for `radial`).
+    /// Smoothness given to new spots.
     public var smoothness: Double = 3
-    /// Fraction of the radius over which the correction fades out towards the edge of the spot.
+    /// Feather given to new spots.
     public var feather: Double = 0.2
 
     public init() {}
 
     public var isEmpty: Bool { spots.values.allSatisfy(\.isEmpty) }
     public func spots(for kind: ChannelKind) -> [DustSpot] { spots[kind] ?? [] }
-    public var options: DustRemoval.Options { DustRemoval.Options(model: model, smoothness: smoothness, feather: feather) }
+    /// A spot with the parameters for new spots.
+    public func newSpot(x: Double, y: Double, radius: Double) -> DustSpot {
+        DustSpot(x: x, y: y, radius: radius, model: model, smoothness: smoothness, feather: feather)
+    }
 }
 
 /// Flattens the shadows of dust motes (sensor window, filters) and dust donuts (reflectors, out of
@@ -94,10 +107,10 @@ public enum DustRemoval {
     static let transmissionRange: ClosedRange<Float> = 0.05...1.5
 
     /// Healed copy of `image` (the same instance when there is nothing to do).
-    public static func heal(_ image: PlanarImage, spots: [DustSpot], options: Options) -> PlanarImage {
+    public static func heal(_ image: PlanarImage, spots: [DustSpot]) -> PlanarImage {
         guard !spots.isEmpty else { return image }
         let out = image.copy()
-        for s in spots { heal(inPlace: out, spot: s, options: options, others: spots.filter { $0.id != s.id }) }
+        for s in spots { heal(inPlace: out, spot: s, others: spots.filter { $0.id != s.id }) }
         return out
     }
 
@@ -105,8 +118,8 @@ public enum DustRemoval {
     /// remaining spots, typically neighbours in a cluster) are left out of the background fit. False
     /// when the spot cannot be analysed (outside the image or too few usable pixels around it).
     @discardableResult
-    public static func heal(inPlace image: PlanarImage, spot: DustSpot, options: Options, others: [DustSpot] = []) -> Bool {
-        guard let sh = shadow(image: image, spot: spot, options: options, others: others) else { return false }
+    public static func heal(inPlace image: PlanarImage, spot: DustSpot, others: [DustSpot] = []) -> Bool {
+        guard let sh = shadow(image: image, spot: spot, others: others) else { return false }
         let win = sh.window, t = sh.transmission
         for y in 0..<win.height {
             let row = image.pointer + (win.y + y) * image.width + win.x
@@ -134,10 +147,11 @@ public enum DustRemoval {
     /// than its noise, so elongated and irregular motes are corrected to their real edge; the
     /// correction fades out over a band of `feather` × radius outside that outline, and the sky plane
     /// is refitted away from it.
-    public static func shadow(image: PlanarImage, spot: DustSpot, options: Options, others: [DustSpot] = []) -> Shadow? {
+    public static func shadow(image: PlanarImage, spot: DustSpot, others: [DustSpot] = []) -> Shadow? {
         let r = max(spot.radius, 3)
+        let options = spot.options
         let surfaceModel = options.model == .surface
-        guard let a = Analysis(image: image, cx: spot.x, cy: spot.y, radius: r, options: options, others: others, outerFactor: surfaceModel ? 1.8 : 1.7) else { return nil }
+        guard let a = Analysis(image: image, cx: spot.x, cy: spot.y, radius: r, others: others, outerFactor: surfaceModel ? 1.8 : 1.7) else { return nil }
         let w = a.window.width, h = a.window.height, n = w * h
         let t = PlanarImage(width: w, height: h, fill: 1)
         var mask = a.mask
@@ -161,15 +175,15 @@ public enum DustRemoval {
                 guard let p = radialProfile(ratio: q, mask: mask, rad: a.rad, radius: r, window: max(2, options.smoothness)) else { return nil }
                 raw = expand(profile: p, rad: a.rad, radius: r)
             case .surface:
-                let sm = surface(ratio: q, mask: mask, rad: a.rad, radius: a.outer, sigma: sigma)
-                // Noise of the smoothed ratio: pixel noise (measured on the sky around the spot, not
-                // under it) through the Gaussian (Σk² = 1 / 4πσ²).
+                // Noise of the ratio, measured on the sky around the spot (not under it).
                 var dev: [Float] = []; dev.reserveCapacity(n / 5 + 1)
                 let skyFrom = Float(r) * 1.1
                 for i in stride(from: 0, to: n, by: 5) where mask.pointer[i] == 0 && q.pointer[i] > 0 && a.rad.pointer[i] >= skyFrom && (exclude?.pointer[i] ?? 0) == 0 { dev.append(abs(q.pointer[i] - 1)) }
                 guard dev.count >= 16 else { return nil }
                 dev.sort()
                 let pixelSigma = 1.4826 * Statistics.percentile(sorted: dev, q: 0.5)
+                let sm = surface(ratio: q, mask: mask, rad: a.rad, radius: a.outer, sigma: sigma, pixelSigma: pixelSigma)
+                // Noise of the smoothed ratio at the finest scale (Σk² = 1 / 4πσ²).
                 let smoothSigma = pixelSigma / (2 * Float.pi.squareRoot() * Float(sigma))
                 let threshold = 1 - max(2.5 * smoothSigma, 0.0005)
                 let region = shadowRegion(sm, rad: a.rad, threshold: threshold, seedRadius: Float(r) * 0.5, limit: Float(r) * 1.3)
@@ -264,19 +278,21 @@ public enum DustRemoval {
     /// Shadows of stacked data can be very shallow (a few ‰ of the sky level: the Soul Core OIII
     /// motes are 0.5 % deep) yet obvious after stretching, so the detection threshold is set by the
     /// bin-to-bin noise of the profile rather than by a fixed depth.
-    public static func fit(image: PlanarImage, x: Double, y: Double, radius r0: Double, options: Options) -> DustSpot? {
+    public static func fit(image: PlanarImage, x: Double, y: Double, radius r0: Double, smoothness: Double = 3) -> DustSpot? {
         var cx = x, cy = y, r = max(r0, 12)
         var found = false
-        let maxSearch = Double(max(image.width, image.height)) / 2
+        // The search never grows past a fraction of the image (a window of the whole frame is slow
+        // and only finds vignetting), nor past ten times the starting radius.
+        let maxSearch = min(Double(min(image.width, image.height)) / 6, 900, r * 10)
         for iteration in 0..<4 {
             // Extent: the radial profile out to a few times the current radius; the shadow ends where
             // the profile comes back to its outer level.
             var hit: (p: [Float], outer: Float, depth: Float)? = nil
-            for factor in (iteration == 0 ? [2.5, 5, 10, 20] : [1.6]) {
+            for factor in (iteration == 0 ? [2.5, 5, 10] : [1.6]) {
                 let search = min(r * factor, maxSearch)
-                guard let a = Analysis(image: image, cx: cx, cy: cy, radius: search, options: options),
+                guard let a = Analysis(image: image, cx: cx, cy: cy, radius: search),
                       let q = a.ratio(mask: a.mask),
-                      let (p, counts) = radialProfileWithCounts(ratio: q, mask: a.mask, rad: a.rad, radius: search, window: max(2, options.smoothness)), p.count >= 10 else { break }
+                      let (p, counts) = radialProfileWithCounts(ratio: q, mask: a.mask, rad: a.rad, radius: search, window: max(2, smoothness)), p.count >= 10 else { break }
                 var tail = Array(p[(p.count * 4 / 5)...]); tail.sort()
                 let outer = Statistics.percentile(sorted: tail, q: 0.5)
                 // Per-pixel noise of the ratio, then per-bin noise of a median over `counts` pixels:
@@ -297,11 +313,11 @@ public enum DustRemoval {
                 if search >= maxSearch { break }
             }
             guard let (p, outer, depth) = hit, let edge = p.lastIndex(where: { $0 < outer - 0.15 * depth }), edge >= 3 else { break }
-            let newR = Double(edge + 1) * 1.25 + 2
+            let newR = min(Double(edge + 1) * 1.25 + 2, maxSearch * 0.8)
             // Centre: centroid of the pixels darker than half the depth, measured with the background
             // fitted close around the new radius (a far annulus extrapolates nebulosity badly). The
             // binary weight is far less sensitive to gradients than the darkening itself.
-            guard let b = Analysis(image: image, cx: cx, cy: cy, radius: newR, options: options), let qb = b.ratio(mask: b.mask) else { break }
+            guard let b = Analysis(image: image, cx: cx, cy: cy, radius: newR), let qb = b.ratio(mask: b.mask) else { break }
             var sx = 0.0, sy = 0.0, sw = 0.0
             let w = b.window.width, h = b.window.height
             let half = outer - 0.5 * depth
@@ -333,7 +349,7 @@ public enum DustRemoval {
         let outer: Double
         let cx: Double, cy: Double
 
-        init?(image: PlanarImage, cx: Double, cy: Double, radius: Double, options: Options, others: [DustSpot] = [], outerFactor: Double = 1.7) {
+        init?(image: PlanarImage, cx: Double, cy: Double, radius: Double, others: [DustSpot] = [], outerFactor: Double = 1.7) {
             let outer = radius * outerFactor
             let x0 = Int(floor(cx - outer)), y0 = Int(floor(cy - outer))
             let x1 = Int(ceil(cx + outer)), y1 = Int(ceil(cy + outer))
@@ -545,33 +561,56 @@ public enum DustRemoval {
         return t
     }
 
-    /// Star-masked Gaussian smoothing of the ratio (normalised convolution), 1 beyond the radius.
-    static func surface(ratio q: PlanarImage, mask: PlanarImage, rad: PlanarImage, radius: Double, sigma: Double) -> PlanarImage {
+    /// Star-masked estimate of the transmission from the ratio, 1 beyond the radius.
+    ///
+    /// Plain smoothing at a small σ keeps the fringes of a mote but also absorbs the coarse part of
+    /// the noise, and dividing by it then flattens the grain under the spot. Instead the ratio is
+    /// decomposed into scales σ, 2σ, 4σ and 8σ (normalised Gaussian convolutions); each detail layer
+    /// is kept only where it exceeds its own noise (non-negative garrote at 2.5 σ_layer, with the
+    /// layer noise known analytically from `pixelSigma`), so the shadow's structure survives and the
+    /// noise passes through the correction untouched.
+    static func surface(ratio q: PlanarImage, mask: PlanarImage, rad: PlanarImage, radius: Double, sigma: Double, pixelSigma: Float) -> PlanarImage {
         let w = q.width, h = q.height, n = w * h
         let num = PlanarImage(width: w, height: h), den = PlanarImage(width: w, height: h)
         for i in 0..<n where mask.pointer[i] == 0 && q.pointer[i] > 0 { num.pointer[i] = q.pointer[i]; den.pointer[i] = 1 }
+        func smoothed(_ sg: Double) -> PlanarImage {
+            let bn = gaussian(num, sigma: sg), bd = gaussian(den, sigma: sg)
+            let t = PlanarImage(width: w, height: h, fill: 1)
+            for i in 0..<n where bd.pointer[i] > 1e-3 { t.pointer[i] = bn.pointer[i] / bd.pointer[i] }
+            return t
+        }
+        let scales = (0..<4).map { sigma * pow(2, Double($0)) }
+        let levels = scales.map(smoothed)
+        let t = levels[3].copy()
+        for k in 0..<3 {
+            // Noise of (T_k − T_{k+1}) for white noise through two Gaussians, σ_{k+1} = 2 σ_k:
+            // var = s² [1/(4πσ²) + 1/(16πσ²) − 1/(π · 5σ²)] = 0.45 s² / (4πσ²).
+            let layerSigma = pixelSigma * (Float(0.45) / (4 * Float.pi)).squareRoot() / Float(scales[k])
+            let thr = 2.5 * layerSigma, thr2 = thr * thr
+            for i in 0..<n {
+                let d = levels[k].pointer[i] - levels[k + 1].pointer[i]
+                let d2 = d * d
+                if d2 > thr2 { t.pointer[i] += d * (1 - thr2 / d2) }
+            }
+        }
+        let fr = Float(radius)
+        for i in 0..<n where rad.pointer[i] >= fr { t.pointer[i] = 1 }
+        return t
+    }
+
+    /// Separable Gaussian blur, zero outside the image (the caller normalises).
+    static func gaussian(_ img: PlanarImage, sigma: Double) -> PlanarImage {
+        let w = img.width, h = img.height
         let rk = max(1, Int(ceil(3 * sigma)))
         var kernel = (-rk...rk).map { Float(exp(-Double($0 * $0) / (2 * sigma * sigma))) }
         let ks = kernel.reduce(0, +); kernel = kernel.map { $0 / ks }
-        func blur(_ img: PlanarImage) -> PlanarImage {
-            let tmp = PlanarImage(width: w, height: h), out = PlanarImage(width: w, height: h)
-            for y in 0..<h { for x in 0..<w {
-                var s: Float = 0
-                for (j, k) in kernel.enumerated() { let xx = x + j - rk; if xx >= 0 && xx < w { s += k * img[xx, y] } }
-                tmp[x, y] = s
-            } }
-            for y in 0..<h { for x in 0..<w {
-                var s: Float = 0
-                for (j, k) in kernel.enumerated() { let yy = y + j - rk; if yy >= 0 && yy < h { s += k * tmp[x, yy] } }
-                out[x, y] = s
-            } }
-            return out
+        let out = PlanarImage(width: w, height: h)
+        var src = vImage_Buffer(data: img.pointer, height: vImagePixelCount(h), width: vImagePixelCount(w), rowBytes: w * 4)
+        var dst = vImage_Buffer(data: out.pointer, height: vImagePixelCount(h), width: vImagePixelCount(w), rowBytes: w * 4)
+        kernel.withUnsafeBufferPointer { kp in
+            vImageSepConvolve_PlanarF(&src, &dst, nil, 0, 0, kp.baseAddress!, UInt32(kernel.count), kp.baseAddress!, UInt32(kernel.count), 0, 0, vImage_Flags(kvImageBackgroundColorFill))
         }
-        let bn = blur(num), bd = blur(den)
-        let t = PlanarImage(width: w, height: h, fill: 1)
-        let fr = Float(radius)
-        for i in 0..<n where rad.pointer[i] < fr && bd.pointer[i] > 1e-3 { t.pointer[i] = bn.pointer[i] / bd.pointer[i] }
-        return t
+        return out
     }
 }
 
@@ -579,6 +618,7 @@ extension DustSpot {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: AnyKey.self)
         id = c.value("id", UUID()); x = c.value("x", 0.0); y = c.value("y", 0.0); radius = c.value("radius", 30.0)
+        model = c.value("model", .surface); smoothness = c.value("smoothness", 3.0); feather = c.value("feather", 0.2)
     }
 }
 

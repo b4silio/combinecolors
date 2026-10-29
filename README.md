@@ -76,10 +76,15 @@ at full resolution.
   profile against the surrounding sky); drag to move, drag the handle to
   resize, ⌫ deletes, *Copy to all* gives every channel the same spots (dust on
   the sensor window shadows every filter alike), the segmented control switches
-  the channel so all spots are set in one go. Two models: *Local flat*
-  (default) — the ratio of the pixels to a sky plane fitted around the spot
-  (star-masked, sigma-clipped, neighbouring spots excluded) is smoothed with a
-  star-masked Gaussian; the shadow's own outline is found as the connected
+  the channel so all spots are set in one go, *Original* (B) toggles the
+  spots off for a before / after look. Each spot has its own model, smoothness
+  and feather (the controls edit the selected spot, or the values given to new
+  spots). Two models: *Local flat* (default) — the ratio of the pixels to a sky
+  plane fitted around the spot (star-masked, sigma-clipped, neighbouring spots
+  excluded) is decomposed into four scales from *Smooth* upwards and each
+  detail layer is kept only where it exceeds its own noise, so the shadow's
+  structure (fringes included) is removed while the noise grain under the spot
+  passes through untouched; the shadow's own outline is found as the connected
   region below the sky noise, so elongated and irregular motes are corrected to
   their real edge, and the correction fades out over a feather band beyond it.
   *Radial profile* — one transmission per distance to the centre (median per
@@ -89,7 +94,8 @@ at full resolution.
   else — and cached; only Apply re-analyses the changed channels, every other
   adjustment reuses the healed data. Stored in the project and the recent-set
   state (oriented coordinates, so rotation and flips move them along).
-  CLI: `--dust OIII:x,y,r;x,y,r --dust-model surface|radial --dust-smooth --dust-feather`.
+  CLI: `--dust OIII:x,y,r;x,y,r --dust-model surface|radial --dust-smooth --dust-feather`
+  (the parameters apply to the spots given on the command line).
 * **Crop, rotation and flips**: one rectangle shared by every channel, drawn on the
   preview or typed in, or detected automatically from the empty registration
   borders. The crop drives statistics, channel thumbnails and the export; its
