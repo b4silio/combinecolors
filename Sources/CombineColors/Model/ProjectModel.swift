@@ -89,7 +89,8 @@ final class ProjectModel {
     }
     var cropEditing = false
     var cropDraft: PixelRect? = nil
-    var cropOverlay: CropOverlayMode = .frame
+    /// How the crop limits are drawn (remembered in the preferences).
+    var cropOverlay: CropOverlayMode = .frame { didSet { defaults.set(cropOverlay.rawValue, forKey: "cropOverlay") } }
     /// Rotation / mirroring applied to every channel. Stored in the project; new channels are oriented on load.
     private(set) var orientation = Orientation.identity
     var rotation: Int { orientation.rotation }
@@ -264,6 +265,7 @@ final class ProjectModel {
         recentSets = recentStore.load()
         hiddenPaletteIDs = Set(defaults.stringArray(forKey: "hiddenPalettes") ?? [])
         paletteFilter = PaletteFilter(rawValue: defaults.string(forKey: "paletteFilter") ?? "") ?? .favorites
+        cropOverlay = CropOverlayMode(rawValue: defaults.string(forKey: "cropOverlay") ?? "") ?? .frame
         renderer.onFrame = { [weak self] frame, gen in
             guard let self else { return }
             self.frame = frame
