@@ -10,7 +10,10 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot          # windows\
 $repo = Split-Path -Parent $root
 Set-Location $repo
-if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw "the GitHub CLI (gh) is not installed: winget install GitHub.cli" }
+# gh from PATH, or the portable copy in %LOCALAPPDATA%Programsgh (no admin rights needed).
+$gh = (Get-Command gh -ErrorAction SilentlyContinue).Source
+if (-not $gh) { $portable = Join-Path $env:LOCALAPPDATA "Programsghbingh.exe"; if (Test-Path $portable) { $gh = $portable } }
+if (-not $gh) { throw "the GitHub CLI (gh) is not installed: winget install GitHub.cli, or unzip the portable gh into %LOCALAPPDATA%Programsgh" }
 $version = (Get-Content "VERSION" -Raw).Trim()
 $tag = "v$version"
 if (git status --porcelain) { throw "commit or stash your changes first" }
@@ -31,11 +34,11 @@ if (-not $NoTag) {
 & (Join-Path $root "scripts\publish.ps1")
 $zip = Join-Path $repo "build\CombineColors-$version-win-x64.zip"
 if (-not (Test-Path $zip)) { throw "publish did not produce $zip" }
-gh release view $tag 2>$null | Out-Null
+& $gh release view $tag 2>$null | Out-Null
 if ($LASTEXITCODE -eq 0) {
-    gh release upload $tag $zip --clobber
+    & $gh release upload $tag $zip --clobber
 } else {
-    gh release create $tag $zip --title "CombineColors $version" --notes $notesText
+    & $gh release create $tag $zip --title "CombineColors $version" --notes $notesText
 }
 if ($LASTEXITCODE -ne 0) { throw "gh failed" }
 Write-Host "Released $tag with $(Split-Path -Leaf $zip)"
