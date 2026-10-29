@@ -1,0 +1,23 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <RootNamespace>AstroCore</RootNamespace>
+    <!-- PresentationCore gives us the Windows Imaging Component (PNG / JPEG / fallback TIFF decoding,
+         display bitmaps); everything else in the library is plain .NET. -->
+    <UseWPF>true</UseWPF>
+    <Optimize Condition="'$(Configuration)' == 'Release'">true</Optimize>
+    <Description>CombineColors processing library: FITS/TIFF I/O, statistics, stretch, normalisation, palettes, Pixel Math, denoise, dust removal and the renderer.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="AstroCore.Tests" />
+    <InternalsVisibleTo Include="CombineColors" />
+    <InternalsVisibleTo Include="CombineColors.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="System.IO" />
+  </ItemGroup>
+
+</Project>

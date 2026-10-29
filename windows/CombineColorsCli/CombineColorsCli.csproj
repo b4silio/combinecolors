@@ -1,0 +1,21 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <AssemblyName>combinecolors-cli</AssemblyName>
+    <RootNamespace>CombineColorsCli</RootNamespace>
+    <UseWPF>true</UseWPF>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Description>Headless CombineColors renderer for batch work and testing.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AstroCore\AstroCore.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="System.IO" />
+  </ItemGroup>
+
+</Project>

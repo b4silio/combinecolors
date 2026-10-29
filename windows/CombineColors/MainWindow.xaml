@@ -1,0 +1,7 @@
+﻿<Window x:Class="CombineColors.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="CombineColors" Width="1500" Height="950" MinWidth="1100" MinHeight="700"
+        AllowDrop="True" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
+    <DockPanel x:Name="Root"/>
+</Window>

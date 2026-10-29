@@ -1,0 +1,23 @@
+<Project>
+  <!-- Shared settings for every project of the Windows port. The version comes from the
+       repository's VERSION file (scripts/bump.sh), so both platforms ship the same number. -->
+  <PropertyGroup>
+    <LangVersion>13</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CA1416;CS1591</NoWarn>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <Deterministic>true</Deterministic>
+    <Authors>Basilio Noris</Authors>
+    <Product>CombineColors</Product>
+    <Copyright>© Basilio Noris</Copyright>
+    <RepoVersionFile>$(MSBuildThisFileDirectory)../VERSION</RepoVersionFile>
+    <Version Condition="Exists('$(RepoVersionFile)')">$([System.IO.File]::ReadAllText('$(RepoVersionFile)').Trim())</Version>
+    <Version Condition="!Exists('$(RepoVersionFile)')">0.0.0</Version>
+    <AssemblyVersion>$(Version).0</AssemblyVersion>
+    <FileVersion>$(Version).0</FileVersion>
+    <InformationalVersion>$(Version)</InformationalVersion>
+  </PropertyGroup>
+</Project>

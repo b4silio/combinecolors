@@ -128,6 +128,12 @@ at full resolution.
   file needed) and come back when it is reopened.
 * **CLI** (`combinecolors-cli`) for headless batch rendering and testing.
 
+## Windows
+
+A Windows port lives in `windows/` (C# / .NET 9, WPF): same processing, same palettes and
+controls, same project files. See [windows/README.md](windows/README.md) for building it and the
+few differences (CPU instead of Metal, Ctrl instead of ⌘).
+
 ## Building
 
 Requirements: macOS 14+, Xcode 16+ (tested with Xcode 26 / Swift 6.3).

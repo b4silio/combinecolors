@@ -1,0 +1,22 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>CombineColors</RootNamespace>
+    <AssemblyName>CombineColors</AssemblyName>
+    <ApplicationIcon Condition="Exists('Resources\AppIcon.ico')">Resources\AppIcon.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Description>Combine monochrome astrophotography channels into colour images.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AstroCore\AstroCore.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Resources\AppIcon-256.png" Condition="Exists('Resources\AppIcon-256.png')" />
+  </ItemGroup>
+
+</Project>
