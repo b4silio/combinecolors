@@ -6,10 +6,13 @@
 #   .\scripts\release.ps1            # release the current VERSION
 #   .\scripts\release.ps1 -NoTag     # only build and upload the zip to an existing release
 param([switch]$NoTag)
-$ErrorActionPreference = "Stop"
+# Native commands (git, gh) write progress to stderr; with a "Stop" preference Windows PowerShell
+# would turn that into errors, so exit codes are checked explicitly instead.
+$ErrorActionPreference = "Continue"
 $root = Split-Path -Parent $PSScriptRoot          # windows\
 $repo = Split-Path -Parent $root
 Set-Location $repo
+function Run { param([string]$What, [scriptblock]$Command) & $Command 2>&1 | ForEach-Object { "$_" }; if ($LASTEXITCODE -ne 0) { throw "$What failed (exit $LASTEXITCODE)" } }
 # gh from PATH, or the portable copy in %LOCALAPPDATA%\Programs\gh (no admin rights needed).
 $gh = (Get-Command gh -ErrorAction SilentlyContinue).Source
 if (-not $gh) { $portable = Join-Path $env:LOCALAPPDATA "Programs\gh\bin\gh.exe"; if (Test-Path $portable) { $gh = $portable } }
@@ -28,20 +31,18 @@ foreach ($l in $lines) {
 $notesText = ($notes -join "`n").Trim()
 if (-not $notesText) { throw "no CHANGELOG section for $version" }
 if (-not $NoTag) {
-    if (-not (git tag --list $tag)) { git tag -a $tag -m "CombineColors $version" }
-    git push origin HEAD $tag
+    if (-not (git tag --list $tag)) { Run "git tag" { git tag -a $tag -m "CombineColors $version" } }
+    Run "git push" { git push origin HEAD $tag }
 }
 & (Join-Path $root "scripts\publish.ps1")
+if ($LASTEXITCODE -ne 0) { throw "publish failed" }
 $zip = Join-Path $repo "build\CombineColors-$version-win-x64.zip"
 if (-not (Test-Path $zip)) { throw "publish did not produce $zip" }
-# gh reports a missing release on stderr, which Windows PowerShell would otherwise turn into a terminating error.
-$exists = $false
-$prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-try { $null = & $gh release view $tag --json tagName 2>&1; $exists = ($LASTEXITCODE -eq 0) } finally { $ErrorActionPreference = $prev }
+$null = & $gh release view $tag --json tagName 2>&1
+$exists = ($LASTEXITCODE -eq 0)
 if ($exists) {
-    & $gh release upload $tag $zip --clobber
+    Run "gh release upload" { & $gh release upload $tag $zip --clobber }
 } else {
-    & $gh release create $tag $zip --title "CombineColors $version" --notes $notesText
+    Run "gh release create" { & $gh release create $tag $zip --title "CombineColors $version" --notes $notesText }
 }
-if ($LASTEXITCODE -ne 0) { throw "gh failed" }
 Write-Host "Released $tag with $(Split-Path -Leaf $zip)"
