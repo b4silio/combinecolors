@@ -42,6 +42,9 @@ struct CombineColorsApp: App {
                 Divider()
                 Button("Remove All Channels") { model.removeAll() }.disabled(model.sources.isEmpty)
             }
+            CommandGroup(after: .pasteboard) {
+                Button("Copy Preview Image") { model.copyPreviewToPasteboard() }.keyboardShortcut("c", modifiers: [.command, .shift]).disabled(model.frame == nil)
+            }
             CommandMenu("View") {
                 Button("Fit to Window") { model.fitRequest += 1 }.keyboardShortcut("0")
                 Toggle("High Quality Preview", isOn: Binding(get: { model.highQualityPreview }, set: { model.highQualityPreview = $0 }))

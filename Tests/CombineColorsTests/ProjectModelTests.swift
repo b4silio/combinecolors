@@ -489,4 +489,32 @@ extension ProjectModelTests {
         m.removeChannel(.luminance)
         XCTAssertTrue(m.dust.spots(for: .luminance).isEmpty); XCTAssertNil(m.originalImages[.luminance])
     }
+
+    /// A peek left behind (the slot menu swallows the gesture end) must not override the edited
+    /// channel, and switching channels re-previews the one shown (its draft may have changed
+    /// through Copy to all while another channel was on screen).
+    func testDustEditorOverridesStuckPeekAndRepreviewsOnSwitch() async throws {
+        let m = try await loadedModel()
+        m.peekChannel = .sii
+        m.beginDustEditing(.ha)
+        XCTAssertNil(m.peekChannel)
+        XCTAssertEqual(m.displayedSettings.monoChannels, [.ha])
+        m.addDustSpot(at: CGPoint(x: 60, y: 70))
+        m.copyDustSpotsToAllChannels()
+        let oiii = m.sources[.oiii]!.image
+        m.peekChannel = .sii
+        m.switchDustChannel(.oiii)
+        XCTAssertNil(m.peekChannel)
+        XCTAssertEqual(m.displayedSettings.monoChannels, [.oiii])
+        await wait { m.sources[.oiii]!.image !== oiii }
+        XCTAssertTrue(m.sources[.oiii]!.image !== oiii, "the copied spot is previewed on the channel switched to")
+        m.viewport = Viewport(visibleRect: CGRect(x: 0, y: 0, width: 200, height: 150), scale: 1)
+        await wait { m.frame != nil }
+        let pb = NSPasteboard(name: NSPasteboard.Name("CombineColorsTests"))
+        XCTAssertTrue(m.copyPreviewToPasteboard(pb))
+        XCTAssertTrue(pb.canReadObject(forClasses: [NSImage.self], options: nil), "the preview is on the pasteboard as an image")
+        pb.releaseGlobally()
+        m.cancelDustEditing()
+        await wait { !m.isLoading && m.sources[.oiii]!.image === m.originalImages[.oiii]! }
+    }
 }

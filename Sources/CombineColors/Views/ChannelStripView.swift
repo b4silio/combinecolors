@@ -8,6 +8,7 @@ import AstroCore
 struct ChannelStripView: View {
     @Bindable var model: ProjectModel
     @State private var targeted: ChannelKind? = nil
+    @State private var mouseUp = MouseUpWatcher()
 
     static let slotWidth: CGFloat = 120
     static let slotHeight: CGFloat = 80
@@ -53,18 +54,37 @@ struct ChannelStripView: View {
                 .padding(Self.padding)
         }
         .frame(width: Self.slotWidth + 2 * Self.padding)
+        // The drag gesture gets no end when a menu or a sheet takes over the event loop; any mouse
+        // up anywhere ends the peek so that it can never stick.
+        .onAppear { mouseUp.install { [weak model] in if model?.peekChannel != nil { model?.peekChannel = nil } } }
+        .onDisappear { mouseUp.remove() }
     }
 
-    /// Loaded channel under a point of the column's content (nil over empty slots or gaps).
+    /// Loaded channel under a point of the column's content (nil over empty slots, gaps and the
+    /// slot's menu button, whose click must not start a peek).
     private func slot(at p: CGPoint) -> ChannelKind? {
         let pitch = Self.slotHeight + Self.slotSpacing
         let y = p.y - Self.padding
         guard y >= 0 else { return nil }
         let i = Int(y / pitch)
-        guard i < order.count, y - CGFloat(i) * pitch <= Self.slotHeight else { return nil }
+        let dy = y - CGFloat(i) * pitch
+        guard i < order.count, dy <= Self.slotHeight else { return nil }
         let k = order[i]
-        return model.sources[k] == nil ? nil : k
+        guard model.sources[k] != nil else { return nil }
+        if dy < 26, p.x - Self.padding > Self.slotWidth - 26 { return nil }
+        return k
     }
+}
+
+/// Runs a closure on every left mouse up seen by the application (local event monitor).
+final class MouseUpWatcher {
+    private var token: Any?
+    func install(_ action: @escaping () -> Void) {
+        remove()
+        token = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseUp]) { e in action(); return e }
+    }
+    func remove() { if let t = token { NSEvent.removeMonitor(t); token = nil } }
+    deinit { remove() }
 }
 
 struct ChannelSlotView: View {

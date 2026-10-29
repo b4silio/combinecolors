@@ -378,6 +378,7 @@ final class ProjectModel {
     }
 
     func removeChannel(_ kind: ChannelKind) {
+        if peekChannel == kind { peekChannel = nil }
         baseSources.removeValue(forKey: kind)
         sources.removeValue(forKey: kind)
         slotThumbnails.removeValue(forKey: kind)
@@ -456,6 +457,7 @@ final class ProjectModel {
     /// Moves a channel to another slot (swapping if occupied).
     func reassign(_ kind: ChannelKind, to newKind: ChannelKind) {
         guard kind != newKind, let src = baseSources[kind], let cur = sources[kind] else { return }
+        peekChannel = nil
         let otherBase = baseSources[newKind], otherCur = sources[newKind], otherThumb = slotThumbnails[newKind]
         let otherOrig = originalImages[newKind], otherSpots = dust.spots[newKind], otherDraft = dustDraft?.spots[newKind]
         baseSources[newKind] = ChannelSource(src, kind: newKind)
@@ -762,6 +764,18 @@ final class ProjectModel {
 
     // MARK: - Export
 
+    /// Puts the preview as it is on screen (rendered region, preview resolution) on the pasteboard
+    /// as an image; returns false when nothing is rendered yet.
+    @discardableResult
+    func copyPreviewToPasteboard(_ pb: NSPasteboard = .general) -> Bool {
+        guard let f = frame else { return false }
+        pb.clearContents()
+        let img = NSImage(cgImage: f.cgImage, size: NSSize(width: f.cgImage.width, height: f.cgImage.height))
+        let ok = pb.writeObjects([img])
+        if ok { statusText = "Preview copied (\(f.cgImage.width) × \(f.cgImage.height) px)." }
+        return ok
+    }
+
     func export(to url: URL, format: RasterWriter.Format, linear: Bool, completion: @escaping (Error?) -> Void) {
         guard let ctx = context, !sources.isEmpty else { completion(RenderError.noOutput); return }
         var s = settings
@@ -945,18 +959,23 @@ extension ProjectModel {
     func beginDustEditing(_ kind: ChannelKind) {
         guard sources[kind] != nil else { return }
         if cropEditing { cancelCropEditing() }
+        // A press-and-hold peek left behind by the slot menu would otherwise override the edited channel.
+        peekChannel = nil
         if dustEditing == nil { dustDraft = dust; dustBypass = false }
         dustEditing = kind
         selectedDustSpot = nil
-        if dustBypass { scheduleDustPreview() } else { scheduleRender() }
+        scheduleDustPreview()
     }
 
-    /// Switches the editor to another loaded channel, keeping every draft.
+    /// Switches the editor to another loaded channel, keeping every draft. The channel is always
+    /// re-previewed: its draft may have changed while another one was shown (Copy to all) and the
+    /// Original toggle applies to the channel on screen only.
     func switchDustChannel(_ kind: ChannelKind) {
         guard dustEditing != nil, dustEditing != kind, sources[kind] != nil else { return }
+        peekChannel = nil
         dustEditing = kind
         selectedDustSpot = nil
-        if dustBypass { scheduleDustPreview() } else { scheduleRender() }
+        scheduleDustPreview()
     }
 
     /// Adds a spot at an image point, fitted to the shadow found there (plain spot of the default

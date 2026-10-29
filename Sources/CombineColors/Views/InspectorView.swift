@@ -10,6 +10,13 @@ struct ControlsStripView: View {
     @State private var dragScroll = ScrollDragState()
 
     static let height: CGFloat = 204
+    /// Height taken by the horizontal scroller when scroll bars are always shown (legacy style);
+    /// overlay scrollers take none. The strip keeps its total height either way.
+    @State private var scrollerHeight: CGFloat = ControlsStripView.legacyScrollerHeight
+    static var legacyScrollerHeight: CGFloat {
+        NSScroller.preferredScrollerStyle == .legacy ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) : 0
+    }
+    private var contentHeight: CGFloat { Self.height - scrollerHeight }
 
     private var hasRGB: Bool { model.sources[.red] != nil && model.sources[.green] != nil && model.sources[.blue] != nil }
 
@@ -25,25 +32,28 @@ struct ControlsStripView: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: true) {
             HStack(alignment: .top, spacing: 6) {
-                ControlBlock(title: "Channels", width: 250, expanded: binding("channels"), dragScroll: dragScroll, minHeight: Self.height - 14) { channelsSection }
-                ControlBlock(title: "Stretch", width: 262, expanded: binding("stretch"), dragScroll: dragScroll, minHeight: Self.height - 14) { stretchSection }
-                ControlBlock(title: "Normalisation", width: 290, expanded: binding("normalisation"), dragScroll: dragScroll, minHeight: Self.height - 14) { normalizationSection }
-                ControlBlock(title: "Luminance", width: 250, expanded: binding("luminance"), dragScroll: dragScroll, minHeight: Self.height - 14) { luminanceSection }
-                ControlBlock(title: "Colour bands", width: 226, expanded: binding("bands"), dragScroll: dragScroll, minHeight: Self.height - 14) { colorBandsSection }
-                ControlBlock(title: "Colour", width: 250, expanded: binding("colour"), dragScroll: dragScroll, minHeight: Self.height - 14) { colourSection }
-                ControlBlock(title: "Denoise", width: 262, expanded: binding("denoise"), dragScroll: dragScroll, minHeight: Self.height - 14) { denoiseSection }
-                ControlBlock(title: "Detail", width: 266, expanded: binding("detail"), dragScroll: dragScroll, minHeight: Self.height - 14) { detailSection }
+                ControlBlock(title: "Channels", width: 250, expanded: binding("channels"), dragScroll: dragScroll, minHeight: contentHeight - 12) { channelsSection }
+                ControlBlock(title: "Stretch", width: 262, expanded: binding("stretch"), dragScroll: dragScroll, minHeight: contentHeight - 12) { stretchSection }
+                ControlBlock(title: "Normalisation", width: 290, expanded: binding("normalisation"), dragScroll: dragScroll, minHeight: contentHeight - 12) { normalizationSection }
+                ControlBlock(title: "Luminance", width: 250, expanded: binding("luminance"), dragScroll: dragScroll, minHeight: contentHeight - 12) { luminanceSection }
+                ControlBlock(title: "Colour bands", width: 226, expanded: binding("bands"), dragScroll: dragScroll, minHeight: contentHeight - 12) { colorBandsSection }
+                ControlBlock(title: "Colour", width: 250, expanded: binding("colour"), dragScroll: dragScroll, minHeight: contentHeight - 12) { colourSection }
+                ControlBlock(title: "Denoise", width: 262, expanded: binding("denoise"), dragScroll: dragScroll, minHeight: contentHeight - 12) { denoiseSection }
+                ControlBlock(title: "Detail", width: 266, expanded: binding("detail"), dragScroll: dragScroll, minHeight: contentHeight - 12) { detailSection }
                 // Stays collapsed while no R, G and B channels are loaded (nothing to blend).
-                ControlBlock(title: "RGB stars", width: 262, expanded: hasRGB ? binding("stars") : .constant(false), dragScroll: dragScroll, minHeight: Self.height - 14) { starsSection }
+                ControlBlock(title: "RGB stars", width: 262, expanded: hasRGB ? binding("stars") : .constant(false), dragScroll: dragScroll, minHeight: contentHeight - 12) { starsSection }
             }
             .padding(.horizontal, 6)
-            .padding(.top, 10)
-            .padding(.bottom, 4)
-            .frame(height: Self.height)
+            .padding(.top, 6)
+            .padding(.bottom, 6)
+            .frame(height: contentHeight)
             .background(ScrollViewFinder(state: dragScroll))
             .background(Color.clear.contentShape(Rectangle()).gesture(dragScroll.gesture))
         }
         .frame(height: Self.height)
+        .onReceive(NotificationCenter.default.publisher(for: NSScroller.preferredScrollerStyleDidChangeNotification)) { _ in
+            scrollerHeight = Self.legacyScrollerHeight
+        }
     }
 
     // MARK: Colour bands

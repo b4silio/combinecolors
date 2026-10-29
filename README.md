@@ -68,6 +68,8 @@ at full resolution.
   1:1) and a Camera-Raw-like masking slider that spares the noisy sky.
   RGB star blending (screen / lighten / add with a luminance mask,
   linear or already-stretched star images detected automatically).
+* **Copy preview** (⇧⌘C or the clipboard button next to the zoom controls): the
+  preview as shown goes to the clipboard for a quick paste into a chat or notes.
 * **Dust spot healing** (channel menu › *Heal Dust Spots…*): removes the shadows of
   dust motes and donuts from stacks that had no (or shifted) flats. A mote
   attenuates the light, so the stacked image is the true scene times a

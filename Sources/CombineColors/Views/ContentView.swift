@@ -225,10 +225,15 @@ struct ContentView: View {
         HStack(spacing: 4) {
             Toggle(isOn: $model.highQualityPreview) { Label("HQ", systemImage: "sparkles") }.help("High quality preview (more pixels)")
             Divider().frame(height: 14)
-            Button { zoom(.zoomOut) } label: { Image(systemName: "minus.magnifyingglass") }
-            Button { zoom(.zoomIn) } label: { Image(systemName: "plus.magnifyingglass") }
+            Button { zoom(.zoomOut) } label: { Image(systemName: "minus.magnifyingglass").font(.system(size: 11, weight: .medium)) }
+            Button { zoom(.zoomIn) } label: { Image(systemName: "plus.magnifyingglass").font(.system(size: 11, weight: .medium)) }
             Button("Fit") { zoom(.fit) }
             Button("1:1") { zoom(.actualSize) }
+            Divider().frame(height: 14)
+            Button { model.copyPreviewToPasteboard() } label: { Image(systemName: "doc.on.doc").font(.system(size: 11, weight: .medium)) }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+                .disabled(model.frame == nil)
+                .help("Copy the preview as shown to the clipboard (⇧⌘C)")
         }
         .controlSize(.small)
         .padding(6)
