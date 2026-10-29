@@ -38,7 +38,7 @@ struct ControlsStripView: View {
                 ControlBlock(title: "Luminance", width: 250, expanded: binding("luminance"), dragScroll: dragScroll, minHeight: contentHeight - 12) { luminanceSection }
                 ControlBlock(title: "Colour bands", width: 226, expanded: binding("bands"), dragScroll: dragScroll, minHeight: contentHeight - 12) { colorBandsSection }
                 ControlBlock(title: "Colour", width: 250, expanded: binding("colour"), dragScroll: dragScroll, minHeight: contentHeight - 12) { colourSection }
-                ControlBlock(title: "Denoise", width: 262, expanded: binding("denoise"), dragScroll: dragScroll, minHeight: contentHeight - 12) { denoiseSection }
+                ControlBlock(title: "Denoise", width: 330, expanded: binding("denoise"), dragScroll: dragScroll, minHeight: contentHeight - 12) { denoiseSection }
                 ControlBlock(title: "Detail", width: 266, expanded: binding("detail"), dragScroll: dragScroll, minHeight: contentHeight - 12) { detailSection }
                 // Stays collapsed while no R, G and B channels are loaded (nothing to blend).
                 ControlBlock(title: "RGB stars", width: 262, expanded: hasRGB ? binding("stars") : .constant(false), dragScroll: dragScroll, minHeight: contentHeight - 12) { starsSection }
@@ -94,9 +94,10 @@ struct ControlsStripView: View {
         }
         SliderRow(title: "Protect", value: d.protectBright, range: 0...1, defaultValue: 0.5, help: "Keeps bright structures (stars, nebula cores) untouched.")
         SliderRow(title: "Colour", value: d.color, range: 0...1, defaultValue: 0, help: "Smooths colour mottling (chroma only, luminance untouched).")
-        HStack {
-            Spacer()
-            Button("Reset") { model.settings.denoise = DenoiseSettings() }.controlSize(.small)
+        HStack(alignment: .bottom, spacing: 4) {
+            Text(model.settings.denoise.method.summary).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Button { model.settings.denoise = DenoiseSettings() } label: { Image(systemName: "arrow.counterclockwise") }
+                .controlSize(.mini).buttonStyle(.borderless).help("Reset the denoise settings")
                 .disabled(model.settings.denoise == DenoiseSettings())
         }
     }

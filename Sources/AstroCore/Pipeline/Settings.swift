@@ -228,6 +228,16 @@ public enum DenoiseMethod: String, Codable, CaseIterable, Identifiable {
         case .bm3d: return "BM3D (GPU)"
         }
     }
+
+    /// Short description shown under the Denoise controls.
+    public var summary: String {
+        switch self {
+        case .wavelets: return "Starlet (à trous) wavelets: fine-scale coefficients below k·σ of the measured noise are shrunk. The classic astro method, fast, keeps stars and edges; blotchy sky when pushed."
+        case .nonLocalMeans: return "Weighted mean of the pixels whose 5×5 patch looks alike within the search window (Buades 2005). Keeps fine texture and faint filaments; cost grows with the search radius squared."
+        case .guided: return "The output is a local linear function of the image itself (He 2010): flat sky is averaged, edges and gradients stay. Fastest and mildest, for light cleanup."
+        case .bm3d: return "Similar 8×8 blocks stacked and filtered together (DCT + Haar, hard threshold then Wiener pass; Dabov 2007) on the GPU. Strongest on fine noise; square artefacts when pushed."
+        }
+    }
 }
 
 public struct DenoiseSettings: Codable, Equatable, Hashable {
