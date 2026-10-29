@@ -34,8 +34,11 @@ if (-not $NoTag) {
 & (Join-Path $root "scripts\publish.ps1")
 $zip = Join-Path $repo "build\CombineColors-$version-win-x64.zip"
 if (-not (Test-Path $zip)) { throw "publish did not produce $zip" }
-& $gh release view $tag 2>$null | Out-Null
-if ($LASTEXITCODE -eq 0) {
+# gh reports a missing release on stderr, which Windows PowerShell would otherwise turn into a terminating error.
+$exists = $false
+$prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+try { $null = & $gh release view $tag --json tagName 2>&1; $exists = ($LASTEXITCODE -eq 0) } finally { $ErrorActionPreference = $prev }
+if ($exists) {
     & $gh release upload $tag $zip --clobber
 } else {
     & $gh release create $tag $zip --title "CombineColors $version" --notes $notesText
