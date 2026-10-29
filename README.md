@@ -1,10 +1,10 @@
 # CombineColors
 
-A native macOS app for turning stacked monochrome astrophotography channels
-(Hα, OIII, SII, Hβ, L, R, G, B) into colour images. Drop FITS or TIFF stacks
-(16-bit integer or 32-bit float, linear or already stretched), pick a palette
-from live thumbnails, tune the balance with a real-time preview, then export
-at full resolution.
+A native macOS and Windows app for turning stacked monochrome astrophotography
+channels (Hα, OIII, SII, Hβ, L, R, G, B) into colour images. Drop FITS or TIFF
+stacks (16-bit integer or 32-bit float, linear or already stretched), pick a
+palette from live thumbnails, tune the balance with a real-time preview, then
+export at full resolution.
 
 ![Main window](docs/screenshot.png)
 
