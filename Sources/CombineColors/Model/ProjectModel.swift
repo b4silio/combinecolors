@@ -256,6 +256,9 @@ final class ProjectModel {
     private var suppressRecent = false
 
     init(defaults: UserDefaults = .standard) {
+        // Tests must never write the user's recent sets (their saved presets and dust spots).
+        assert(defaults !== UserDefaults.standard || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil,
+               "use an isolated UserDefaults suite in tests")
         self.defaults = defaults
         recentStore = RecentSetsStore(defaults: defaults)
         recentSets = recentStore.load()
@@ -764,15 +767,27 @@ final class ProjectModel {
 
     // MARK: - Export
 
-    /// Puts the preview as it is on screen (rendered region, preview resolution) on the pasteboard
+    /// The preview as it is on screen (rendered region at the preview resolution), limited to the
+    /// crop when one is set; nil when nothing is rendered yet.
+    var previewImageForCopy: CGImage? {
+        guard let f = frame else { return nil }
+        guard let c = crop?.cgRect else { return f.cgImage }
+        let r = c.intersection(f.rect)
+        guard !r.isEmpty else { return nil }
+        let s = CGFloat(f.cgImage.width) / f.rect.width
+        let px = CGRect(x: (r.minX - f.rect.minX) * s, y: (r.minY - f.rect.minY) * s, width: r.width * s, height: r.height * s).integral
+        return f.cgImage.cropping(to: px) ?? f.cgImage
+    }
+
+    /// Puts the preview as it is on screen (cropped part only when a crop is set) on the pasteboard
     /// as an image; returns false when nothing is rendered yet.
     @discardableResult
     func copyPreviewToPasteboard(_ pb: NSPasteboard = .general) -> Bool {
-        guard let f = frame else { return false }
+        guard let cg = previewImageForCopy else { return false }
         pb.clearContents()
-        let img = NSImage(cgImage: f.cgImage, size: NSSize(width: f.cgImage.width, height: f.cgImage.height))
+        let img = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
         let ok = pb.writeObjects([img])
-        if ok { statusText = "Preview copied (\(f.cgImage.width) × \(f.cgImage.height) px)." }
+        if ok { statusText = "Preview copied (\(cg.width) × \(cg.height) px)." }
         return ok
     }
 

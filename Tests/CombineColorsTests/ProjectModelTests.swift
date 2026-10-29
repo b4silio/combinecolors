@@ -5,14 +5,30 @@ import AstroCore
 @MainActor
 final class ProjectModelTests: XCTestCase {
     var dir: URL!
+    /// Isolated preferences: the models under test must never touch the user's recent sets
+    /// (their saved presets and dust spots live there). One fixed suite, wiped before and after.
+    static let defaultsSuite = "ch.basilio.combinecolors.tests"
+    var defaults: UserDefaults!
 
     override func setUp() async throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("CombineColorsModelTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defaults = Self.isolatedDefaults()
     }
 
     override func tearDown() async throws {
         try? FileManager.default.removeItem(at: dir)
+        Self.discardIsolatedDefaults()
+    }
+
+    static func isolatedDefaults() -> UserDefaults {
+        UserDefaults.standard.removePersistentDomain(forName: defaultsSuite)
+        return UserDefaults(suiteName: defaultsSuite)!
+    }
+
+    static func discardIsolatedDefaults() {
+        UserDefaults.standard.removePersistentDomain(forName: defaultsSuite)
+        try? FileManager.default.removeItem(at: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Preferences/\(defaultsSuite).plist"))
     }
 
     func makeChannel(_ name: String, kind: ChannelKind, scale: Float, seed: UInt64, width: Int = 200, height: Int = 150) throws -> URL {
@@ -38,7 +54,7 @@ final class ProjectModelTests: XCTestCase {
     }
 
     func loadedModel() async throws -> ProjectModel {
-        let m = ProjectModel()
+        let m = ProjectModel(defaults: defaults)
         let urls = [try makeChannel("x-Ha.fits", kind: .ha, scale: 1, seed: 1),
                     try makeChannel("x-OIII.fits", kind: .oiii, scale: 0.4, seed: 2),
                     try makeChannel("x-SII.fits", kind: .sii, scale: 0.3, seed: 3)]
@@ -87,7 +103,7 @@ final class ProjectModelTests: XCTestCase {
     }
 
     func testColorFileAsRGB() async throws {
-        let m = ProjectModel()
+        let m = ProjectModel(defaults: defaults)
         let p = PlanarImage(width: 50, height: 40, fill: 0.3)
         let url = dir.appendingPathComponent("stars.fits")
         try FITSWriter.write(planes: [p, p, p], to: url)
@@ -156,7 +172,7 @@ final class ProjectModelTests: XCTestCase {
     }
 
     func testAutoCropOnPaddedData() async throws {
-        let m = ProjectModel()
+        let m = ProjectModel(defaults: defaults)
         let img = PlanarImage(width: 120, height: 100, fill: 0.02)
         for y in 0..<100 { for x in 0..<15 { img[x, y] = 0 } }
         let url = dir.appendingPathComponent("padded-Ha.fits")
@@ -176,7 +192,7 @@ final class ProjectModelTests: XCTestCase {
         let url = dir.appendingPathComponent("project.json")
         try m.saveProject(to: url)
         XCTAssertEqual(m.projectURL, url)
-        let m2 = ProjectModel()
+        let m2 = ProjectModel(defaults: defaults)
         m2.openProject(from: url)
         await wait { m2.sources.count == 3 && !m2.isLoading && m2.context != nil }
         XCTAssertEqual(m2.settings, m.settings)
@@ -289,7 +305,7 @@ final class ProjectModelTests: XCTestCase {
         // Presets travel with the project.
         let url = dir.appendingPathComponent("presets.json")
         try m.saveProject(to: url)
-        let m2 = ProjectModel()
+        let m2 = ProjectModel(defaults: defaults)
         m2.openProject(from: url)
         await wait { m2.presets.count == 2 }
         XCTAssertEqual(m2.presets.map(\.name), ["Preset 1", "Warmer"])
@@ -313,7 +329,7 @@ final class ProjectModelTests: XCTestCase {
     }
 
     func testDualBandAddsChannels() async throws {
-        let m = ProjectModel()
+        let m = ProjectModel(defaults: defaults)
         let r = PlanarImage(width: 60, height: 40, fill: 0.5), g = PlanarImage(width: 60, height: 40, fill: 0.2), b = PlanarImage(width: 60, height: 40, fill: 0.3)
         let (ha, o3) = DualBand.split(r: r, g: g, b: b, settings: DualBandSettings())
         m.addSplitChannels(first: (.ha, ha), second: (.oiii, o3), fileName: "osc.fits")
@@ -326,9 +342,9 @@ final class ProjectModelTests: XCTestCase {
 @MainActor
 final class RecentSetsTests: XCTestCase {
     func testRecordAndReopenSets() async throws {
-        let defaults = UserDefaults(suiteName: "RecentSetsTests-\(UUID().uuidString)")!
         let base = ProjectModelTests()
         try await base.setUp()
+        let defaults = base.defaults!
         defer { Task { try? await base.tearDown() } }
         let ha = try base.makeChannel("set-Ha.fits", kind: .ha, scale: 1, seed: 1)
         let o3 = try base.makeChannel("set-OIII.fits", kind: .oiii, scale: 0.5, seed: 2)
@@ -387,9 +403,9 @@ final class RecentSetsTests: XCTestCase {
 @MainActor
 final class PaletteVisibilityTests: XCTestCase {
     func testHideAndFilterPersist() async throws {
-        let defaults = UserDefaults(suiteName: "PaletteVisibilityTests-\(UUID().uuidString)")!
         let base = ProjectModelTests()
         try await base.setUp()
+        let defaults = base.defaults!
         let m = ProjectModel(defaults: defaults)
         m.loadFiles([try base.makeChannel("v-Ha.fits", kind: .ha, scale: 1, seed: 1), try base.makeChannel("v-OIII.fits", kind: .oiii, scale: 0.5, seed: 2)])
         await base.wait { m.sources.count == 2 && !m.isLoading }
@@ -470,7 +486,7 @@ extension ProjectModelTests {
         // Save / open keeps the spots and heals on load.
         let url = dir.appendingPathComponent("dust.json")
         try m.saveProject(to: url)
-        let m2 = ProjectModel()
+        let m2 = ProjectModel(defaults: defaults)
         m2.openProject(from: url)
         await wait { m2.sources.count == 3 && !m2.isLoading && m2.context != nil }
         XCTAssertEqual(m2.dust, m.dust)
@@ -513,6 +529,14 @@ extension ProjectModelTests {
         let pb = NSPasteboard(name: NSPasteboard.Name("CombineColorsTests"))
         XCTAssertTrue(m.copyPreviewToPasteboard(pb))
         XCTAssertTrue(pb.canReadObject(forClasses: [NSImage.self], options: nil), "the preview is on the pasteboard as an image")
+        let whole = m.previewImageForCopy!
+        XCTAssertEqual(whole.width, m.frame!.cgImage.width)
+        m.crop = PixelRect(x: 20, y: 10, width: 100, height: 50)
+        await wait { !m.isLoading && m.frame != nil }
+        let cropped = m.previewImageForCopy!
+        let scale = CGFloat(m.frame!.cgImage.width) / m.frame!.rect.width
+        XCTAssertEqual(CGFloat(cropped.width), 100 * scale, accuracy: 1.5, "the copy covers the crop only")
+        XCTAssertEqual(CGFloat(cropped.height), 50 * scale, accuracy: 1.5)
         pb.releaseGlobally()
         m.cancelDustEditing()
         await wait { !m.isLoading && m.sources[.oiii]!.image === m.originalImages[.oiii]! }

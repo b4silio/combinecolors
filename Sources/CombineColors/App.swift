@@ -3,7 +3,14 @@ import AstroCore
 
 @main
 struct CombineColorsApp: App {
-    @State private var model = ProjectModel()
+    @State private var model = ProjectModel(defaults: CombineColorsApp.launchDefaults)
+
+    /// `-CCDefaults <suite>` on the command line keeps a test instance's recent sets (with their
+    /// saved presets and dust spots) apart from the user's.
+    static var launchDefaults: UserDefaults {
+        if let suite = UserDefaults.standard.string(forKey: "CCDefaults"), !suite.isEmpty, let d = UserDefaults(suiteName: suite) { return d }
+        return .standard
+    }
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
