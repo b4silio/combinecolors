@@ -142,6 +142,21 @@ open build/CombineColors.app
 `Package.swift` can also be opened in Xcode directly (the `CombineColors`
 scheme runs the app).
 
+### Sharing a build
+
+```bash
+./scripts/make_dmg.sh             # universal (Apple silicon + Intel) app in build/CombineColors-<version>.dmg
+```
+
+The disk image holds the app, an Applications shortcut and a "How to open"
+note. The app is ad-hoc signed, not notarised (no Apple developer account), so
+on the first launch macOS reports that it cannot verify it: the recipient
+clicks *Done*, then *Open Anyway* in System Settings › Privacy & Security
+(once), or removes the quarantine flag with
+`xattr -dr com.apple.quarantine /Applications/CombineColors.app`.
+The icon is generated from `Resources/AppIcon-source.png` by
+`scripts/make_icon.py` (trimmed and placed on the macOS icon grid).
+
 ## Using the app
 
 1. **Load channels** — drop files or a folder on the window (or ⌘O). Drop a
@@ -285,7 +300,7 @@ Sources/CombineColors        SwiftUI app (model, coordinators, views)
 Sources/combinecolors-cli    headless renderer
 Tests/AstroCoreTests         XCTest suite (real-data tests skip when the data is absent)
 Tests/CombineColorsTests     model-level app tests (loading, crop, rotation, presets, peek, recent sets)
-scripts/                     make_app.sh, make_icon.py
+scripts/                     make_app.sh (UNIVERSAL=1 for both architectures), make_dmg.sh, make_icon.py
 ```
 
 See `PLAN.md` for the phase plan and the test matrix.
