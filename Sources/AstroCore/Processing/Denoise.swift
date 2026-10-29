@@ -1,14 +1,17 @@
 import Foundation
 import Accelerate
 
-/// Noise reduction on the combined image: luminance by one of three classical methods and
-/// colour by chroma smoothing. Everything is O(N) or O(N·window) and runs on the CPU.
+/// Noise reduction on the combined image: luminance by one of four classical methods and
+/// colour by chroma smoothing. Wavelets and the guided filter run on the CPU (O(N)); non-local
+/// means runs on the GPU when available (CPU fallback) and BM3D is GPU only (see `MetalDenoise`).
 ///
 /// * **Wavelets** — starlet (à trous B3-spline) transform with k·σ soft thresholding per scale,
 ///   the standard tool of astronomical image processing (Starck & Murtagh).
 /// * **Non-local means** — Buades et al. 2005, patch-wise averaging; symmetric offsets and
 ///   separable box sums keep it O(N · search²).
 /// * **Guided filter** — He et al. 2010 (self-guided), edge-preserving smoothing with box filters.
+/// * **BM3D** — Dabov et al. 2007, block matching + collaborative 3-D transform filtering; the
+///   strongest classical denoiser, Metal compute shaders make it usable interactively.
 ///
 /// The noise level σ is estimated from the finest wavelet scale (median absolute deviation), so
 /// the strength adapts to the preview level and to the export resolution.
@@ -170,7 +173,13 @@ public enum Denoise {
             case .wavelets:
                 target = wavelets(y, sigma: sigma, amount: d.amount, layers: d.layers)
             case .nonLocalMeans:
-                target = nonLocalMeans(y, sigma: sigma, h: d.amount * 1.5 * sigma, search: d.search)
+                let h = d.amount * 1.5 * sigma
+                target = MetalDenoise.nonLocalMeans(y, sigma: sigma, h: h, search: d.search)
+                    ?? nonLocalMeans(y, sigma: sigma, h: h, search: d.search)
+            case .bm3d:
+                // GPU only; without a Metal device fall back to the wavelets.
+                target = MetalDenoise.bm3d(y, sigma: sigma, amount: d.amount, search: d.blockSearch)
+                    ?? wavelets(y, sigma: sigma, amount: d.amount, layers: 3)
             case .guided:
                 let eps = pow(d.amount * 3 * sigma, 2)
                 target = guided(y, epsilon: eps, radius: d.radius)

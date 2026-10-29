@@ -218,13 +218,14 @@ public struct DetailSettings: Codable, Equatable, Hashable {
 }
 
 public enum DenoiseMethod: String, Codable, CaseIterable, Identifiable {
-    case wavelets, nonLocalMeans, guided
+    case wavelets, nonLocalMeans, guided, bm3d
     public var id: String { rawValue }
     public var displayName: String {
         switch self {
         case .wavelets: return "Wavelets (starlet)"
         case .nonLocalMeans: return "Non-local means"
         case .guided: return "Guided filter"
+        case .bm3d: return "BM3D (GPU)"
         }
     }
 }
@@ -239,6 +240,8 @@ public struct DenoiseSettings: Codable, Equatable, Hashable {
     public var search: Int = 5
     /// Guided-filter window radius in pixels (1…8).
     public var radius: Int = 3
+    /// BM3D block-matching window radius in pixels (6…24).
+    public var blockSearch: Int = 16
     /// 0…1: keeps bright structures (stars, cores) untouched.
     public var protectBright: Float = 0.5
     /// 0…1 chroma (colour mottling) smoothing.

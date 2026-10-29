@@ -49,10 +49,16 @@ at full resolution.
 * **Colour bands** (Camera Raw style selective colour): hue, saturation and
   lightness per band — reds, oranges, yellows, greens, teals, blues, magentas.
 * **Denoise**: luminance noise reduction by starlet wavelet thresholding (the
-  classic astronomical method), non-local means or a guided filter, with the
-  noise level measured from the image, protection of bright structures and
-  separate chroma smoothing. All CPU, no models: wavelets and guided filter
-  are instant, non-local means takes a few seconds on a full-size export.
+  classic astronomical method), non-local means, a guided filter or BM3D
+  (block matching + collaborative 3-D filtering, the strongest classical
+  denoiser), with the noise level measured from the image, protection of
+  bright structures and separate chroma smoothing. No models: wavelets and
+  guided filter are instant on the CPU; non-local means and BM3D run as Metal
+  compute shaders on the GPU (≈ 0.1 s / 0.3 s on a 2.5 MP preview, ≈ 1 s / 4 s
+  on a 40 MP export). BM3D measures the noise per DCT frequency, so the
+  correlated noise of stacked, resampled data is thresholded correctly.
+  Without a Metal device non-local means falls back to the CPU and BM3D to
+  the wavelets.
 * **Colour**: saturation, vibrance, SCNR green removal, hue rotation,
   black/white point, gamma. **Detail**: texture (fine), clarity (mid-scale)
   and dehaze (large-scale) local contrast, as in Camera Raw; the blurs are

@@ -18,7 +18,7 @@ import AstroCore
 //      --texture <-1..1>      fine local contrast;  --clarity <-0.5..2>  mid-scale;  --dehaze <-1..1>  large-scale
 //      --sharpen <0..2>       unsharp mask amount;  --sharpen-radius <px>  its radius in full-resolution pixels (default 1.5)
 //      --sharpen-masking <0..1>  protect low-contrast (noise) areas from the sharpening
-//      --denoise <0..1>       luminance noise reduction;  --denoise-method wavelets | nonLocalMeans | guided
+//      --denoise <0..1>       luminance noise reduction;  --denoise-method wavelets | nonLocalMeans | guided | bm3d
 //      --denoise-color <0..1> chroma smoothing
 //      --lum <preset|off>     luminance: ha | lum | haMostly | haOiii | balanced | lumHa | maxLines | meanLines | off (default ha)
 //      --stars                blend RGB stars

@@ -70,7 +70,7 @@ struct ControlsStripView: View {
     @ViewBuilder var denoiseSection: some View {
         let d = $model.settings.denoise
         MenuPicker(title: "Method", selection: d.method, options: DenoiseMethod.allCases) { $0.displayName }
-            .help("Wavelets: starlet k·σ thresholding, the classic astronomical method, fast. Non-local means: patch averaging, best on fine texture, slower (export can take a while). Guided filter: edge-preserving smoothing, fastest.")
+            .help("Wavelets: starlet k·σ thresholding, the classic astronomical method, fast. Non-local means: patch averaging, best on fine texture, slower (export can take a while). Guided filter: edge-preserving smoothing, fastest. BM3D: block matching + collaborative 3-D filtering on the GPU, strongest on fine noise (falls back to wavelets without Metal).")
         SliderRow(title: "Luminance", value: d.amount, range: 0...1, defaultValue: 0, help: "Strength of the luminance noise reduction, relative to the measured noise level (so it adapts to the preview level and the export).")
         switch model.settings.denoise.method {
         case .wavelets:
@@ -79,6 +79,8 @@ struct ControlsStripView: View {
             IntSliderRow(title: "Search", value: d.search, range: 3...10, defaultValue: 5, help: "Search window radius in pixels; cost grows with its square.")
         case .guided:
             IntSliderRow(title: "Radius", value: d.radius, range: 1...8, defaultValue: 3, help: "Window radius in pixels.")
+        case .bm3d:
+            IntSliderRow(title: "Search", value: d.blockSearch, range: 6...24, defaultValue: 16, help: "Block-matching window radius in pixels; larger windows average more blocks (smoother sky), cost grows with the window.")
         }
         SliderRow(title: "Protect", value: d.protectBright, range: 0...1, defaultValue: 0.5, help: "Keeps bright structures (stars, nebula cores) untouched.")
         SliderRow(title: "Colour", value: d.color, range: 0...1, defaultValue: 0, help: "Smooths colour mottling (chroma only, luminance untouched).")

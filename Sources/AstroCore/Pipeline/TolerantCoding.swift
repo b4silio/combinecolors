@@ -146,7 +146,7 @@ extension DenoiseSettings {
         let c = try decoder.container(keyedBy: AnyKey.self)
         let d = DenoiseSettings()
         method = c.value("method", d.method); amount = c.value("amount", d.amount); layers = c.value("layers", d.layers)
-        search = c.value("search", d.search); radius = c.value("radius", d.radius)
+        search = c.value("search", d.search); radius = c.value("radius", d.radius); blockSearch = c.value("blockSearch", d.blockSearch)
         protectBright = c.value("protectBright", d.protectBright); color = c.value("color", d.color)
     }
 }
