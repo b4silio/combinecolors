@@ -16,5 +16,10 @@ git rev-parse -q --verify "refs/tags/$tag" > /dev/null || git tag -a "$tag" -m "
 git push origin HEAD "$tag"
 scripts/make_dmg.sh
 dmg="build/CombineColors-$version.dmg"
-gh release create "$tag" "$dmg" --title "CombineColors $version" --notes "$notes"
+# The Windows side (windows/scripts/release.ps1) may have created the release first: then only attach the DMG.
+if gh release view "$tag" > /dev/null 2>&1; then
+    gh release upload "$tag" "$dmg" --clobber
+else
+    gh release create "$tag" "$dmg" --title "CombineColors $version" --notes "$notes"
+fi
 echo "Released $tag"
