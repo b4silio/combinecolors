@@ -47,11 +47,11 @@ public sealed class PresetBarView : DockPanel
             var frame = new Border
             {
                 Width = 84, Height = 50, CornerRadius = new CornerRadius(4), Background = new SolidColorBrush(Color.FromArgb(128, 0, 0, 0)), ClipToBounds = true,
-                BorderBrush = isActive ? (Brush)Application.Current.Resources["AccentBrush"] : new SolidColorBrush(Color.FromArgb(40, 0, 0, 0)), BorderThickness = new Thickness(isActive ? 2 : 1),
+                BorderBrush = isActive ? (Brush)Application.Current.Resources["AccentBrush"] : new SolidColorBrush(Color.FromArgb(60, 255, 255, 255)), BorderThickness = new Thickness(isActive ? 2 : 1),
             };
             if (model.PresetThumbnail(p) is { } img) frame.Child = new Image { Source = img, Stretch = Stretch.UniformToFill, IsHitTestVisible = false };
             cell.Children.Add(frame);
-            cell.Children.Add(new TextBlock { Text = p.Name, FontSize = 10, TextTrimming = TextTrimming.CharacterEllipsis, TextAlignment = TextAlignment.Center, Foreground = isActive ? (Brush)Application.Current.Resources["AccentBrush"] : Brushes.Black });
+            cell.Children.Add(new TextBlock { Text = p.Name, FontSize = 10, TextTrimming = TextTrimming.CharacterEllipsis, TextAlignment = TextAlignment.Center, Foreground = isActive ? (Brush)Application.Current.Resources["AccentBrush"] : (Brush)Application.Current.Resources["TextBrush"] });
             var preset = p;
             cell.MouseLeftButtonUp += (_, _) => model.ApplyPreset(preset);
             var menu = new ContextMenu();

@@ -143,7 +143,7 @@ public sealed class MiniSlider : Grid, IRefreshable
 
     string Fmt(float v) => string.Format(CultureInfo.InvariantCulture, format, v);
 
-    public void Refresh() { updating = true; var v = get(); slider.Value = v; value.Text = Fmt(v); value.Foreground = v == 0 ? Brushes.Gray : Brushes.Black; updating = false; }
+    public void Refresh() { updating = true; var v = get(); slider.Value = v; value.Text = Fmt(v); value.Foreground = v == 0 ? (Brush)Application.Current.Resources["SubtleText"] : (Brush)Application.Current.Resources["TextBrush"]; updating = false; }
 }
 
 /// <summary>Labelled drop-down over a fixed list of options.</summary>
@@ -238,8 +238,8 @@ public sealed class ControlBlock : Border
     {
         Title = title;
         CornerRadius = new CornerRadius(6);
-        BorderBrush = new SolidColorBrush(Color.FromArgb(40, 0, 0, 0)); BorderThickness = new Thickness(1);
-        Background = new SolidColorBrush(Color.FromArgb(18, 0, 0, 0));
+        BorderBrush = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)); BorderThickness = new Thickness(1);
+        Background = new SolidColorBrush(Color.FromArgb(14, 255, 255, 255));
         Margin = new Thickness(3, 0, 3, 0);
         var grid = new Grid();
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(22) });
@@ -264,7 +264,7 @@ public sealed class ControlBlock : Border
     {
         scroller.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed;
         titleButton.Foreground = expanded ? (Brush)Application.Current.Resources["AccentBrush"] : Brushes.Gray;
-        titleButton.Background = expanded ? new SolidColorBrush(Color.FromArgb(50, 10, 110, 209)) : new SolidColorBrush(Color.FromArgb(25, 0, 0, 0));
+        titleButton.Background = expanded ? new SolidColorBrush(Color.FromArgb(50, 10, 110, 209)) : new SolidColorBrush(Color.FromArgb(20, 255, 255, 255));
         titleButton.ToolTip = expanded ? $"Collapse {Title}" : $"Expand {Title}";
     }
 

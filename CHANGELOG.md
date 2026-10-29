@@ -5,6 +5,10 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 (`scripts/bump.sh`). The version lives in `VERSION` and is stamped into the app at build time;
 `scripts/release.sh` tags it and publishes the DMG as a GitHub release.
 
+## [1.3.0] – 2026-10-29
+
+- Windows: dark interface (Fluent dark theme, independent of the system setting), `--screenshot` developer switch, `windows/scripts/release.ps1` to publish the zip as a GitHub release asset
+
 ## [1.2.0] – 2026-10-29
 
 - Windows: GPU noise reduction through Direct3D 11 compute shaders (non-local means and BM3D, the Metal kernels in HLSL), CPU fallback kept

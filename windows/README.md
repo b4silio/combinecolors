@@ -18,8 +18,20 @@ windows/
   CombineColorsCli/     headless renderer (combinecolors-cli.exe), same options as the Mac CLI
   AstroCore.Tests/      xUnit port of the AstroCore test suite (real-data tests use C:\_Astrophotography when present)
   CombineColors.Tests/  model-level app tests (loading, crop, rotation, presets, dust spots, recent sets)
+  scripts/release.ps1   tags, pushes, builds the zip and attaches it to the GitHub release (gh CLI)
   scripts/publish.ps1   self-contained build → build\CombineColors-<version>-win-x64.zip
 ```
+
+## Releasing
+
+```powershell
+.scriptselease.ps1          # tag v<VERSION>, push, build the zip, create or update the GitHub release
+```
+
+The Mac `scripts/release.sh` and this script share the tag: whichever runs first creates the
+release (notes from the CHANGELOG section), the other attaches its asset. Run `release.ps1 -NoTag`
+to only upload the zip to an existing release. Needs the GitHub CLI (`winget install GitHub.cli`,
+then `gh auth login`).
 
 ## Building
 
@@ -63,5 +75,6 @@ live in `%LOCALAPPDATA%\CombineColors\preferences.json`.
   Ctrl+Shift+H / V flips, Ctrl+Z / Ctrl+Y undo / redo). In the preview: wheel zooms around the
   pointer, drag pans, Ctrl / Shift + wheel pans, double-click toggles fit / 1:1, Return / Esc apply
   or cancel crop and dust editing, B toggles the dust "Original" view, Delete removes the selected spot.
-* The window uses the standard Windows (light) controls around a dark preview; the layout follows
-  the Mac app (channel column · preview · palettes + presets, processing strip underneath).
+* The interface is dark only (the .NET 9 Fluent theme in dark mode, independent of the Windows
+  setting); the layout follows the Mac app (channel column · preview · palettes + presets,
+  processing strip underneath).

@@ -118,7 +118,7 @@ public sealed class PaletteGridView : DockPanel
             bool selected = model.Settings.PaletteID == id;
             frame.BorderBrush = selected ? (Brush)Application.Current.Resources["AccentBrush"] : new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
             frame.BorderThickness = new Thickness(selected ? 2 : 1);
-            if (frame.Tag is TextBlock name) name.Foreground = selected ? (Brush)Application.Current.Resources["AccentBrush"] : (model.IsPaletteHidden(id) ? Brushes.Gray : Brushes.Black);
+            if (frame.Tag is TextBlock name) name.Foreground = selected ? (Brush)Application.Current.Resources["AccentBrush"] : (model.IsPaletteHidden(id) ? Brushes.Gray : (Brush)Application.Current.Resources["TextBrush"]);
         }
         description.Text = model.CurrentPalette?.Description ?? "";
         var mode = model.Settings.Mode;

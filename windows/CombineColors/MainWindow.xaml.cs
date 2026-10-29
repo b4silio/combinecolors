@@ -189,10 +189,10 @@ public partial class MainWindow : Window
         emptyState.HorizontalAlignment = HorizontalAlignment.Center; emptyState.VerticalAlignment = VerticalAlignment.Center;
         previewArea.Children.Add(emptyState);
         topToolbar.HorizontalAlignment = HorizontalAlignment.Right; topToolbar.VerticalAlignment = VerticalAlignment.Top; topToolbar.Margin = new Thickness(8);
-        topToolbar.Background = new SolidColorBrush(Color.FromArgb(225, 240, 240, 240)); topToolbar.CornerRadius = new CornerRadius(6); topToolbar.Padding = new Thickness(6);
+        topToolbar.Background = (Brush)Application.Current.Resources["OverlayBackground"]; topToolbar.CornerRadius = new CornerRadius(6); topToolbar.Padding = new Thickness(6);
         previewArea.Children.Add(topToolbar);
         zoomToolbar.HorizontalAlignment = HorizontalAlignment.Right; zoomToolbar.VerticalAlignment = VerticalAlignment.Bottom; zoomToolbar.Margin = new Thickness(8);
-        zoomToolbar.Background = new SolidColorBrush(Color.FromArgb(225, 240, 240, 240)); zoomToolbar.CornerRadius = new CornerRadius(6); zoomToolbar.Padding = new Thickness(6);
+        zoomToolbar.Background = (Brush)Application.Current.Resources["OverlayBackground"]; zoomToolbar.CornerRadius = new CornerRadius(6); zoomToolbar.Padding = new Thickness(6);
         previewArea.Children.Add(zoomToolbar);
         BuildZoomToolbar();
     }

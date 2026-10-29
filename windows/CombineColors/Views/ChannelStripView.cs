@@ -76,7 +76,7 @@ public sealed class ChannelStripView : DockPanel
         var border = new Border
         {
             Width = SlotWidth, Height = SlotHeight, Margin = new Thickness(0, 0, 0, SlotSpacing), CornerRadius = new CornerRadius(5),
-            Background = new SolidColorBrush(Color.FromArgb(source == null ? (byte)30 : (byte)153, 0, 0, 0)),
+            Background = source == null ? new SolidColorBrush(Color.FromArgb(24, 255, 255, 255)) : new SolidColorBrush(Color.FromArgb(153, 0, 0, 0)),
             BorderBrush = tint, BorderThickness = new Thickness(source == null ? 1 : (peek ? 3 : 2)), AllowDrop = true, Tag = kind,
         };
         if (source == null) border.Opacity = 0.75;
