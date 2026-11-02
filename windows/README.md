@@ -1,7 +1,7 @@
 # CombineColors for Windows and Linux (.NET)
 
 A port of the macOS app to Windows and Linux: the same processing (FITS / TIFF loading, statistics,
-normalisation, stretch, palettes, Pixel Math, luminance, colour bands, denoise, dust spot healing,
+normalisation, stretch, palettes, Pixel Math, luminance, colour bands, denoise, dust spot healing, guided gradient removal,
 crop / rotation, presets, recent sets, project files, export) rewritten in C# on .NET 9, with a
 WPF front-end on Windows and an Avalonia UI front-end on Linux. Project files (`.json`) are
 interchangeable with the Mac app. The native SwiftUI app remains the macOS build.
@@ -14,7 +14,7 @@ windows/
     Image/              PlanarImage, Pyramid, PixelRect/AutoCrop, Statistics, StarMask, Vec (SIMD kernels)
     IO/                 FITS reader/writer, TIFF reader/writer, PngCodec (exact 8/16-bit PNG), RasterIO
                         (PNG/JPEG via WIC on Windows, PngCodec + SkiaSharp elsewhere), loader, channel detection
-    Processing/         Stretch, Normalization, Palettes, PostProcess, Denoise, Bm3d, DualBand, DustRemoval,
+    Processing/         Stretch, Normalization, Palettes, PostProcess, Denoise, Bm3d, DualBand, DustRemoval, GradientRemoval,
                         GpuDenoise (D3D11, Windows) / GpuDenoise.Portable (stub)
     PixelMath/          lexer, parser, vectorised evaluator, programs
     Pipeline/           CombineSettings, Json (tolerant project format), ChannelSource, Renderer, ProjectDocument
@@ -23,7 +23,7 @@ windows/
                         built in code against Avalonia instead of WPF (see "Linux" below)
   CombineColorsCli/     headless renderer (combinecolors-cli), same options as the Mac CLI; net9.0 + net9.0-windows
   AstroCore.Tests/      xUnit port of the AstroCore test suite (real-data tests use C:\_Astrophotography when present)
-  CombineColors.Tests/  model-level app tests (loading, crop, rotation, presets, dust spots, recent sets)
+  CombineColors.Tests/  model-level app tests (loading, crop, rotation, presets, dust spots, gradient removal, recent sets)
   scripts/release.ps1   tags, pushes, builds the zip and attaches it to the GitHub release (gh CLI)
   scripts/publish.ps1   self-contained build → build\CombineColors-<version>-win-x64.zip
   scripts/publish-linux.sh  self-contained Linux build (x64 + arm64) → build/CombineColors-<version>-linux-<arch>.tar.gz
@@ -83,7 +83,8 @@ live in `%LOCALAPPDATA%\CombineColors\preferences.json`.
   save, Ctrl+E export, Ctrl+Shift+C copy preview, Ctrl+0 fit, Ctrl+1 actual size, Ctrl+R rotate,
   Ctrl+Shift+H / V flips, Ctrl+Z / Ctrl+Y undo / redo). In the preview: wheel zooms around the
   pointer, drag pans, Ctrl / Shift + wheel pans, double-click toggles fit / 1:1, Return / Esc apply
-  or cancel crop and dust editing, B toggles the dust "Original" view, Delete removes the selected spot.
+  or cancel crop, dust and gradient editing, B toggles the "Original" view (M the gradient editor's "Background" view, P its
+  Protect mode), Delete removes the selected spot or protected region.
 * The interface is dark only (the .NET 9 Fluent theme in dark mode, independent of the Windows
   setting); the layout follows the Mac app (channel column · preview · palettes + presets,
   processing strip underneath).

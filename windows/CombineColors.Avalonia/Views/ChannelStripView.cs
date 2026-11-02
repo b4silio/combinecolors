@@ -108,6 +108,16 @@ public sealed class ChannelStripView : DockPanel
                 ToolTip.SetTip(badge, $"{n} dust spot{(n == 1 ? "" : "s")} healed on this channel");
                 grid.Children.Add(badge);
             }
+            if (model.GradientSpecFor(kind) is GradientSpec gspec)
+            {
+                var gbadge = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromArgb(140, 0, 0, 0)), CornerRadius = new CornerRadius(3), Padding = new Thickness(4, 0, 4, 1), Margin = new Thickness(4), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Bottom, IsHitTestVisible = false,
+                    Child = new TextBlock { Text = "◐", FontSize = 9, FontWeight = FontWeight.SemiBold, Foreground = Brushes.White },
+                };
+                ToolTip.SetTip(gbadge, $"Gradient removed on this channel ({gspec.Gesture.Shape.DisplayName().ToLowerInvariant()} guide, {gspec.Mode.DisplayName().ToLowerInvariant()})");
+                grid.Children.Add(gbadge);
+            }
             var menuButton = new Button
             {
                 Content = new TextBlock { Text = "⋯", FontSize = 12, FontWeight = FontWeight.Bold, Foreground = Brushes.White, Margin = new Thickness(0, -3, 0, 0) },
@@ -145,6 +155,7 @@ public sealed class ChannelStripView : DockPanel
         menu.Items.Add(move);
         menu.Items.Add(new Separator());
         var heal = new MenuItem { Header = "Heal Dust Spots…" }; heal.Click += (_, _) => model.BeginDustEditing(kind); menu.Items.Add(heal);
+        var gradient = new MenuItem { Header = "Remove Gradient…" }; gradient.Click += (_, _) => model.BeginGradientEditing(kind); menu.Items.Add(gradient);
         var save = new MenuItem { Header = "Save channel as FITS…" };
         save.Click += async (_, _) =>
         {

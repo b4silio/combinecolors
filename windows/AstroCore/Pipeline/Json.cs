@@ -536,6 +536,79 @@ public sealed partial class DustSettings : IJsonSettings
     }
 }
 
+public sealed partial class GradientGesture : IJsonSettings
+{
+    public JsonObject ToJson() => new()
+    {
+        ["shape"] = SettingsJson.V(Shape), ["x"] = SettingsJson.V(X), ["y"] = SettingsJson.V(Y), ["x2"] = SettingsJson.V(X2), ["y2"] = SettingsJson.V(Y2),
+        ["a"] = SettingsJson.V(A), ["b"] = SettingsJson.V(B), ["angle"] = SettingsJson.V(Angle),
+    };
+
+    public static GradientGesture FromJson(JsonObject? c) => new(SettingsJson.E(c, "shape", GradientShape.Ellipse))
+    {
+        X = SettingsJson.D(c, "x", 0), Y = SettingsJson.D(c, "y", 0), X2 = SettingsJson.D(c, "x2", 0), Y2 = SettingsJson.D(c, "y2", 0),
+        A = SettingsJson.D(c, "a", 1), B = SettingsJson.D(c, "b", 1), Angle = SettingsJson.D(c, "angle", 0),
+    };
+}
+
+public sealed partial class GradientRegion : IJsonSettings
+{
+    public JsonObject ToJson() => new() { ["id"] = SettingsJson.V(Id), ["x"] = SettingsJson.V(X), ["y"] = SettingsJson.V(Y), ["a"] = SettingsJson.V(A), ["b"] = SettingsJson.V(B) };
+    public static GradientRegion FromJson(JsonObject? c) => new(SettingsJson.D(c, "x", 0), SettingsJson.D(c, "y", 0), SettingsJson.D(c, "a", 1), SettingsJson.D(c, "b", 1), SettingsJson.G(c, "id"));
+}
+
+public sealed partial class GradientSpec : IJsonSettings
+{
+    public JsonObject ToJson() => new()
+    {
+        ["gesture"] = Gesture.ToJson(), ["mode"] = SettingsJson.V(Mode), ["residual"] = SettingsJson.V(Residual), ["sectors"] = SettingsJson.V(Sectors),
+        ["smoothness"] = SettingsJson.V(Smoothness), ["degree"] = SettingsJson.V(Degree), ["refine"] = SettingsJson.V(Refine),
+    };
+
+    public static GradientSpec FromJson(JsonObject? c)
+    {
+        var d = new GradientSpec(GradientGesture.Polynomial());
+        return new GradientSpec(SettingsJson.Obj(c, "gesture") is JsonObject g ? GradientGesture.FromJson(g) : d.Gesture)
+        {
+            Mode = SettingsJson.E(c, "mode", d.Mode), Residual = SettingsJson.E(c, "residual", d.Residual), Sectors = SettingsJson.I(c, "sectors", d.Sectors),
+            Smoothness = SettingsJson.D(c, "smoothness", d.Smoothness), Degree = SettingsJson.I(c, "degree", d.Degree), Refine = SettingsJson.B(c, "refine", d.Refine),
+        };
+    }
+
+    public static GradientSpec Parse(string json) => FromJson(SettingsJson.ParseObject(json));
+}
+
+public sealed partial class GradientSettings : IJsonSettings
+{
+    public JsonObject ToJson()
+    {
+        var specs = new JsonObject();
+        foreach (var (k, s) in Specs) specs[k.RawValue()] = s.ToJson();
+        var protect = new JsonArray();
+        foreach (var r in Protect) protect.Add(r.ToJson());
+        return new JsonObject
+        {
+            ["specs"] = specs, ["protect"] = protect, ["shape"] = SettingsJson.V(Shape), ["mode"] = SettingsJson.V(Mode), ["residual"] = SettingsJson.V(Residual),
+            ["sectors"] = SettingsJson.V(Sectors), ["smoothness"] = SettingsJson.V(Smoothness), ["degree"] = SettingsJson.V(Degree), ["refine"] = SettingsJson.V(Refine),
+        };
+    }
+
+    public static GradientSettings FromJson(JsonObject? c)
+    {
+        var d = new GradientSettings();
+        var g = new GradientSettings
+        {
+            Shape = SettingsJson.E(c, "shape", d.Shape), Mode = SettingsJson.E(c, "mode", d.Mode), Residual = SettingsJson.E(c, "residual", d.Residual),
+            Sectors = SettingsJson.I(c, "sectors", d.Sectors), Smoothness = SettingsJson.D(c, "smoothness", d.Smoothness), Degree = SettingsJson.I(c, "degree", d.Degree), Refine = SettingsJson.B(c, "refine", d.Refine),
+        };
+        if (SettingsJson.Obj(c, "specs") is JsonObject so)
+            foreach (var kv in so)
+                if (ChannelKinds.FromRawValue(kv.Key) is ChannelKind k && kv.Value is JsonObject spec) g.Specs[k] = GradientSpec.FromJson(spec);
+        if (SettingsJson.Arr(c, "protect") is JsonArray pa) g.Protect = pa.OfType<JsonObject>().Select(GradientRegion.FromJson).ToList();
+        return g;
+    }
+}
+
 public static class PixelRectJson
 {
     public static JsonObject ToJson(this PixelRect r) => new() { ["x"] = SettingsJson.V(r.X), ["y"] = SettingsJson.V(r.Y), ["width"] = SettingsJson.V(r.Width), ["height"] = SettingsJson.V(r.Height) };
@@ -579,7 +652,7 @@ public sealed partial class ProjectDocument : IJsonSettings
         var doc = new JsonObject
         {
             ["version"] = SettingsJson.V(Version), ["channels"] = channels, ["settings"] = Settings.ToJson(), ["presets"] = presets,
-            ["rotation"] = SettingsJson.V(Rotation), ["flipped"] = SettingsJson.V(Flipped), ["dust"] = Dust.ToJson(),
+            ["rotation"] = SettingsJson.V(Rotation), ["flipped"] = SettingsJson.V(Flipped), ["dust"] = Dust.ToJson(), ["gradient"] = Gradient.ToJson(),
         };
         if (StarsFile != null) doc["starsFile"] = SettingsJson.V(StarsFile);
         if (Crop is PixelRect c) doc["crop"] = c.ToJson();
@@ -598,6 +671,7 @@ public sealed partial class ProjectDocument : IJsonSettings
             Rotation = ((SettingsJson.I(c, "rotation", d.Rotation) % 4) + 4) % 4,
             Flipped = SettingsJson.B(c, "flipped", d.Flipped),
             Dust = SettingsJson.Obj(c, "dust") is JsonObject du ? DustSettings.FromJson(du) : d.Dust,
+            Gradient = SettingsJson.Obj(c, "gradient") is JsonObject gr ? GradientSettings.FromJson(gr) : d.Gradient,
         };
         if (SettingsJson.Arr(c, "channels") is JsonArray chs)
             foreach (var e in chs.OfType<JsonObject>())

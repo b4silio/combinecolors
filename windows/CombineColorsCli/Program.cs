@@ -32,6 +32,10 @@ using AstroCore;
 //      --dust <kind>:x,y,r[;x,y,r…]  heal dust spots on a channel before anything else (repeatable; a project's
 //                             spots are applied too);  --dust-model surface | radial;  --dust-smooth <px>;  --dust-feather <0..0.5>
 //                             (the three parameters apply to the spots given with --dust)
+//      --gradient <kind>:line:x0,y0,x1,y1 | <kind>:ellipse:cx,cy,a,b[,angle°] | <kind>:poly[:degree]
+//                             remove a gradient from a channel guided by the drawn shape (repeatable; a project's models are
+//                             applied too);  --gradient-mode subtract | divide;  --gradient-residual none | plane | quadratic
+//                             --gradient-sectors <1|4|8|12>;  --gradient-smooth <bins>;  --gradient-norefine;  --gradient-protect cx,cy,a,b
 
 var args_ = new List<string>(args);
 if (args_.Count == 0) { Console.WriteLine("usage: combinecolors-cli (info|render|palettes) …"); return 1; }
@@ -141,6 +145,34 @@ switch (command)
                 else Console.WriteLine($"bad --dust item {item}");
             }
         }
+        // Gradient models: from the project file, then from --gradient.
+        var gradient = projectDoc?.Gradient ?? new GradientSettings();
+        if (Option("--gradient-mode") is string gm && EnumRaw.Parse<GradientMode>(gm) is GradientMode gmv) gradient.Mode = gmv;
+        if (Option("--gradient-residual") is string gr && EnumRaw.Parse<GradientResidual>(gr) is GradientResidual grv) gradient.Residual = grv;
+        if (Option("--gradient-sectors") is string gs && int.TryParse(gs, out var gsv)) gradient.Sectors = gsv;
+        if (Option("--gradient-smooth") is string gsm && double.TryParse(gsm, NumberStyles.Float, CultureInfo.InvariantCulture, out var gsmv)) gradient.Smoothness = gsmv;
+        if (Flag("--gradient-norefine")) gradient.Refine = false;
+        while (Option("--gradient-protect") is string gp)
+        {
+            var v = gp.Split(',').Select(t => double.TryParse(t.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var x) ? x : double.NaN).ToArray();
+            if (v.Length == 4 && v.All(double.IsFinite)) gradient.Protect.Add(new GradientRegion(v[0], v[1], v[2], v[3])); else Console.WriteLine($"bad --gradient-protect {gp}");
+        }
+        while (Option("--gradient") is string g)
+        {
+            var parts = g.Split(':', 3);
+            if (parts.Length < 2 || ParseKind(parts[0]) is not ChannelKind gk) { Console.WriteLine($"bad --gradient {g}"); continue; }
+            var v = parts.Length == 3 ? parts[2].Split(',').Select(t => double.TryParse(t.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var x) ? x : double.NaN).Where(double.IsFinite).ToArray() : [];
+            GradientGesture? gesture = parts[1] switch
+            {
+                "line" when v.Length == 4 => GradientGesture.Line(v[0], v[1], v[2], v[3]),
+                "ellipse" when v.Length >= 4 => GradientGesture.Ellipse(v[0], v[1], v[2], v[3], (v.Length > 4 ? v[4] : 0) * Math.PI / 180),
+                "poly" or "polynomial" => GradientGesture.Polynomial(),
+                _ => null,
+            };
+            if (gesture == null) { Console.WriteLine($"bad --gradient {g}"); continue; }
+            if (gesture.Shape == GradientShape.Polynomial && v.Length > 0) gradient.Degree = (int)v[0];
+            gradient.Specs[gk] = gradient.NewSpec(gesture);
+        }
         if (Environment.GetEnvironmentVariable("CC_NO_GPU") == "1") GpuDenoise.Enabled = false;
         if (denoise > 0) Console.WriteLine($"GPU denoise: {(GpuDenoise.IsAvailable ? GpuDenoise.DeviceName : "off (CPU): " + GpuDenoise.UnavailableReason)}");
         Directory.CreateDirectory(outDir);
@@ -171,9 +203,27 @@ switch (command)
                     var t1 = Stopwatch.StartNew();
                     var plane = DustRemoval.Heal(f.Planes[0], spots);
                     int healMs = (int)t1.Elapsed.TotalMilliseconds;
+                    string gradientNote = "";
+                    if (gradient.SpecFor(k) is GradientSpec spec)
+                    {
+                        var t2 = Stopwatch.StartNew();
+                        if (GradientRemoval.Correct(plane, spec, gradient.Protect) is var (corrected, fit))
+                        {
+                            plane = corrected;
+                            var gg = fit.Gesture;
+                            string geo = gg.Shape switch
+                            {
+                                GradientShape.Line => FormattableString.Invariant($"line {gg.X:0},{gg.Y:0} → {gg.X2:0},{gg.Y2:0}"),
+                                GradientShape.Ellipse => FormattableString.Invariant($"ellipse centre {gg.X:0},{gg.Y:0} axes {gg.A:0}×{gg.B:0} angle {gg.Angle * 180 / Math.PI:0.0}°"),
+                                _ => $"polynomial degree {spec.Degree}",
+                            };
+                            gradientNote = FormattableString.Invariant($", gradient removed in {(int)t2.Elapsed.TotalMilliseconds} ms ({geo}, {EnumRaw.Name(spec.Mode)}, residual {fit.ResidualSigma:0.00}σ)");
+                        }
+                        else gradientNote = ", gradient model could not be fitted";
+                    }
                     var src = new ChannelSource(k, plane, f.FileName, path, f.FormatDescription);
                     lock (sources) sources[k] = src;
-                    Console.WriteLine($"loaded {f.FileName} → {k.RawValue()} ({(int)src.AnalysisMillis} ms analysis{(spots.Count == 0 ? "" : $", {spots.Count} dust spots healed in {healMs} ms")})");
+                    Console.WriteLine($"loaded {f.FileName} → {k.RawValue()} ({(int)src.AnalysisMillis} ms analysis{(spots.Count == 0 ? "" : $", {spots.Count} dust spots healed in {healMs} ms")}{gradientNote})");
                 }
                 else Console.WriteLine($"skipped {f.FileName}: channel not recognised (use --assign)");
             }
@@ -236,6 +286,7 @@ switch (command)
             doc.Settings = s;
             doc.Crop = crop;
             doc.Dust = dust;
+            doc.Gradient = gradient;
             doc.Channels = sources.Values.OrderBy(v => v.Kind.RawValue(), StringComparer.Ordinal).Where(v => v.Path != null).Select(v => new ProjectDocument.ChannelRef(v.Kind, v.Path!)).ToList();
             doc.Save(saveProject);
             Console.WriteLine($"project written to {saveProject}");

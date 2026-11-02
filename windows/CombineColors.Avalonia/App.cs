@@ -26,7 +26,7 @@ public sealed class App : Application
     {
         if (ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime desktop) { base.OnFrameworkInitializationCompleted(); return; }
         // `--prefs <file>` keeps a test instance's recent sets (with their saved presets and dust spots) apart from the user's.
-        string? prefsPath = null, screenshot = null;
+        string? prefsPath = null, screenshot = null, openEditor = null;
         double screenshotDelay = 12;
         var files = new List<string>();
         var args = desktop.Args ?? [];
@@ -36,10 +36,12 @@ public sealed class App : Application
             // `--screenshot <png>` renders the window to a file after a delay (default 12 s) and quits (UI checks without a display).
             if (args[i] == "--screenshot" && i + 1 < args.Length) { screenshot = args[++i]; continue; }
             if (args[i] == "--screenshot-delay" && i + 1 < args.Length) { double.TryParse(args[++i], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out screenshotDelay); continue; }
+            // `--open-editor gradient:Ha[:background]` (or `dust:Ha`) opens that editor once the channel is loaded (screenshots).
+            if (args[i] == "--open-editor" && i + 1 < args.Length) { openEditor = args[++i]; continue; }
             if (!args[i].StartsWith('-')) files.Add(args[i]);
         }
         Prefs = new Preferences(prefsPath);
-        Model = new ProjectModel(new AvaloniaDispatcher(Dispatcher.UIThread), Prefs);
+        Model = new ProjectModel(new AvaloniaDispatcher(Dispatcher.UIThread), Prefs) { LaunchEditor = openEditor };
         var window = new MainWindow(Model);
         desktop.MainWindow = window;
         desktop.ShutdownMode = ShutdownMode.OnMainWindowClose;
