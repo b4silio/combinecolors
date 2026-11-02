@@ -543,6 +543,13 @@ extension ProjectModelTests {
         XCTAssertLessThan(m.sources[.ha]!.stats.noise, channelNoise * 0.5, "the model source gets its own statistics (a smooth model has almost no noise)")
         m.gradientView = .corrected
         await wait(timeout: 30) { m.sources[.ha]!.image !== bg }
+        // Remove model: the preview goes back to the untouched channel before Apply.
+        m.clearGradient()
+        XCTAssertNil(m.editedGradientSpec)
+        await wait(timeout: 10) { m.sources[.ha]!.image === original }
+        XCTAssertTrue(m.sources[.ha]!.image === original, "Remove model previews the channel untouched")
+        m.setGradientGesture(.ellipse(center: CGPoint(x: 100, y: 75), a: 120, b: 90))
+        await wait(timeout: 30) { m.sources[.ha]!.image !== original }
         m.gradientProtectMode = true
         m.addGradientRegion(at: CGPoint(x: 100, y: 75))
         XCTAssertEqual(m.gradientRegions.count, 1); XCTAssertNotNil(m.selectedGradientRegion)
@@ -577,6 +584,17 @@ extension ProjectModelTests {
         var maxDiff: Float = 0
         for i in 0..<reopened.count { maxDiff = max(maxDiff, abs(reopened.pointer[i] - m.sources[.ha]!.image.pointer[i])) }
         XCTAssertEqual(maxDiff, 0, "the reopened project applies the same models")
+        // Reopening the editor on an applied model and removing it previews the untouched channel.
+        let applied = m.sources[.ha]!.image
+        m.beginGradientEditing(.ha)
+        XCTAssertNotNil(m.editedGradientSpec)
+        await wait(timeout: 30) { m.gradientFit != nil }
+        m.clearGradient()
+        await wait(timeout: 10) { m.sources[.ha]!.image === original }
+        XCTAssertTrue(m.sources[.ha]!.image === original, "Remove model on an applied model shows the original")
+        XCTAssertNotEqual(applied[100, 75], original[100, 75])
+        m.cancelGradientEditing()
+        await wait(timeout: 30) { !m.isLoading && m.sources[.ha]!.image !== original }
         // Moving the channel takes its model along; rotating maps it; removing drops it.
         m.reassign(.ha, to: .luminance)
         XCTAssertEqual(m.gradient.spec(for: .luminance), spec); XCTAssertNil(m.gradient.spec(for: .ha))

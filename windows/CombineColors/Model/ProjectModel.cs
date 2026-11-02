@@ -198,6 +198,8 @@ public sealed class ProjectModel : INotifyPropertyChanged
     (ChannelKind kind, PlanarImage image)? gradientHealed;
     /// <summary>Developer switch: an editor to open once the first channels are loaded ("gradient:Ha[:background]", "dust:Ha").</summary>
     public string? LaunchEditor;
+    /// <summary>Developer switch: a toolbar action run 5 s after the editor opened ("removeModel", "clearRegions", "adopt").</summary>
+    public string? LaunchEditorAction;
     bool launchEditorOpened;
 
     // Derived state
@@ -1680,6 +1682,16 @@ public sealed class ProjectModel : INotifyPropertyChanged
             if (parts.Length > 2 && EnumRaw.Parse<GradientView>(parts[2]) is GradientView gv) GradientView = gv;
         }
         else if (parts[0] == "dust") BeginDustEditing(k);
+        if (LaunchEditorAction is string action)
+            ui.Delay(TimeSpan.FromSeconds(5), () =>
+            {
+                switch (action)
+                {
+                    case "removeModel": ClearGradient(); break;
+                    case "clearRegions": ClearGradientRegions(); break;
+                    case "adopt": AdoptRefinedGradient(); break;
+                }
+            });
     }
 }
 

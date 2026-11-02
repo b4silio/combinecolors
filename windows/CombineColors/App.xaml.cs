@@ -14,19 +14,20 @@ public partial class App : Application
     {
         base.OnStartup(e);
         // `--prefs <file>` keeps a test instance's recent sets (with their saved presets and dust spots) apart from the user's.
-        string? prefsPath = null, screenshot = null, openEditor = null;
+        string? prefsPath = null, screenshot = null, openEditor = null, editorAction = null;
         var files = new List<string>();
         for (int i = 0; i < e.Args.Length; i++)
         {
             if (e.Args[i] == "--prefs" && i + 1 < e.Args.Length) { prefsPath = e.Args[++i]; continue; }
             // `--open-editor gradient:Ha[:background]` (or `dust:Ha`) opens that editor once the channel is loaded (screenshots).
             if (e.Args[i] == "--open-editor" && i + 1 < e.Args.Length) { openEditor = e.Args[++i]; continue; }
+            if (e.Args[i] == "--editor-action" && i + 1 < e.Args.Length) { editorAction = e.Args[++i]; continue; }
             // `--screenshot <png>` renders the window to a file 12 s after launch and quits (UI checks without a display).
             if (e.Args[i] == "--screenshot" && i + 1 < e.Args.Length) { screenshot = e.Args[++i]; continue; }
             if (!e.Args[i].StartsWith("-")) files.Add(e.Args[i]);
         }
         Prefs = new Preferences(prefsPath);
-        Model = new ProjectModel(new WpfDispatcher(Dispatcher), Prefs) { LaunchEditor = openEditor };
+        Model = new ProjectModel(new WpfDispatcher(Dispatcher), Prefs) { LaunchEditor = openEditor, LaunchEditorAction = editorAction };
         DispatcherUnhandledException += (_, ex) =>
         {
             MessageBox.Show(ex.Exception.Message, "CombineColors", MessageBoxButton.OK, MessageBoxImage.Error);

@@ -421,6 +421,18 @@ final class ProjectModel {
             beginGradientEditing(k)
             if parts.count > 2, let view = GradientView(rawValue: parts[2]) { gradientView = view }
         } else if parts[0] == "dust" { beginDustEditing(k) }
+        // `-editorAction removeModel|clearRegions|adopt` runs that toolbar action 5 s later (screenshots of a state reached by a click).
+        if let action = UserDefaults.standard.string(forKey: "editorAction") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+                guard let self else { return }
+                switch action {
+                case "removeModel": self.clearGradient()
+                case "clearRegions": self.clearGradientRegions()
+                case "adopt": self.adoptRefinedGradient()
+                default: break
+                }
+            }
+        }
     }
 
     /// A loaded (oriented) channel after dust healing and gradient removal, in that order.
