@@ -5,6 +5,15 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 (`scripts/bump.sh`). The version lives in `VERSION` and is stamped into the app at build time;
 `scripts/release.sh` tags it and publishes the DMG as a GitHub release.
 
+## [1.6.0] – 2026-11-02
+
+- .NET apps (Windows WPF, Linux Avalonia) and CLI: guided gradient removal with the same models, editor and project format as the Mac app
+
+## [1.5.0] – 2026-11-02
+
+- Guided gradient removal (channel menu › Remove Gradient…): line / ellipse / polynomial guides with a robust profile, optional sectors and residual plane or quadratic, geometry refinement from the data, subtract or divide, protected regions, live preview; CLI --gradient options
+- Developer switches -openEditor and -screenshot for UI screenshots without screen-recording permission
+
 ## [1.4.0] – 2026-11-02
 
 - Linux: Avalonia UI app (windows/CombineColors.Avalonia) and CLI on the portable net9.0 build of AstroCore (built-in exact PNG codec + SkiaSharp for JPEG, CPU denoise); windows/scripts/publish-linux.sh; the Windows targets compile on macOS / Linux

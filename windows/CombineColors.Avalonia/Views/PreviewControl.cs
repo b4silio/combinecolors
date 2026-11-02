@@ -41,6 +41,13 @@ public sealed class PreviewControl : Control
     bool dustEditing; public bool DustEditing { get => dustEditing; set { dustEditing = value; UpdateCursor(); InvalidateVisual(); } }
     List<DustSpot> dustSpots = new(); public List<DustSpot> DustSpots { get => dustSpots; set { dustSpots = value; InvalidateVisual(); } }
     Guid? selectedDustSpot; public Guid? SelectedDustSpot { get => selectedDustSpot; set { selectedDustSpot = value; InvalidateVisual(); } }
+    bool gradientEditing; public bool GradientEditing { get => gradientEditing; set { gradientEditing = value; UpdateCursor(); InvalidateVisual(); } }
+    GradientGesture? gradientGesture; public GradientGesture? GradientGesture { get => gradientGesture; set { gradientGesture = value; InvalidateVisual(); } }
+    GradientGesture? gradientRefined; public GradientGesture? GradientRefined { get => gradientRefined; set { gradientRefined = value; InvalidateVisual(); } }
+    GradientShape gradientShape = GradientShape.Ellipse; public GradientShape GradientShape { get => gradientShape; set => gradientShape = value; }
+    List<GradientRegion> gradientRegions = new(); public List<GradientRegion> GradientRegions { get => gradientRegions; set { gradientRegions = value; InvalidateVisual(); } }
+    Guid? selectedGradientRegion; public Guid? SelectedGradientRegion { get => selectedGradientRegion; set { selectedGradientRegion = value; InvalidateVisual(); } }
+    bool gradientProtectMode; public bool GradientProtectMode { get => gradientProtectMode; set => gradientProtectMode = value; }
 
     public event Action<Rect, double>? ViewportChanged;
     public event Action<Point?>? Hover;
@@ -50,8 +57,13 @@ public sealed class PreviewControl : Control
     public event Action<Point>? DustAdd;
     public event Action<Guid?>? DustSelect;
     public event Action? DustDelete;
+    public event Action<GradientGesture>? GradientGestureChanged;
+    public event Action<List<GradientRegion>>? GradientRegionsChanged;
+    public event Action<Point>? GradientRegionAdd;
+    public event Action<Guid?>? GradientRegionSelect;
+    public event Action? GradientDelete;
 
-    enum DragKind { None, Pan, Move, Resize, Create, DustPan, DustMove, DustResize }
+    enum DragKind { None, Pan, Move, Resize, Create, DustPan, DustMove, DustResize, GradientPan, GradientCreate, GradientHandle, GradientMove, RegionMove, RegionResize }
     DragKind drag = DragKind.None;
     Point dragLast, dragStart, dragAnchor;
     bool dragMoved;
@@ -59,6 +71,10 @@ public sealed class PreviewControl : Control
     int dragHandle;
     Guid dragSpot;
     DustSpot? dragSpotStart;
+    GradientGesture? dragGestureStart;
+    Guid dragRegion;
+    GradientRegion? dragRegionStart;
+    int dragAxis;
 
     static readonly IBrush DimBrush = new SolidColorBrush(Color.FromArgb(153, 0, 0, 0));
     static readonly IBrush BackBrush = new SolidColorBrush(Color.FromRgb(28, 28, 28));
@@ -174,7 +190,7 @@ public sealed class PreviewControl : Control
         RenderOptions.SetBitmapInterpolationMode(this, Zoom * Backing >= 2 ? BitmapInterpolationMode.None : BitmapInterpolationMode.MediumQuality);
     }
 
-    void UpdateCursor() => Cursor = new Cursor(cropEditing || dustEditing ? StandardCursorType.Cross : StandardCursorType.Arrow);
+    void UpdateCursor() => Cursor = new Cursor(cropEditing || dustEditing || gradientEditing ? StandardCursorType.Cross : StandardCursorType.Arrow);
 
     // Rendering
 
@@ -193,6 +209,7 @@ public sealed class PreviewControl : Control
         if (frame is PreviewFrame f) dc.DrawImage(f.Bitmap, ViewRect(f.Rect));
         DrawCropOverlay(dc);
         DrawDustOverlay(dc);
+        DrawGradientOverlay(dc);
     }
 
     void DrawCropOverlay(DrawingContext dc)
@@ -256,6 +273,195 @@ public sealed class PreviewControl : Control
         }
     }
 
+    static readonly IPen GradientPen = new Pen(Brushes.Gold, 1.5);
+    static readonly IPen GradientRefinedPen = new Pen(Brushes.Orange, 1, new DashStyle([5, 4], 0));
+    static readonly IPen RegionPen = new Pen(new SolidColorBrush(Color.FromArgb(204, 255, 59, 48)), 1, new DashStyle([4, 3], 0));
+    static readonly IPen RegionSelectedPen = new Pen(new SolidColorBrush(Color.FromRgb(255, 59, 48)), 1.5);
+    static readonly IBrush RegionFill = new SolidColorBrush(Color.FromArgb(24, 255, 59, 48));
+
+    void DrawRotatedEllipse(DrawingContext dc, IBrush? fill, IPen pen, Point c, double rx, double ry, double angle, bool axes)
+    {
+        using (dc.PushTransform(Matrix.CreateTranslation(-c.X, -c.Y) * Matrix.CreateRotation(angle) * Matrix.CreateTranslation(c.X, c.Y)))
+        {
+            dc.DrawEllipse(fill, pen, c, rx, ry);
+            if (axes) { dc.DrawLine(pen, new Point(c.X - rx, c.Y), new Point(c.X + rx, c.Y)); dc.DrawLine(pen, new Point(c.X, c.Y - ry), new Point(c.X, c.Y + ry)); }
+        }
+    }
+
+    static void DrawHandleSquare(DrawingContext dc, IBrush fill, Point h) => dc.DrawRectangle(fill, HandlePen, new Rect(h.X - 5, h.Y - 5, 10, 10), 2, 2);
+
+    // ---- Gradient editor -------------------------------------------------------------------------
+
+    /// <summary>Handle positions of a guide in view coordinates (2 for a line, 3 for an ellipse, none for the polynomial).</summary>
+    List<Point> GradientHandlePoints(GradientGesture g) => g.Shape switch
+    {
+        GradientShape.Line => [ViewPoint(new Point(g.X, g.Y)), ViewPoint(new Point(g.X2, g.Y2))],
+        GradientShape.Ellipse => [ViewPoint(new Point(g.X, g.Y)),
+                                  ViewPoint(new Point(g.X + g.A * Math.Cos(g.Angle), g.Y + g.A * Math.Sin(g.Angle))),
+                                  ViewPoint(new Point(g.X - g.B * Math.Sin(g.Angle), g.Y + g.B * Math.Cos(g.Angle)))],
+        _ => [],
+    };
+
+    void DrawGradientGuide(DrawingContext dc, GradientGesture g, IPen pen, bool axes)
+    {
+        switch (g.Shape)
+        {
+            case GradientShape.Line:
+            {
+                var p0 = ViewPoint(new Point(g.X, g.Y)); var p1 = ViewPoint(new Point(g.X2, g.Y2));
+                dc.DrawLine(pen, p0, p1);
+                double ang = Math.Atan2(p1.Y - p0.Y, p1.X - p0.X);
+                foreach (var d in new[] { 2.6, -2.6 }) dc.DrawLine(pen, p1, new Point(p1.X - 10 * Math.Cos(ang + d), p1.Y - 10 * Math.Sin(ang + d)));
+                break;
+            }
+            case GradientShape.Ellipse:
+                DrawRotatedEllipse(dc, null, pen, ViewPoint(new Point(g.X, g.Y)), g.A * Zoom, g.B * Zoom, g.Angle, axes);
+                break;
+        }
+    }
+
+    void DrawGradientOverlay(DrawingContext dc)
+    {
+        if (!gradientEditing) return;
+        foreach (var r in gradientRegions)
+        {
+            var c = ViewPoint(new Point(r.X, r.Y));
+            bool sel = r.Id == selectedGradientRegion;
+            dc.DrawEllipse(RegionFill, sel ? RegionSelectedPen : RegionPen, c, r.A * Zoom, r.B * Zoom);
+            if (sel) foreach (var h in RegionHandlePoints(r)) dc.DrawEllipse(Brushes.Red, HandlePen, h, 5, 5);
+        }
+        if (gradientGesture is GradientGesture g && g.Shape != GradientShape.Polynomial)
+        {
+            if (gradientRefined is GradientGesture rg && !rg.Equals(g) && rg.Shape == g.Shape) DrawGradientGuide(dc, rg, GradientRefinedPen, false);
+            DrawGradientGuide(dc, g, GradientPen, true);
+            foreach (var h in GradientHandlePoints(g)) DrawHandleSquare(dc, Brushes.Gold, h);
+        }
+    }
+
+    /// <summary>Handles of the selected region: on its rim to the right (a) and below (b) the centre.</summary>
+    List<Point> RegionHandlePoints(GradientRegion r) => [ViewPoint(new Point(r.X + r.A, r.Y)), ViewPoint(new Point(r.X, r.Y + r.B))];
+
+    /// <summary>The region under a view point (the smallest when several overlap).</summary>
+    GradientRegion? GradientRegionAt(Point p)
+    {
+        var ip = ImagePoint(p);
+        return gradientRegions.Where(r => r.Contains(ip.X, ip.Y)).OrderBy(r => r.A * r.B).FirstOrDefault();
+    }
+
+    /// <summary>Distance from a view point to the drawn line segment.</summary>
+    double DistanceToGradientLine(Point p, GradientGesture g)
+    {
+        var a = ViewPoint(new Point(g.X, g.Y)); var b = ViewPoint(new Point(g.X2, g.Y2));
+        double dx = b.X - a.X, dy = b.Y - a.Y, l2 = Math.Max(dx * dx + dy * dy, 1e-6);
+        double t = Math.Clamp(((p.X - a.X) * dx + (p.Y - a.Y) * dy) / l2, 0, 1);
+        return Dist(p, new Point(a.X + t * dx, a.Y + t * dy));
+    }
+
+    void GradientMouseDown(Point p)
+    {
+        if (gradientGesture is GradientGesture g && g.Shape != GradientShape.Polynomial)
+        {
+            var hs = GradientHandlePoints(g);
+            for (int i = 0; i < hs.Count; i++) if (Dist(p, hs[i]) <= 8) { drag = DragKind.GradientHandle; dragHandle = i; return; }
+        }
+        if (selectedGradientRegion is Guid id && gradientRegions.FirstOrDefault(r => r.Id == id) is GradientRegion sel)
+        {
+            var hs = RegionHandlePoints(sel);
+            for (int i = 0; i < hs.Count; i++) if (Dist(p, hs[i]) <= 8) { drag = DragKind.RegionResize; dragRegion = id; dragAxis = i; return; }
+        }
+        if (GradientRegionAt(p) is GradientRegion r)
+        {
+            if (r.Id != selectedGradientRegion) GradientRegionSelect?.Invoke(r.Id);
+            drag = DragKind.RegionMove; dragRegion = r.Id; dragRegionStart = r.Clone(); dragAnchor = ImagePoint(p);
+            return;
+        }
+        if (gradientGesture is GradientGesture lg && lg.Shape == GradientShape.Line && DistanceToGradientLine(p, lg) <= 6)
+        {
+            drag = DragKind.GradientMove; dragGestureStart = lg.Clone(); dragAnchor = ImagePoint(p); return;
+        }
+        if (!gradientProtectMode && gradientShape != GradientShape.Polynomial && (gradientGesture == null || gradientGesture.Shape == GradientShape.Polynomial))
+        {
+            drag = DragKind.GradientCreate; dragStart = ImagePoint(p); return;
+        }
+        drag = DragKind.GradientPan; dragLast = p; dragStart = p; dragMoved = false;
+    }
+
+    /// <summary>Drags of the gradient editor; true when handled.</summary>
+    bool GradientMouseMove(Point p, Point ip)
+    {
+        switch (drag)
+        {
+            case DragKind.GradientPan:
+                Pan(p - dragLast); dragLast = p;
+                if (Dist(p, dragStart) > 3) dragMoved = true;
+                return true;
+            case DragKind.GradientCreate:
+            {
+                if (Dist(ip, dragStart) < 2) return true;
+                var g = gradientShape == GradientShape.Line
+                    ? GradientGesture.Line(dragStart.X, dragStart.Y, ip.X, ip.Y)
+                    : GradientGesture.Ellipse(dragStart.X, dragStart.Y, Math.Max(Math.Abs(ip.X - dragStart.X), 1), Math.Max(Math.Abs(ip.Y - dragStart.Y), 1));
+                gradientGesture = g; InvalidateVisual();
+                GradientGestureChanged?.Invoke(g);
+                return true;
+            }
+            case DragKind.GradientHandle:
+            {
+                if (gradientGesture is not GradientGesture g0) return true;
+                var g = g0.Clone();
+                if (g.Shape == GradientShape.Line) { if (dragHandle == 0) { g.X = ip.X; g.Y = ip.Y; } else { g.X2 = ip.X; g.Y2 = ip.Y; } }
+                else if (dragHandle == 0) { g.X = ip.X; g.Y = ip.Y; }
+                else if (dragHandle == 1) { g.A = Math.Max(Math.Sqrt((ip.X - g.X) * (ip.X - g.X) + (ip.Y - g.Y) * (ip.Y - g.Y)), 1); g.Angle = Math.Atan2(ip.Y - g.Y, ip.X - g.X); }
+                else { double bx = -Math.Sin(g.Angle), by = Math.Cos(g.Angle); g.B = Math.Max(Math.Abs((ip.X - g.X) * bx + (ip.Y - g.Y) * by), 1); }
+                gradientGesture = g; InvalidateVisual();
+                GradientGestureChanged?.Invoke(g);
+                return true;
+            }
+            case DragKind.GradientMove:
+            {
+                if (dragGestureStart == null) return true;
+                var g = dragGestureStart.Clone();
+                double dx = ip.X - dragAnchor.X, dy = ip.Y - dragAnchor.Y;
+                g.X += dx; g.Y += dy; g.X2 += dx; g.Y2 += dy;
+                gradientGesture = g; InvalidateVisual();
+                GradientGestureChanged?.Invoke(g);
+                return true;
+            }
+            case DragKind.RegionMove:
+            {
+                int i = gradientRegions.FindIndex(r => r.Id == dragRegion);
+                if (i < 0 || dragRegionStart == null) return true;
+                var regions = gradientRegions.Select(r => r.Clone()).ToList();
+                regions[i].X = Math.Min(Math.Max(dragRegionStart.X + ip.X - dragAnchor.X, 0), imageSize.Width);
+                regions[i].Y = Math.Min(Math.Max(dragRegionStart.Y + ip.Y - dragAnchor.Y, 0), imageSize.Height);
+                gradientRegions = regions; InvalidateVisual();
+                GradientRegionsChanged?.Invoke(regions);
+                return true;
+            }
+            case DragKind.RegionResize:
+            {
+                int i = gradientRegions.FindIndex(r => r.Id == dragRegion);
+                if (i < 0) return true;
+                var regions = gradientRegions.Select(r => r.Clone()).ToList();
+                if (dragAxis == 0) regions[i].A = Math.Max(3, Math.Abs(ip.X - regions[i].X)); else regions[i].B = Math.Max(3, Math.Abs(ip.Y - regions[i].Y));
+                gradientRegions = regions; InvalidateVisual();
+                GradientRegionsChanged?.Invoke(regions);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void GradientMouseUp()
+    {
+        if (drag == DragKind.GradientPan && !dragMoved)
+        {
+            var ip = ImagePoint(dragStart);
+            if (gradientProtectMode && ip.X >= 0 && ip.Y >= 0 && ip.X < imageSize.Width && ip.Y < imageSize.Height) GradientRegionAdd?.Invoke(ip);
+            else GradientRegionSelect?.Invoke(null);
+        }
+    }
+
     // Events
 
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
@@ -278,6 +484,7 @@ public sealed class PreviewControl : Control
         var p = e.GetPosition(this);
         if (e.ClickCount == 2) { DoubleClick?.Invoke(); drag = DragKind.None; e.Handled = true; return; }
         if (dustEditing) { DustMouseDown(p); e.Pointer.Capture(this); e.Handled = true; return; }
+        if (gradientEditing) { GradientMouseDown(p); e.Pointer.Capture(this); e.Handled = true; return; }
         if (cropEditing)
         {
             var ip = ImagePoint(p);
@@ -327,6 +534,7 @@ public sealed class PreviewControl : Control
         bool left = e.GetCurrentPoint(this).Properties.IsLeftButtonPressed;
         if (!left && drag != DragKind.None) { drag = DragKind.None; e.Pointer.Capture(null); UpdateCursor(); }
         Point ClampPoint(Point q) => new(Math.Min(Math.Max(q.X, 0), imageSize.Width), Math.Min(Math.Max(q.Y, 0), imageSize.Height));
+        if (GradientMouseMove(p, ip)) return;
         switch (drag)
         {
             case DragKind.Pan:
@@ -393,6 +601,7 @@ public sealed class PreviewControl : Control
             var ip = ImagePoint(dragStart);
             if (ip.X >= 0 && ip.Y >= 0 && ip.X < imageSize.Width && ip.Y < imageSize.Height) DustAdd?.Invoke(ip); else DustSelect?.Invoke(null);
         }
+        GradientMouseUp();
         drag = DragKind.None;
         e.Pointer.Capture(null);
         UpdateCursor();
@@ -408,7 +617,7 @@ public sealed class PreviewControl : Control
             case Key.Subtract: case Key.OemMinus: Perform(ZoomAction.ZoomOut); e.Handled = true; break;
             case Key.D0: case Key.NumPad0: Perform(ZoomAction.Fit); e.Handled = true; break;
             case Key.D1: case Key.NumPad1: Perform(ZoomAction.ActualSize); e.Handled = true; break;
-            case Key.Delete: case Key.Back: if (dustEditing) { DustDelete?.Invoke(); e.Handled = true; } break;
+            case Key.Delete: case Key.Back: if (dustEditing) { DustDelete?.Invoke(); e.Handled = true; } else if (gradientEditing) { GradientDelete?.Invoke(); e.Handled = true; } break;
         }
         if (!e.Handled) base.OnKeyDown(e);
     }

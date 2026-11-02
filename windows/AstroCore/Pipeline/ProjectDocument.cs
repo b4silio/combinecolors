@@ -47,6 +47,8 @@ public sealed partial class ProjectDocument
     public bool Flipped = false;
     /// <summary>Dust spots healed on the loaded channels (oriented coordinates) and the estimation parameters.</summary>
     public DustSettings Dust = new();
+    /// <summary>Gradient models removed from the loaded channels (oriented coordinates) and the shared protected regions.</summary>
+    public GradientSettings Gradient = new();
 
     public Orientation Orientation
     {

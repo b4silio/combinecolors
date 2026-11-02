@@ -48,7 +48,7 @@ public enum PaletteFilter { Favorites, All }
 public static class Change
 {
     public const string Sources = "Sources", Settings = "Settings", Frame = "Frame", Thumbnails = "Thumbnails", SlotThumbnails = "SlotThumbnails",
-        Status = "Status", Crop = "Crop", Dust = "Dust", Presets = "Presets", RecentSets = "RecentSets", PaletteVisibility = "PaletteVisibility",
+        Status = "Status", Crop = "Crop", Dust = "Dust", Gradient = "Gradient", Presets = "Presets", RecentSets = "RecentSets", PaletteVisibility = "PaletteVisibility",
         Pending = "Pending", Hover = "Hover", Context = "Context", Peek = "Peek", Error = "Error", Project = "Project";
 }
 
@@ -163,6 +163,43 @@ public sealed class ProjectModel : INotifyPropertyChanged
     /// <summary>Channels whose live source currently shows draft spots (restored on cancel).</summary>
     readonly HashSet<ChannelKind> dustPreviewed = new();
 
+    // Gradient removal
+    /// <summary>Gradient models applied to the channels (stored in the project).</summary>
+    public GradientSettings Gradient { get; private set; } = new();
+    GradientSettings? gradientDraft;
+    /// <summary>Working copy while the gradient editor is open; changes are previewed on the edited channel.</summary>
+    public GradientSettings? GradientDraft
+    {
+        get => gradientDraft;
+        set
+        {
+            bool changed = !Equals(gradientDraft, value);
+            gradientDraft = value;
+            if (changed) { Notify(Change.Gradient); if (GradientEditing != null) ScheduleGradientPreview(); }
+        }
+    }
+    /// <summary>Channel shown in the gradient editor (null = editor closed).</summary>
+    public ChannelKind? GradientEditing { get; private set; }
+    GradientView gradientView = GradientView.Corrected;
+    /// <summary>What the preview shows while editing: the corrected channel, the untouched one, or the background model itself.</summary>
+    public GradientView GradientView { get => gradientView; set { if (gradientView == value) return; gradientView = value; Notify(Change.Gradient); if (GradientEditing != null) ScheduleGradientPreview(); } }
+    bool gradientProtectMode;
+    /// <summary>Clicks on the preview add protected regions instead of drawing the guide.</summary>
+    public bool GradientProtectMode { get => gradientProtectMode; set { if (gradientProtectMode == value) return; gradientProtectMode = value; Notify(Change.Gradient); } }
+    Guid? selectedGradientRegion;
+    public Guid? SelectedGradientRegion { get => selectedGradientRegion; set { if (selectedGradientRegion == value) return; selectedGradientRegion = value; Notify(Change.Gradient); } }
+    /// <summary>The latest preview fit of the edited channel (refined guide, residual, timing).</summary>
+    public GradientFitInfo? GradientFit { get; private set; }
+    IDisposable? gradientPreviewTimer;
+    int gradientPreviewGeneration;
+    /// <summary>Channels whose live source currently shows a draft model (restored on cancel).</summary>
+    readonly HashSet<ChannelKind> gradientPreviewed = new();
+    /// <summary>Dust-healed plane of the edited channel, kept while the editor is open (the model is re-fitted on it).</summary>
+    (ChannelKind kind, PlanarImage image)? gradientHealed;
+    /// <summary>Developer switch: an editor to open once the first channels are loaded ("gradient:Ha[:background]", "dust:Ha").</summary>
+    public string? LaunchEditor;
+    bool launchEditorOpened;
+
     // Derived state
     public RenderContext? Context { get; private set; }
     public Dictionary<ChannelKind, PlanarImage> AnalysisSamples { get; private set; } = new();
@@ -197,7 +234,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
     {
         get
         {
-            var k = PeekChannel ?? DustEditing;
+            var k = PeekChannel ?? DustEditing ?? GradientEditing;
             if (k is ChannelKind kind && sources.ContainsKey(kind)) return PeekSettings(kind, settings);
             return settings;
         }
@@ -451,7 +488,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
         if (items.Count == 0) return;
         IsLoading = true;
         LoadingMessage = $"Analysing {string.Join(", ", items.Select(i => i.Kind.ShortName()))}…";
-        var cropNow = crop; var orient = Orientation; var dust = Dust.Clone();
+        var cropNow = crop; var orient = Orientation; var dust = Dust.Clone(); var gradient = Gradient.Clone();
         Task.Run(() =>
         {
             var built = new ChannelSource[items.Count];
@@ -460,7 +497,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
             {
                 var it = items[i];
                 var oriented = orient.Apply(it.Plane);
-                var healed = DustRemoval.Heal(oriented, dust.SpotsFor(it.Kind));
+                var healed = Process(oriented, it.Kind, dust, gradient);
                 built[i] = new ChannelSource(it.Kind, healed, it.FileName, it.Path, it.Format);
                 originals[i] = oriented;
             });
@@ -473,6 +510,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
                 IsLoading = false;
                 Notify(Change.SlotThumbnails);
                 SourcesChanged();
+                OpenEditorFromLaunchArgument();
             });
         });
     }
@@ -491,6 +529,10 @@ public sealed class ProjectModel : INotifyPropertyChanged
         dustDraft?.Spots.Remove(kind);
         dustPreviewed.Remove(kind);
         if (DustEditing == kind) { DustEditing = null; dustDraft = null; Notify(Change.Dust); }
+        Gradient.Specs.Remove(kind);
+        gradientDraft?.Specs.Remove(kind);
+        gradientPreviewed.Remove(kind);
+        if (GradientEditing == kind) { GradientEditing = null; gradientDraft = null; GradientFit = null; gradientHealed = null; Notify(Change.Gradient); }
         if (sources.Count == 0) { Frame = null; crop = null; cropDraft = null; cropEditing = false; Notify(Change.Crop); Notify(Change.Frame); }
         Notify(Change.SlotThumbnails);
         SourcesChanged();
@@ -501,7 +543,8 @@ public sealed class ProjectModel : INotifyPropertyChanged
         baseSources.Clear(); sources.Clear(); slotThumbnails.Clear(); Frame = null; thumbnails.Clear();
         crop = null; cropDraft = null; cropEditing = false; Orientation = Orientation.Identity;
         originalImages.Clear(); Dust = new DustSettings(); dustDraft = null; DustEditing = null; dustPreviewed.Clear();
-        Notify(Change.Crop); Notify(Change.Dust); Notify(Change.Frame); Notify(Change.SlotThumbnails); Notify(Change.Thumbnails);
+        Gradient = new GradientSettings(); gradientDraft = null; GradientEditing = null; gradientPreviewed.Clear(); GradientFit = null; gradientHealed = null;
+        Notify(Change.Crop); Notify(Change.Dust); Notify(Change.Gradient); Notify(Change.Frame); Notify(Change.SlotThumbnails); Notify(Change.Thumbnails);
         SourcesChanged();
     }
 
@@ -529,12 +572,16 @@ public sealed class ProjectModel : INotifyPropertyChanged
         }
         Dust = MapSpots(Dust);
         if (dustDraft != null) dustDraft = MapSpots(dustDraft);
+        Gradient = Gradient.Applying(op, w, h);
+        if (gradientDraft != null) gradientDraft = gradientDraft.Applying(op, w, h);
+        gradientHealed = null;
         var dust = Dust; var draft = dustDraft; var editing = DustEditing;
+        var gradient = Gradient; var gdraft = gradientDraft; var gediting = GradientEditing;
         var originals = new Dictionary<ChannelKind, PlanarImage>(originalImages);
         IsLoading = true;
         LoadingMessage = op == OrientationOp.RotateClockwise ? "Rotating…" : "Flipping…";
         Frame = null;
-        Notify(Change.Frame); Notify(Change.Dust);
+        Notify(Change.Frame); Notify(Change.Dust); Notify(Change.Gradient);
         Task.Run(() =>
         {
             var kinds = baseCopy.Keys.ToArray();
@@ -543,9 +590,10 @@ public sealed class ProjectModel : INotifyPropertyChanged
             {
                 var k = kinds[i]; var old = baseCopy[k];
                 var orig = (originals.TryGetValue(k, out var o) ? o : old.Image).Applying(op);
-                // The edited channel keeps showing its draft spots.
+                // The edited channel keeps showing its draft spots / model.
                 var d = (k == editing ? draft : null) ?? dust;
-                var healed = DustRemoval.Heal(orig, d.SpotsFor(k));
+                var g = (k == gediting ? gdraft : null) ?? gradient;
+                var healed = Process(orig, k, d, g);
                 var b = new ChannelSource(k, healed, old.FileName, old.Path, old.FormatDescription);
                 newBase[i] = b; newCur[i] = newCrop == null ? b : new ChannelSource(b, newCrop); newOrig[i] = orig;
             });
@@ -584,6 +632,9 @@ public sealed class ProjectModel : INotifyPropertyChanged
         if (originalImages.TryGetValue(kind, out var oi)) originalImages[newKind] = oi;
         if (Dust.Spots.TryGetValue(kind, out var sp)) Dust.Spots[newKind] = sp; else Dust.Spots.Remove(newKind);
         if (dustDraft != null) { if (dustDraft.Spots.TryGetValue(kind, out var dsp)) dustDraft.Spots[newKind] = dsp; else dustDraft.Spots.Remove(newKind); }
+        Gradient.Specs.TryGetValue(newKind, out var otherGradient); GradientSpec? otherGradientDraft = null; gradientDraft?.Specs.TryGetValue(newKind, out otherGradientDraft);
+        if (Gradient.Specs.TryGetValue(kind, out var gsp)) Gradient.Specs[newKind] = gsp; else Gradient.Specs.Remove(newKind);
+        if (gradientDraft != null) { if (gradientDraft.Specs.TryGetValue(kind, out var gdsp)) gradientDraft.Specs[newKind] = gdsp; else gradientDraft.Specs.Remove(newKind); }
         if (otherBase != null && otherCur != null)
         {
             baseSources[kind] = new ChannelSource(otherBase, kind); sources[kind] = new ChannelSource(otherCur, kind);
@@ -591,15 +642,20 @@ public sealed class ProjectModel : INotifyPropertyChanged
             if (otherOrig != null) originalImages[kind] = otherOrig; else originalImages.Remove(kind);
             if (otherSpots != null) Dust.Spots[kind] = otherSpots; else Dust.Spots.Remove(kind);
             if (dustDraft != null) { if (otherDraft != null) dustDraft.Spots[kind] = otherDraft; else dustDraft.Spots.Remove(kind); }
+            if (otherGradient != null) Gradient.Specs[kind] = otherGradient; else Gradient.Specs.Remove(kind);
+            if (gradientDraft != null) { if (otherGradientDraft != null) gradientDraft.Specs[kind] = otherGradientDraft; else gradientDraft.Specs.Remove(kind); }
         }
         else
         {
             baseSources.Remove(kind); sources.Remove(kind); slotThumbnails.Remove(kind);
             originalImages.Remove(kind); Dust.Spots.Remove(kind); dustDraft?.Spots.Remove(kind);
+            Gradient.Specs.Remove(kind); gradientDraft?.Specs.Remove(kind);
         }
         if (dustPreviewed.Remove(kind)) dustPreviewed.Add(newKind);
         if (DustEditing == kind) DustEditing = newKind;
-        Notify(Change.SlotThumbnails); Notify(Change.Dust);
+        if (gradientPreviewed.Remove(kind)) gradientPreviewed.Add(newKind);
+        if (GradientEditing == kind) { GradientEditing = newKind; gradientHealed = null; }
+        Notify(Change.SlotThumbnails); Notify(Change.Dust); Notify(Change.Gradient);
         SourcesChanged();
     }
 
@@ -703,9 +759,10 @@ public sealed class ProjectModel : INotifyPropertyChanged
                     Settings = st.Settings.Clone();
                     Crop = st.Crop;
                     Dust = st.Dust.Clone();
+                    Gradient = st.Gradient.Clone();
                     Presets = st.Presets.Select(p => p.Clone()).ToList();
                     presetThumbnailCache.Clear();
-                    Notify(Change.Presets); Notify(Change.Dust);
+                    Notify(Change.Presets); Notify(Change.Dust); Notify(Change.Gradient);
                 }
                 AddChannels(items);
             });
@@ -768,6 +825,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
     public void BeginCropEditing()
     {
         if (DustEditing != null) CancelDustEditing();
+        if (GradientEditing != null) CancelGradientEditing();
         CropDraft = crop ?? (ImageSize is Size s ? new PixelRect((int)(s.Width * 0.1), (int)(s.Height * 0.1), (int)(s.Width * 0.8), (int)(s.Height * 0.8)) : null);
         CropEditing = true;
     }
@@ -1004,7 +1062,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
 
     public ProjectDocument ProjectDocument()
     {
-        var doc = new ProjectDocument { Settings = settings.Clone(), Crop = crop, Orientation = Orientation, Dust = Dust.Clone(), Presets = Presets.Select(p => p.Clone()).ToList() };
+        var doc = new ProjectDocument { Settings = settings.Clone(), Crop = crop, Orientation = Orientation, Dust = Dust.Clone(), Gradient = Gradient.Clone(), Presets = Presets.Select(p => p.Clone()).ToList() };
         doc.Channels = sources.Values.OrderBy(s => s.Kind.RawValue(), StringComparer.Ordinal).Where(s => s.Path != null).Select(s => new ProjectDocument.ChannelRef(s.Kind, s.Path!)).ToList();
         return doc;
     }
@@ -1031,7 +1089,8 @@ public sealed class ProjectModel : INotifyPropertyChanged
         var refs = doc.Channels;
         Orientation = doc.Orientation;
         Dust = doc.Dust.Clone();
-        Notify(Change.Dust);
+        Gradient = doc.Gradient.Clone();
+        Notify(Change.Dust); Notify(Change.Gradient);
         if (refs.Count == 0) { Settings = doc.Settings.Clone(); Crop = doc.Crop; return; }
         IsLoading = true;
         LoadingMessage = "Loading project…";
@@ -1138,6 +1197,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
     {
         if (!sources.ContainsKey(kind)) return;
         if (CropEditing) CancelCropEditing();
+        if (GradientEditing != null) CancelGradientEditing();
         // A press-and-hold peek left behind by the slot menu would otherwise override the edited channel.
         PeekChannel = null;
         if (DustEditing == null) { dustDraft = Dust.Clone(); dustBypass = false; }
@@ -1311,11 +1371,11 @@ public sealed class ProjectModel : INotifyPropertyChanged
     {
         if (DustEditing is not ChannelKind k || dustDraft is not DustSettings d || !originalImages.TryGetValue(k, out var orig) || !baseSources.TryGetValue(k, out var baseSrc)) return;
         int gen = ++dustPreviewGeneration;
-        var spots = dustBypass ? new List<DustSpot>() : d.SpotsFor(k); var cropNow = crop;
+        var spots = dustBypass ? new List<DustSpot>() : d.SpotsFor(k); var cropNow = crop; var gradient = Gradient.Clone();
         dustPreviewed.Add(k);
         Task.Run(() =>
         {
-            var healed = DustRemoval.Heal(orig, spots);
+            var healed = GradientRemoval.Correct(DustRemoval.Heal(orig, spots), k, gradient);
             var b = new ChannelSource(baseSrc, healed);
             var c = cropNow == null ? b : new ChannelSource(b, cropNow);
             ui.Post(() =>
@@ -1334,16 +1394,16 @@ public sealed class ProjectModel : INotifyPropertyChanged
     {
         var todo = kinds.Where(k => baseSources.ContainsKey(k) && originalImages.ContainsKey(k)).ToArray();
         if (todo.Length == 0) { ScheduleRender(); return; }
-        var baseCopy = new Dictionary<ChannelKind, ChannelSource>(baseSources); var originals = new Dictionary<ChannelKind, PlanarImage>(originalImages); var dust = Dust.Clone(); var cropNow = crop;
+        var baseCopy = new Dictionary<ChannelKind, ChannelSource>(baseSources); var originals = new Dictionary<ChannelKind, PlanarImage>(originalImages); var dust = Dust.Clone(); var gradient = Gradient.Clone(); var cropNow = crop;
         IsLoading = true;
-        LoadingMessage = "Healing dust spots…";
+        LoadingMessage = gradient.IsEmpty ? "Healing dust spots…" : "Processing channels…";
         Task.Run(() =>
         {
             var outB = new ChannelSource[todo.Length]; var outC = new ChannelSource[todo.Length];
             Parallel.For(0, todo.Length, i =>
             {
                 var k = todo[i]; var old = baseCopy[k];
-                var healed = DustRemoval.Heal(originals[k], dust.SpotsFor(k));
+                var healed = Process(originals[k], k, dust, gradient);
                 var b = new ChannelSource(k, healed, old.FileName, old.Path, old.FormatDescription);
                 outB[i] = b; outC[i] = cropNow == null ? b : new ChannelSource(b, cropNow);
             });
@@ -1358,4 +1418,275 @@ public sealed class ProjectModel : INotifyPropertyChanged
             });
         });
     }
+    // ---- Gradient removal ------------------------------------------------------------------------
+
+    /// <summary>A loaded (oriented) channel after dust healing and gradient removal, in that order.</summary>
+    public static PlanarImage Process(PlanarImage oriented, ChannelKind kind, DustSettings dust, GradientSettings gradient)
+        => GradientRemoval.Correct(DustRemoval.Heal(oriented, dust.SpotsFor(kind)), kind, gradient);
+
+    /// <summary>The model the editor currently shows for a channel (the draft while editing, else the applied one).</summary>
+    public GradientSpec? GradientSpecFor(ChannelKind kind) => (gradientDraft ?? Gradient).SpecFor(kind);
+    /// <summary>Protected regions shown (draft while editing).</summary>
+    public List<GradientRegion> GradientRegions => (gradientDraft ?? Gradient).Protect;
+    /// <summary>Model of the edited channel (null: nothing drawn yet).</summary>
+    public GradientSpec? EditedGradientSpec => GradientEditing is ChannelKind k ? GradientSpecFor(k) : null;
+    /// <summary>Shape of the edited channel's guide, or the shape new guides get.</summary>
+    public GradientShape GradientShape => EditedGradientSpec?.Gesture.Shape ?? (gradientDraft ?? Gradient).Shape;
+    /// <summary>Semi-axes given to a new protected region.</summary>
+    public double DefaultGradientRegionRadius => ImageSize is Size s ? Math.Max(20, Math.Min(s.Width, s.Height) / 10) : 100;
+
+    /// <summary>Opens the gradient editor on a channel (the preview shows that channel alone, with its draft model).</summary>
+    public void BeginGradientEditing(ChannelKind kind)
+    {
+        if (!sources.ContainsKey(kind)) return;
+        if (CropEditing) CancelCropEditing();
+        if (DustEditing != null) CancelDustEditing();
+        PeekChannel = null;
+        if (GradientEditing == null) { gradientDraft = Gradient.Clone(); gradientView = GradientView.Corrected; gradientProtectMode = false; }
+        if (GradientEditing != kind) gradientHealed = null;
+        GradientEditing = kind;
+        selectedGradientRegion = null;
+        GradientFit = null;
+        Notify(Change.Gradient);
+        ScheduleGradientPreview();
+    }
+
+    /// <summary>Switches the editor to another loaded channel, keeping every draft.</summary>
+    public void SwitchGradientChannel(ChannelKind kind)
+    {
+        if (GradientEditing == null || GradientEditing == kind || !sources.ContainsKey(kind)) return;
+        PeekChannel = null;
+        GradientEditing = kind;
+        gradientHealed = null;
+        selectedGradientRegion = null;
+        GradientFit = null;
+        Notify(Change.Gradient);
+        ScheduleGradientPreview();
+    }
+
+    /// <summary>Sets (or replaces) the guide of the edited channel; a new model takes the default parameters.</summary>
+    public void SetGradientGesture(GradientGesture g)
+    {
+        if (GradientEditing is not ChannelKind k || gradientDraft == null) return;
+        var nd = gradientDraft.Clone();
+        if (nd.Specs.TryGetValue(k, out var spec)) spec.Gesture = g.Clone(); else nd.Specs[k] = nd.NewSpec(g.Clone());
+        nd.Shape = g.Shape;
+        GradientDraft = nd;
+    }
+
+    /// <summary>Replaces the model of the edited channel (parameter edits); the parameters become the defaults for new models.</summary>
+    public void UpdateGradientSpec(GradientSpec spec)
+    {
+        if (GradientEditing is not ChannelKind k || gradientDraft == null) return;
+        var nd = gradientDraft.Clone();
+        nd.Specs[k] = spec.Clone();
+        nd.Mode = spec.Mode; nd.Residual = spec.Residual; nd.Sectors = spec.Sectors; nd.Smoothness = spec.Smoothness;
+        nd.Degree = spec.Degree; nd.Refine = spec.Refine; nd.Shape = spec.Gesture.Shape;
+        GradientDraft = nd;
+    }
+
+    /// <summary>Edits a parameter of the edited channel's model, or the default for new models when nothing is drawn yet.</summary>
+    public void EditGradient(Action<GradientSpec> editSpec, Action<GradientSettings> editDefaults)
+    {
+        if (EditedGradientSpec is GradientSpec sp) { var c = sp.Clone(); editSpec(c); UpdateGradientSpec(c); }
+        else if (gradientDraft != null) { var nd = gradientDraft.Clone(); editDefaults(nd); GradientDraft = nd; }
+    }
+
+    /// <summary>Switches the shape of the edited channel's guide (converting the drawing), or the shape to draw when nothing is drawn yet (the polynomial needs no drawing and is created at once).</summary>
+    public void SetGradientShape(GradientShape shape)
+    {
+        if (GradientEditing is not ChannelKind k || gradientDraft == null) return;
+        var nd = gradientDraft.Clone();
+        nd.Shape = shape;
+        if (nd.Specs.TryGetValue(k, out var spec)) spec.Gesture = spec.Gesture.ConvertedTo(shape);
+        else if (shape == GradientShape.Polynomial) nd.Specs[k] = nd.NewSpec(GradientGesture.Polynomial());
+        GradientDraft = nd;
+    }
+
+    /// <summary>Removes the model of the edited channel.</summary>
+    public void ClearGradient()
+    {
+        if (GradientEditing is not ChannelKind k || gradientDraft == null) return;
+        var nd = gradientDraft.Clone();
+        nd.Specs.Remove(k);
+        GradientFit = null;
+        GradientDraft = nd;
+    }
+
+    /// <summary>Copies the refined geometry of the latest fit into the drawn guide.</summary>
+    public void AdoptRefinedGradient()
+    {
+        if (GradientEditing is not ChannelKind k || GradientFit is not GradientFitInfo f || f.Kind != k || gradientDraft == null || !gradientDraft.Specs.ContainsKey(k)) return;
+        var nd = gradientDraft.Clone();
+        nd.Specs[k].Gesture = f.Gesture.Clone();
+        GradientDraft = nd;
+    }
+
+    /// <summary>Gives every other loaded channel the edited channel's model (vignetting is the same for every filter).</summary>
+    public void CopyGradientToAllChannels()
+    {
+        if (GradientEditing is not ChannelKind k || gradientDraft == null || !gradientDraft.Specs.TryGetValue(k, out var spec)) return;
+        var nd = gradientDraft.Clone();
+        foreach (var other in sources.Keys) if (other != k) nd.Specs[other] = spec.Clone();
+        GradientDraft = nd;
+    }
+
+    public void AddGradientRegion(Point p)
+    {
+        if (GradientEditing == null || gradientDraft == null) return;
+        double r = DefaultGradientRegionRadius;
+        var region = new GradientRegion(p.X, p.Y, r, r);
+        var nd = gradientDraft.Clone();
+        nd.Protect.Add(region);
+        selectedGradientRegion = region.Id;
+        GradientDraft = nd;
+    }
+
+    /// <summary>Replaces the protected regions (moves / resizes from the preview).</summary>
+    public void UpdateGradientRegions(List<GradientRegion> regions)
+    {
+        if (GradientEditing == null || gradientDraft == null) return;
+        var nd = gradientDraft.Clone();
+        nd.Protect = regions.Select(r => r.Clone()).ToList();
+        GradientDraft = nd;
+    }
+
+    public void RemoveSelectedGradientRegion()
+    {
+        if (GradientEditing == null || selectedGradientRegion is not Guid id || gradientDraft == null) return;
+        var nd = gradientDraft.Clone();
+        nd.Protect.RemoveAll(r => r.Id == id);
+        selectedGradientRegion = null;
+        GradientDraft = nd;
+    }
+
+    public void ClearGradientRegions()
+    {
+        if (GradientEditing == null || gradientDraft == null) return;
+        var nd = gradientDraft.Clone();
+        nd.Protect.Clear();
+        selectedGradientRegion = null;
+        GradientDraft = nd;
+    }
+
+    /// <summary>Applies the draft: channels whose model (or, when the protected regions changed, any model) differs are re-processed from the original and fully re-analysed.</summary>
+    public void CommitGradientEditing()
+    {
+        if (gradientDraft is not GradientSettings draft) { GradientEditing = null; Notify(Change.Gradient); return; }
+        gradientPreviewTimer?.Dispose();
+        gradientPreviewGeneration++;
+        bool protectChanged = !draft.Protect.SequenceEqual(Gradient.Protect);
+        var changed = sources.Keys.Where(k => !Equals(draft.SpecFor(k), Gradient.SpecFor(k)) || (protectChanged && draft.SpecFor(k) != null)).ToHashSet();
+        Gradient = draft;
+        gradientDraft = null;
+        GradientEditing = null;
+        selectedGradientRegion = null;
+        gradientView = GradientView.Corrected;
+        gradientProtectMode = false;
+        GradientFit = null;
+        gradientHealed = null;
+        Notify(Change.Gradient);
+        changed.UnionWith(gradientPreviewed);
+        gradientPreviewed.Clear();
+        RebuildHealed(changed);
+        ScheduleRecentStateSave();
+    }
+
+    /// <summary>Drops the draft and puts the previewed channels back to their applied state.</summary>
+    public void CancelGradientEditing()
+    {
+        gradientPreviewTimer?.Dispose();
+        gradientPreviewGeneration++;
+        gradientDraft = null;
+        GradientEditing = null;
+        selectedGradientRegion = null;
+        gradientView = GradientView.Corrected;
+        gradientProtectMode = false;
+        GradientFit = null;
+        gradientHealed = null;
+        Notify(Change.Gradient);
+        var previewed = gradientPreviewed.ToHashSet();
+        gradientPreviewed.Clear();
+        if (previewed.Count == 0) ScheduleRender(); else RebuildHealed(previewed);
+    }
+
+    /// <summary>
+    /// Live preview of the draft on the edited channel: the model is fitted on the dust-healed plane
+    /// (kept while the editor is open) and the corrected plane swapped in with the statistics the
+    /// source already has (the Background view gets its own, its range is far smaller). Debounced, latest-wins.
+    /// </summary>
+    void ScheduleGradientPreview()
+    {
+        gradientPreviewTimer?.Dispose();
+        gradientPreviewTimer = ui.Delay(TimeSpan.FromSeconds(0.08), GradientPreview);
+    }
+
+    void GradientPreview()
+    {
+        if (GradientEditing is not ChannelKind k || gradientDraft is not GradientSettings d || !originalImages.TryGetValue(k, out var orig) || !baseSources.TryGetValue(k, out var baseSrc)) return;
+        int gen = ++gradientPreviewGeneration;
+        var view = gradientView;
+        var spec = view == GradientView.Original ? null : d.SpecFor(k)?.Clone();
+        var protect = d.Protect.Select(r => r.Clone()).ToList(); var cropNow = crop;
+        var spots = Dust.SpotsFor(k).Select(s => s.Clone()).ToList();
+        var healedCache = gradientHealed is var hc && hc != null && hc.Value.kind == k ? hc.Value.image : null;
+        gradientPreviewed.Add(k);
+        Task.Run(() =>
+        {
+            var healed = healedCache ?? DustRemoval.Heal(orig, spots);
+            var image = healed;
+            GradientFitInfo? info = null;
+            if (spec != null)
+            {
+                var t0 = System.Diagnostics.Stopwatch.StartNew();
+                if (GradientRemoval.Correct(healed, spec, protect) is var (corrected, fit))
+                {
+                    image = view == GradientView.Background ? fit.BackgroundImage() : corrected;
+                    info = new GradientFitInfo(k, fit.Gesture, fit.ResidualSigma, t0.Elapsed.TotalMilliseconds);
+                }
+            }
+            var b = view == GradientView.Background && !ReferenceEquals(image, healed)
+                ? new ChannelSource(k, image, baseSrc.FileName, baseSrc.Path, baseSrc.FormatDescription)
+                : new ChannelSource(baseSrc, image);
+            var c = cropNow == null ? b : new ChannelSource(b, cropNow);
+            ui.Post(() =>
+            {
+                if (gen != gradientPreviewGeneration || GradientEditing != k) return;
+                gradientHealed = (k, healed);
+                baseSources[k] = b;
+                sources[k] = c;
+                GradientFit = info;
+                Notify(Change.Sources); Notify(Change.Gradient);
+                ScheduleRender();
+            });
+        });
+    }
+
+    /// <summary>Developer switch for screenshots: <c>--open-editor gradient:Ha[:background]</c> (or <c>dust:Ha</c>) opens that editor once the channel is loaded.</summary>
+    void OpenEditorFromLaunchArgument()
+    {
+        if (launchEditorOpened || LaunchEditor is not string v) return;
+        var parts = v.Split(':');
+        if (parts.Length < 2 || (ChannelKinds.FromRawValue(parts[1]) ?? ChannelKinds.FromPixelMathIdentifier(parts[1])) is not ChannelKind k || !sources.ContainsKey(k)) return;
+        launchEditorOpened = true;
+        if (parts[0] == "gradient")
+        {
+            BeginGradientEditing(k);
+            if (parts.Length > 2 && EnumRaw.Parse<GradientView>(parts[2]) is GradientView gv) GradientView = gv;
+        }
+        else if (parts[0] == "dust") BeginDustEditing(k);
+    }
 }
+
+/// <summary>What the gradient editor shows.</summary>
+public enum GradientView { Corrected, Original, Background }
+
+public static class GradientViews
+{
+    public static readonly GradientView[] All = [GradientView.Corrected, GradientView.Original, GradientView.Background];
+    public static string DisplayName(this GradientView v) => v switch { GradientView.Corrected => "Corrected", GradientView.Original => "Original", _ => "Background" };
+}
+
+/// <summary>Result of a gradient fit shown in the editor: the guide actually used (refined from the drawing when asked), the residual and the timing.</summary>
+public sealed record GradientFitInfo(ChannelKind Kind, GradientGesture Gesture, float ResidualSigma, double Millis);
+

@@ -117,6 +117,31 @@ final class ProjectModel {
     /// Channels whose live source currently shows draft spots (restored on cancel).
     private var dustPreviewed: Set<ChannelKind> = []
 
+    // MARK: Gradient removal
+    /// Gradient models applied to the channels (stored in the project).
+    private(set) var gradient = GradientSettings()
+    /// Working copy while the gradient editor is open; changes are previewed on the edited channel.
+    var gradientDraft: GradientSettings? = nil {
+        didSet { if gradientDraft != oldValue, gradientEditing != nil { scheduleGradientPreview() } }
+    }
+    /// Channel shown in the gradient editor (nil = editor closed).
+    private(set) var gradientEditing: ChannelKind? = nil
+    /// What the preview shows while editing: the corrected channel, the untouched one, or the
+    /// background model itself (what is taken away).
+    var gradientView = GradientView.corrected { didSet { if gradientView != oldValue, gradientEditing != nil { scheduleGradientPreview() } } }
+    /// Clicks on the preview add protected regions instead of drawing the guide.
+    var gradientProtectMode = false
+    var selectedGradientRegion: UUID? = nil
+    /// The latest preview fit of the edited channel (refined guide, residual, timing).
+    private(set) var gradientFit: GradientFitInfo? = nil
+    private var gradientPreviewTimer: Timer?
+    private var gradientPreviewGeneration = 0
+    /// Channels whose live source currently shows a draft model (restored on cancel).
+    private var gradientPreviewed: Set<ChannelKind> = []
+    /// Dust-healed plane of the edited channel, kept while the editor is open (the model is re-fitted on it).
+    private var gradientHealed: (kind: ChannelKind, image: PlanarImage)? = nil
+    private var launchEditorOpened = false
+
     // MARK: Derived state
     private(set) var context: RenderContext? = nil
     private(set) var analysisSamples: [ChannelKind: PlanarImage] = [:]
@@ -144,7 +169,7 @@ final class ProjectModel {
 
     /// Settings currently displayed (a single channel while peeking).
     var displayedSettings: CombineSettings {
-        if let k = peekChannel ?? dustEditing, sources[k] != nil { return ProjectModel.peekSettings(for: k, base: settings) }
+        if let k = peekChannel ?? dustEditing ?? gradientEditing, sources[k] != nil { return ProjectModel.peekSettings(for: k, base: settings) }
         return settings
     }
 
@@ -351,7 +376,7 @@ final class ProjectModel {
         guard !items.isEmpty else { return }
         isLoading = true
         loadingMessage = "Analysing \(items.map { $0.0.shortName }.joined(separator: ", "))…"
-        let crop = self.crop, orient = orientation, dust = self.dust
+        let crop = self.crop, orient = orientation, dust = self.dust, gradient = self.gradient
         Task.detached(priority: .userInitiated) {
             var built: [ChannelSource?] = Array(repeating: nil, count: items.count)
             var originals: [PlanarImage?] = Array(repeating: nil, count: items.count)
@@ -359,7 +384,7 @@ final class ProjectModel {
             DispatchQueue.concurrentPerform(iterations: items.count) { i in
                 let (kind, plane, name, url, fmt) = items[i]
                 let oriented = orient.apply(to: plane)
-                let healed = DustRemoval.heal(oriented, spots: dust.spots(for: kind))
+                let healed = ProjectModel.process(oriented, kind: kind, dust: dust, gradient: gradient)
                 let src = ChannelSource(kind: kind, image: healed, fileName: name, url: url, formatDescription: fmt)
                 lock.lock(); built[i] = src; originals[i] = oriented; lock.unlock()
             }
@@ -373,8 +398,28 @@ final class ProjectModel {
                 for (k, t) in thumbs { if let t { self.slotThumbnails[k] = t } }
                 self.isLoading = false
                 self.sourcesChanged()
+                self.openEditorFromLaunchArguments()
             }
         }
+    }
+
+    /// Developer switch for screenshots: `-openEditor gradient:Ha[:background]` (or `dust:Ha`) opens
+    /// that editor once the channel is loaded.
+    private func openEditorFromLaunchArguments() {
+        guard !launchEditorOpened, let v = UserDefaults.standard.string(forKey: "openEditor") else { return }
+        let parts = v.split(separator: ":").map(String.init)
+        guard parts.count >= 2, let k = ChannelKind(rawValue: parts[1]) ?? ChannelKind.fromPixelMathIdentifier(parts[1]), sources[k] != nil else { return }
+        launchEditorOpened = true
+        if parts[0] == "gradient" {
+            beginGradientEditing(k)
+            if parts.count > 2, let view = GradientView(rawValue: parts[2]) { gradientView = view }
+        } else if parts[0] == "dust" { beginDustEditing(k) }
+    }
+
+    /// A loaded (oriented) channel after dust healing and gradient removal, in that order.
+    nonisolated static func process(_ oriented: PlanarImage, kind: ChannelKind, dust: DustSettings, gradient: GradientSettings) -> PlanarImage {
+        let healed = DustRemoval.heal(oriented, spots: dust.spots(for: kind))
+        return GradientRemoval.correct(healed, kind: kind, settings: gradient)
     }
 
     /// Grayscale strip thumbnail of a source (cropped to its region when a crop is set).
@@ -392,6 +437,10 @@ final class ProjectModel {
         dustDraft?.spots.removeValue(forKey: kind)
         dustPreviewed.remove(kind)
         if dustEditing == kind { dustEditing = nil; dustDraft = nil }
+        gradient.specs.removeValue(forKey: kind)
+        gradientDraft?.specs.removeValue(forKey: kind)
+        gradientPreviewed.remove(kind)
+        if gradientEditing == kind { gradientEditing = nil; gradientDraft = nil; gradientFit = nil; gradientHealed = nil }
         if sources.isEmpty { frame = nil; crop = nil; cropDraft = nil; cropEditing = false }
         sourcesChanged()
     }
@@ -400,6 +449,7 @@ final class ProjectModel {
         baseSources = [:]; sources = [:]; slotThumbnails = [:]; frame = nil; thumbnails = [:]
         crop = nil; cropDraft = nil; cropEditing = false; orientation = .identity
         originalImages = [:]; dust = DustSettings(); dustDraft = nil; dustEditing = nil; dustPreviewed = []
+        gradient = GradientSettings(); gradientDraft = nil; gradientEditing = nil; gradientPreviewed = []; gradientFit = nil; gradientHealed = nil
         sourcesChanged()
     }
 
@@ -420,7 +470,11 @@ final class ProjectModel {
         func mapSpots(_ d: DustSettings) -> DustSettings { var m = d; m.spots = d.spots.mapValues { $0.map { $0.applying(op, imageWidth: w, imageHeight: h) } }; return m }
         dust = mapSpots(dust)
         if let d = dustDraft { dustDraft = mapSpots(d) }
+        gradient = gradient.applying(op, imageWidth: w, imageHeight: h)
+        if let g = gradientDraft { gradientDraft = g.applying(op, imageWidth: w, imageHeight: h) }
+        gradientHealed = nil
         let dust = self.dust, draft = self.dustDraft, editing = self.dustEditing
+        let gradient = self.gradient, gradientDraft = self.gradientDraft, gradientEditing = self.gradientEditing
         let originals = originalImages
         isLoading = true
         loadingMessage = op == .rotateClockwise ? "Rotating…" : "Flipping…"
@@ -432,9 +486,10 @@ final class ProjectModel {
             DispatchQueue.concurrentPerform(iterations: kinds.count) { i in
                 let k = kinds[i], old = base[k]!
                 let orig = (originals[k] ?? old.image).applying(op)
-                // The edited channel keeps showing its draft spots.
+                // The edited channel keeps showing its draft spots / model.
                 let d = (k == editing ? draft : nil) ?? dust
-                let healed = DustRemoval.heal(orig, spots: d.spots(for: k))
+                let g = (k == gradientEditing ? gradientDraft : nil) ?? gradient
+                let healed = ProjectModel.process(orig, kind: k, dust: d, gradient: g)
                 let b = ChannelSource(kind: k, image: healed, fileName: old.fileName, url: old.url, formatDescription: old.formatDescription)
                 let c = newCrop == nil ? b : ChannelSource(b, region: newCrop)
                 lock.lock(); newBase[k] = b; newCur[k] = c; newOrig[k] = orig; lock.unlock()
@@ -471,15 +526,22 @@ final class ProjectModel {
         originalImages[newKind] = originalImages[kind]
         dust.spots[newKind] = dust.spots[kind]
         dustDraft?.spots[newKind] = dustDraft?.spots[kind]
+        let otherGradient = gradient.specs[newKind], otherGradientDraft = gradientDraft?.specs[newKind]
+        gradient.specs[newKind] = gradient.specs[kind]
+        gradientDraft?.specs[newKind] = gradientDraft?.specs[kind]
         if let ob = otherBase, let oc = otherCur {
             baseSources[kind] = ChannelSource(ob, kind: kind); sources[kind] = ChannelSource(oc, kind: kind); slotThumbnails[kind] = otherThumb
             originalImages[kind] = otherOrig; dust.spots[kind] = otherSpots; dustDraft?.spots[kind] = otherDraft
+            gradient.specs[kind] = otherGradient; gradientDraft?.specs[kind] = otherGradientDraft
         } else {
             baseSources.removeValue(forKey: kind); sources.removeValue(forKey: kind); slotThumbnails.removeValue(forKey: kind)
             originalImages.removeValue(forKey: kind); dust.spots.removeValue(forKey: kind); dustDraft?.spots.removeValue(forKey: kind)
+            gradient.specs.removeValue(forKey: kind); gradientDraft?.specs.removeValue(forKey: kind)
         }
         if dustPreviewed.contains(kind) { dustPreviewed.remove(kind); dustPreviewed.insert(newKind) }
         if dustEditing == kind { dustEditing = newKind }
+        if gradientPreviewed.contains(kind) { gradientPreviewed.remove(kind); gradientPreviewed.insert(newKind) }
+        if gradientEditing == kind { gradientEditing = newKind; gradientHealed = nil }
         sourcesChanged()
     }
 
@@ -568,6 +630,7 @@ final class ProjectModel {
                     self.settings = st.settings
                     self.crop = st.crop
                     self.dust = st.dust
+                    self.gradient = st.gradient
                     self.presets = st.presets
                     self.presetThumbnailCache = [:]
                 }
@@ -629,6 +692,7 @@ final class ProjectModel {
 
     func beginCropEditing() {
         if dustEditing != nil { cancelDustEditing() }
+        if gradientEditing != nil { cancelGradientEditing() }
         cropDraft = crop ?? imageSize.map { PixelRect(x: Int($0.width * 0.1), y: Int($0.height * 0.1), width: Int($0.width * 0.8), height: Int($0.height * 0.8)) }
         cropEditing = true
     }
@@ -839,6 +903,7 @@ final class ProjectModel {
         doc.crop = crop
         doc.orientation = orientation
         doc.dust = dust
+        doc.gradient = gradient
         doc.presets = presets
         doc.channels = sources.values.sorted { $0.kind.rawValue < $1.kind.rawValue }.compactMap { s in
             s.url.map { ProjectDocument.ChannelRef(kind: s.kind, path: $0.path) }
@@ -862,6 +927,7 @@ final class ProjectModel {
             let refs = doc.channels
             orientation = doc.orientation
             dust = doc.dust
+            gradient = doc.gradient
             guard !refs.isEmpty else { settings = doc.settings; crop = doc.crop; return }
             isLoading = true
             loadingMessage = "Loading project…"
@@ -976,6 +1042,7 @@ extension ProjectModel {
     func beginDustEditing(_ kind: ChannelKind) {
         guard sources[kind] != nil else { return }
         if cropEditing { cancelCropEditing() }
+        if gradientEditing != nil { cancelGradientEditing() }
         // A press-and-hold peek left behind by the slot menu would otherwise override the edited channel.
         peekChannel = nil
         if dustEditing == nil { dustDraft = dust; dustBypass = false }
@@ -1102,10 +1169,10 @@ extension ProjectModel {
         guard let k = dustEditing, let d = dustDraft, let orig = originalImages[k], let base = baseSources[k] else { return }
         dustPreviewGeneration += 1
         let gen = dustPreviewGeneration
-        let spots = dustBypass ? [] : d.spots(for: k), crop = self.crop
+        let spots = dustBypass ? [] : d.spots(for: k), crop = self.crop, gradient = self.gradient
         dustPreviewed.insert(k)
         Task.detached(priority: .userInitiated) {
-            let healed = DustRemoval.heal(orig, spots: spots)
+            let healed = GradientRemoval.correct(DustRemoval.heal(orig, spots: spots), kind: k, settings: gradient)
             let b = ChannelSource(base, image: healed)
             let c = crop == nil ? b : ChannelSource(b, region: crop)
             await MainActor.run {
@@ -1117,21 +1184,21 @@ extension ProjectModel {
         }
     }
 
-    /// Heals `kinds` from their originals with the applied spots and rebuilds their sources
-    /// (statistics, star mask, thumbnails), then the render context.
+    /// Re-processes `kinds` from their originals (applied dust spots, then the applied gradient
+    /// models) and rebuilds their sources (statistics, star mask, thumbnails), then the render context.
     private func rebuildHealed(kinds: Set<ChannelKind>) {
         let todo = kinds.filter { baseSources[$0] != nil && originalImages[$0] != nil }
         guard !todo.isEmpty else { scheduleRender(); return }
-        let base = baseSources, originals = originalImages, dust = self.dust, crop = self.crop
+        let base = baseSources, originals = originalImages, dust = self.dust, crop = self.crop, gradient = self.gradient
         isLoading = true
-        loadingMessage = "Healing dust spots…"
+        loadingMessage = gradient.isEmpty ? "Healing dust spots…" : "Processing channels…"
         Task.detached(priority: .userInitiated) {
             let kinds = Array(todo)
             var out: [ChannelKind: (ChannelSource, ChannelSource)] = [:]
             let lock = NSLock()
             DispatchQueue.concurrentPerform(iterations: kinds.count) { i in
                 let k = kinds[i], old = base[k]!
-                let healed = DustRemoval.heal(originals[k]!, spots: dust.spots(for: k))
+                let healed = ProjectModel.process(originals[k]!, kind: k, dust: dust, gradient: gradient)
                 let b = ChannelSource(kind: k, image: healed, fileName: old.fileName, url: old.url, formatDescription: old.formatDescription)
                 let c = crop == nil ? b : ChannelSource(b, region: crop)
                 lock.lock(); out[k] = (b, c); lock.unlock()
@@ -1143,6 +1210,223 @@ extension ProjectModel {
                 for (k, t) in thumbs { if let t { self.slotThumbnails[k] = t } }
                 self.isLoading = false
                 self.sourcesChanged()
+            }
+        }
+    }
+}
+
+/// What the gradient editor shows.
+enum GradientView: String, CaseIterable, Identifiable {
+    case corrected, original, background
+    var id: String { rawValue }
+    var displayName: String {
+        switch self { case .corrected: return "Corrected"; case .original: return "Original"; case .background: return "Background" }
+    }
+}
+
+/// Result of a gradient fit shown in the editor.
+struct GradientFitInfo: Equatable {
+    var kind: ChannelKind
+    /// The guide actually used (refined from the drawing when asked).
+    var gesture: GradientGesture
+    var residualSigma: Float
+    var millis: Double
+}
+
+// MARK: - Gradient removal
+
+extension ProjectModel {
+    /// The model the editor currently shows for a channel (the draft while editing, else the applied one).
+    func gradientSpec(for kind: ChannelKind) -> GradientSpec? { (gradientDraft ?? gradient).spec(for: kind) }
+    /// Protected regions shown (draft while editing).
+    var gradientRegions: [GradientRegion] { (gradientDraft ?? gradient).protect }
+    /// Model of the edited channel (nil: nothing drawn yet).
+    var editedGradientSpec: GradientSpec? { gradientEditing.flatMap { gradientSpec(for: $0) } }
+    /// Shape of the edited channel's guide, or the shape new guides get.
+    var gradientShape: GradientShape { editedGradientSpec?.gesture.shape ?? (gradientDraft ?? gradient).shape }
+    /// Semi-axes given to a new protected region.
+    var defaultGradientRegionRadius: Double { imageSize.map { max(20, min($0.width, $0.height) / 10) } ?? 100 }
+
+    /// Opens the gradient editor on a channel (the preview shows that channel alone, with its draft model).
+    func beginGradientEditing(_ kind: ChannelKind) {
+        guard sources[kind] != nil else { return }
+        if cropEditing { cancelCropEditing() }
+        if dustEditing != nil { cancelDustEditing() }
+        peekChannel = nil
+        if gradientEditing == nil { gradientDraft = gradient; gradientView = .corrected; gradientProtectMode = false }
+        if gradientEditing != kind { gradientHealed = nil }
+        gradientEditing = kind
+        selectedGradientRegion = nil
+        gradientFit = nil
+        scheduleGradientPreview()
+    }
+
+    /// Switches the editor to another loaded channel, keeping every draft.
+    func switchGradientChannel(_ kind: ChannelKind) {
+        guard gradientEditing != nil, gradientEditing != kind, sources[kind] != nil else { return }
+        peekChannel = nil
+        gradientEditing = kind
+        gradientHealed = nil
+        selectedGradientRegion = nil
+        gradientFit = nil
+        scheduleGradientPreview()
+    }
+
+    /// Sets (or replaces) the guide of the edited channel; a new model takes the default parameters.
+    func setGradientGesture(_ g: GradientGesture) {
+        guard let k = gradientEditing, var d = gradientDraft else { return }
+        if var spec = d.specs[k] { spec.gesture = g; d.specs[k] = spec } else { d.specs[k] = d.newSpec(gesture: g) }
+        d.shape = g.shape
+        gradientDraft = d
+    }
+
+    /// Replaces the model of the edited channel (parameter edits); the parameters become the defaults for new models.
+    func updateGradientSpec(_ spec: GradientSpec) {
+        guard let k = gradientEditing, var d = gradientDraft else { return }
+        d.specs[k] = spec
+        d.mode = spec.mode; d.residual = spec.residual; d.sectors = spec.sectors; d.smoothness = spec.smoothness
+        d.degree = spec.degree; d.refine = spec.refine; d.shape = spec.gesture.shape
+        gradientDraft = d
+    }
+
+    /// Switches the shape of the edited channel's guide (converting the drawing), or the shape to
+    /// draw when nothing is drawn yet (the polynomial needs no drawing and is created at once).
+    func setGradientShape(_ shape: GradientShape) {
+        guard let k = gradientEditing, var d = gradientDraft else { return }
+        d.shape = shape
+        if var spec = d.specs[k] { spec.gesture = spec.gesture.converted(to: shape); d.specs[k] = spec }
+        else if shape == .polynomial { d.specs[k] = d.newSpec(gesture: .polynomial()) }
+        gradientDraft = d
+    }
+
+    /// Removes the model of the edited channel.
+    func clearGradient() {
+        guard let k = gradientEditing else { return }
+        gradientDraft?.specs.removeValue(forKey: k)
+        gradientFit = nil
+    }
+
+    /// Copies the refined geometry of the latest fit into the drawn guide.
+    func adoptRefinedGradient() {
+        guard let k = gradientEditing, let f = gradientFit, f.kind == k, var spec = gradientDraft?.specs[k] else { return }
+        spec.gesture = f.gesture
+        gradientDraft?.specs[k] = spec
+    }
+
+    /// Gives every other loaded channel the edited channel's model (vignetting is the same for every filter).
+    func copyGradientToAllChannels() {
+        guard let k = gradientEditing, var d = gradientDraft, let spec = d.specs[k] else { return }
+        for other in sources.keys where other != k { d.specs[other] = spec }
+        gradientDraft = d
+    }
+
+    func addGradientRegion(at p: CGPoint) {
+        guard gradientEditing != nil, gradientDraft != nil else { return }
+        let r = defaultGradientRegionRadius
+        let region = GradientRegion(x: p.x, y: p.y, a: r, b: r)
+        gradientDraft?.protect.append(region)
+        selectedGradientRegion = region.id
+    }
+
+    /// Replaces the protected regions (moves / resizes from the preview).
+    func updateGradientRegions(_ regions: [GradientRegion]) {
+        guard gradientEditing != nil else { return }
+        gradientDraft?.protect = regions
+    }
+
+    func removeSelectedGradientRegion() {
+        guard gradientEditing != nil, let id = selectedGradientRegion else { return }
+        gradientDraft?.protect.removeAll { $0.id == id }
+        selectedGradientRegion = nil
+    }
+
+    func clearGradientRegions() {
+        guard gradientEditing != nil else { return }
+        gradientDraft?.protect = []
+        selectedGradientRegion = nil
+    }
+
+    /// Applies the draft: channels whose model (or, when the protected regions changed, any model)
+    /// differs are re-processed from the original and fully re-analysed.
+    func commitGradientEditing() {
+        guard let draft = gradientDraft else { gradientEditing = nil; return }
+        gradientPreviewTimer?.invalidate()
+        gradientPreviewGeneration += 1
+        let protectChanged = draft.protect != gradient.protect
+        let changed = Set(sources.keys).filter { draft.spec(for: $0) != gradient.spec(for: $0) || (protectChanged && draft.spec(for: $0) != nil) }
+        gradient = draft
+        gradientDraft = nil
+        gradientEditing = nil
+        selectedGradientRegion = nil
+        gradientView = .corrected
+        gradientProtectMode = false
+        gradientFit = nil
+        gradientHealed = nil
+        rebuildHealed(kinds: changed.union(gradientPreviewed))
+        gradientPreviewed = []
+        scheduleRecentStateSave()
+    }
+
+    /// Drops the draft and puts the previewed channels back to their applied state.
+    func cancelGradientEditing() {
+        gradientPreviewTimer?.invalidate()
+        gradientPreviewGeneration += 1
+        gradientDraft = nil
+        gradientEditing = nil
+        selectedGradientRegion = nil
+        gradientView = .corrected
+        gradientProtectMode = false
+        gradientFit = nil
+        gradientHealed = nil
+        let previewed = gradientPreviewed
+        gradientPreviewed = []
+        if previewed.isEmpty { scheduleRender() } else { rebuildHealed(kinds: previewed) }
+    }
+
+    /// Live preview of the draft on the edited channel: the model is fitted on the dust-healed plane
+    /// (kept while the editor is open) and the corrected plane swapped in with the statistics the
+    /// source already has, so only a render follows. Debounced and latest-wins.
+    private func scheduleGradientPreview() {
+        gradientPreviewTimer?.invalidate()
+        gradientPreviewTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.gradientPreview() }
+        }
+    }
+
+    private func gradientPreview() {
+        guard let k = gradientEditing, let d = gradientDraft, let orig = originalImages[k], let base = baseSources[k] else { return }
+        gradientPreviewGeneration += 1
+        let gen = gradientPreviewGeneration
+        let view = gradientView
+        let spec = view == .original ? nil : d.spec(for: k), protect = d.protect, crop = self.crop
+        let spots = dust.spots(for: k)
+        let healedCache = gradientHealed?.kind == k ? gradientHealed?.image : nil
+        gradientPreviewed.insert(k)
+        Task.detached(priority: .userInitiated) {
+            let healed = healedCache ?? DustRemoval.heal(orig, spots: spots)
+            var image = healed
+            var info: GradientFitInfo? = nil
+            if let spec {
+                let t0 = Date()
+                if let (corrected, fit) = GradientRemoval.correct(healed, spec: spec, protect: protect) {
+                    image = view == .background ? fit.backgroundImage() : corrected
+                    info = GradientFitInfo(kind: k, gesture: fit.gesture, residualSigma: fit.residualSigma, millis: Date().timeIntervalSince(t0) * 1000)
+                }
+            }
+            // The model alone spans a far smaller range than the channel: it gets its own statistics
+            // so the auto-stretch shows its shape; the corrected channel keeps the source's.
+            let b = view == .background && image !== healed
+                ? ChannelSource(kind: k, image: image, fileName: base.fileName, url: base.url, formatDescription: base.formatDescription)
+                : ChannelSource(base, image: image)
+            let c = crop == nil ? b : ChannelSource(b, region: crop)
+            let fitInfo = info
+            await MainActor.run {
+                guard gen == self.gradientPreviewGeneration, self.gradientEditing == k else { return }
+                self.gradientHealed = (k, healed)
+                self.baseSources[k] = b
+                self.sources[k] = c
+                self.gradientFit = fitInfo
+                self.scheduleRender()
             }
         }
     }

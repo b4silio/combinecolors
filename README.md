@@ -99,6 +99,39 @@ export at full resolution.
   state (oriented coordinates, so rotation and flips move them along).
   CLI: `--dust OIII:x,y,r;x,y,r --dust-model surface|radial --dust-smooth --dust-feather`
   (the parameters apply to the spots given on the command line).
+* **Guided gradient removal** (channel menu › *Remove Gradient…*): takes a smooth
+  background — sky glow, light pollution, vignetting from missing flats — out of a
+  channel, guided by a shape you draw over it rather than by a free parametric
+  surface (which has to be flexible enough to follow the gradient and is then
+  flexible enough to eat the nebula). Drag a **line** along the gradient when it
+  comes from one side (the background then varies along the line and is constant
+  across it); drag an **ellipse** from the centre of a radial fall-off or glow
+  (the centre may be dragged outside the frame afterwards — a glow from a bright
+  star off-frame); or choose **Polynomial** for the classic degree-n surface. The
+  guide fixes the shape, the algorithm estimates a robust 1-D profile along it
+  from star-masked cell medians (median per bin, smoothed), optionally with
+  angular *sectors* (ellipse: a fall-off that differs with the direction) and a
+  *residual* plane or quadratic for what the profile cannot explain. *Refine*
+  optimises the drawing from the data (line direction; ellipse centre, axis
+  ratio and angle — a vignetting centre placed by eye is off by a few hundred
+  pixels and a wrong centre leaves rings); the guide used is shown dashed in
+  orange, *Adopt* copies it into the drawing. *Subtract* keeps the overall level
+  (stretched data, sky glow), *Divide* normalises the model to its brightest
+  level and divides (linear data without flats: stars at the edge get their flux
+  back). *Protect* then click adds regions (nebula, galaxy) left out of the
+  estimate, shared by every channel; drag / handles / ⌫ edit them. The editor
+  works like the dust editor: the channel alone, drafts for every channel kept
+  until Apply, a *Corrected / Original / Background* switch (B / M; *Background*
+  shows the model alone — what is taken away), *Copy to all*. Applied
+  after dust healing and before statistics, cached, saved in the project and
+  the recent-set state (oriented coordinates). On the reference frames (a
+  Pleiades Hα corner glow, an M78 OIII stack without flats) the guided ellipse
+  leaves a large-scale residual of 1.9σ / 5.6σ where a 4th-degree polynomial
+  leaves 4.0σ / 8.0σ; the whole fit takes ≈ 0.2 s on a 31 MP frame.
+  CLI: `--gradient Ha:ellipse:cx,cy,a,b[,angle°]` / `--gradient OIII:line:x0,y0,x1,y1`
+  / `--gradient L:poly:4`, `--gradient-mode subtract|divide`, `--gradient-residual
+  none|plane|quadratic`, `--gradient-sectors 1|4|8|12`, `--gradient-smooth`,
+  `--gradient-norefine`, `--gradient-protect cx,cy,a,b`.
 * **Crop, rotation and flips**: one rectangle shared by every channel, drawn on the
   preview or typed in, or detected automatically from the empty registration
   borders. The crop drives statistics, channel thumbnails and the export; its
@@ -187,7 +220,9 @@ release with the changelog section as notes.
    rectangle, adjust it with the handles, press Return. The crop applies to all
    channels at once.
    *Heal Dust Spots…* in a channel's menu opens the spot editor on that channel
-   (click a shadow, adjust, switch channels, Return applies).
+   (click a shadow, adjust, switch channels, Return applies); *Remove Gradient…*
+   opens the gradient editor (drag a line or an ellipse over the gradient, add
+   protected regions over the object, Return applies).
 3. **Pick a palette** from the thumbnails in the right pane (the slider at the
    top changes their size). They are re-rendered with the current settings from
    the whole image, the crop or the current view (*From* menu). Hide palettes

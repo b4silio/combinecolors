@@ -5,8 +5,9 @@ import AstroCore
 enum ZoomAction { case fit, actualSize, zoomIn, zoomOut }
 
 /// AppKit view that displays the rendered preview with smooth zoom/pan (CALayer composited),
-/// a crop overlay with interactive crop editing, and the dust-spot editor (circles that can be
-/// added by clicking, moved, resized by their handle and deleted).
+/// a crop overlay with interactive crop editing, the dust-spot editor (circles that can be
+/// added by clicking, moved, resized by their handle and deleted) and the gradient editor (a line
+/// or an ellipse drawn over the gradient, with handles, plus protected regions).
 final class ZoomPanNSView: NSView {
     var imageSize: CGSize = .zero { didSet { if imageSize != oldValue { needsFit = true; needsLayout = true } } }
     var zoom: CGFloat = 1
@@ -22,6 +23,17 @@ final class ZoomPanNSView: NSView {
     var dustEditing = false { didSet { updateDustOverlay(); updateCursor() } }
     var dustSpots: [DustSpot] = [] { didSet { updateDustOverlay() } }
     var selectedDustSpot: UUID? = nil { didSet { updateDustOverlay() } }
+    var gradientEditing = false { didSet { updateGradientOverlay(); updateCursor() } }
+    /// Guide drawn for the edited channel (nil: nothing drawn yet).
+    var gradientGesture: GradientGesture? = nil { didSet { updateGradientOverlay() } }
+    /// Guide actually used by the latest fit (shown dashed when it differs from the drawing).
+    var gradientRefined: GradientGesture? = nil { didSet { updateGradientOverlay() } }
+    /// Shape a drag on empty sky creates when nothing is drawn.
+    var gradientShape: GradientShape = .ellipse
+    var gradientRegions: [GradientRegion] = [] { didSet { updateGradientOverlay() } }
+    var selectedGradientRegion: UUID? = nil { didSet { updateGradientOverlay() } }
+    /// Clicks add protected regions instead of drawing.
+    var gradientProtectMode = false
     private var lastBounds: CGRect = .zero
 
     var onViewportChange: ((CGRect, Double) -> Void)?
@@ -32,6 +44,11 @@ final class ZoomPanNSView: NSView {
     var onDustAdd: ((CGPoint) -> Void)?
     var onDustSelect: ((UUID?) -> Void)?
     var onDustDelete: (() -> Void)?
+    var onGradientGestureChange: ((GradientGesture) -> Void)?
+    var onGradientRegionsChange: (([GradientRegion]) -> Void)?
+    var onGradientRegionAdd: ((CGPoint) -> Void)?
+    var onGradientRegionSelect: ((UUID?) -> Void)?
+    var onGradientDelete: (() -> Void)?
 
     private let imageLayer = CALayer()
     private let dimLayers = (0..<4).map { _ in CALayer() }
@@ -40,6 +57,12 @@ final class ZoomPanNSView: NSView {
     private let dustLayer = CAShapeLayer()
     private let dustSelectedLayer = CAShapeLayer()
     private let dustHandle = CALayer()
+    private let gradientLayer = CAShapeLayer()
+    private let gradientRefinedLayer = CAShapeLayer()
+    private let gradientHandles = (0..<3).map { _ in CALayer() }
+    private let regionLayer = CAShapeLayer()
+    private let regionSelectedLayer = CAShapeLayer()
+    private let regionHandles = (0..<2).map { _ in CALayer() }
     private var trackingArea: NSTrackingArea?
 
     private enum Drag {
@@ -48,6 +71,16 @@ final class ZoomPanNSView: NSView {
         case dustPan(last: CGPoint, start: CGPoint, moved: Bool)
         case dustMove(UUID, DustSpot, CGPoint)
         case dustResize(UUID)
+        /// Gradient editor: a press on empty sky pans (and adds a protected region when released
+        /// without moving in protect mode), or draws the guide when none exists.
+        case gradientPan(last: CGPoint, start: CGPoint, moved: Bool)
+        case gradientCreate(CGPoint)
+        /// Handle 0 = line start / ellipse centre, 1 = line end / ellipse a-axis, 2 = ellipse b-axis.
+        case gradientHandle(Int)
+        case gradientMove(GradientGesture, CGPoint)
+        case regionMove(UUID, GradientRegion, CGPoint)
+        /// Axis 0 = a (horizontal), 1 = b (vertical).
+        case regionResize(UUID, Int)
     }
     private var drag: Drag = .none
 
@@ -88,9 +121,36 @@ final class ZoomPanNSView: NSView {
         layer?.addSublayer(dustLayer)
         layer?.addSublayer(dustSelectedLayer)
         layer?.addSublayer(dustHandle)
+        gradientLayer.fillColor = nil
+        gradientLayer.strokeColor = NSColor.systemYellow.cgColor
+        gradientLayer.lineWidth = 1.5
+        gradientRefinedLayer.fillColor = nil
+        gradientRefinedLayer.strokeColor = NSColor.systemOrange.cgColor
+        gradientRefinedLayer.lineWidth = 1
+        gradientRefinedLayer.lineDashPattern = [5, 4]
+        for h in gradientHandles {
+            h.backgroundColor = NSColor.systemYellow.cgColor
+            h.borderColor = NSColor.black.cgColor
+            h.borderWidth = 1
+            h.cornerRadius = 2
+        }
+        regionLayer.fillColor = NSColor.systemRed.withAlphaComponent(0.08).cgColor
+        regionLayer.strokeColor = NSColor.systemRed.withAlphaComponent(0.8).cgColor
+        regionLayer.lineWidth = 1
+        regionLayer.lineDashPattern = [4, 3]
+        regionSelectedLayer.fillColor = NSColor.systemRed.withAlphaComponent(0.12).cgColor
+        regionSelectedLayer.strokeColor = NSColor.systemRed.cgColor
+        regionSelectedLayer.lineWidth = 1.5
+        for h in regionHandles {
+            h.backgroundColor = NSColor.systemRed.cgColor
+            h.borderColor = NSColor.black.cgColor
+            h.borderWidth = 1
+            h.cornerRadius = 5
+        }
+        for l in [regionLayer, regionSelectedLayer, gradientRefinedLayer, gradientLayer] + regionHandles + gradientHandles { layer?.addSublayer(l) }
         layer?.actions = ["sublayers": NSNull()]
         imageLayer.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull(), "frame": NSNull()]
-        for l in dimLayers + handleLayers + [cropBorder, dustLayer, dustSelectedLayer, dustHandle] { l.actions = ["bounds": NSNull(), "position": NSNull(), "frame": NSNull(), "path": NSNull(), "hidden": NSNull()] }
+        for l in dimLayers + handleLayers + gradientHandles + regionHandles + [cropBorder, dustLayer, dustSelectedLayer, dustHandle, gradientLayer, gradientRefinedLayer, regionLayer, regionSelectedLayer] { l.actions = ["bounds": NSNull(), "position": NSNull(), "frame": NSNull(), "path": NSNull(), "hidden": NSNull()] }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -134,6 +194,7 @@ final class ZoomPanNSView: NSView {
         updateImageLayer()
         updateOverlay()
         updateDustOverlay()
+        updateGradientOverlay()
         notifyViewport()
     }
 
@@ -240,7 +301,182 @@ final class ZoomPanNSView: NSView {
     private func updateCursor() { window?.invalidateCursorRects(for: self) }
 
     override func resetCursorRects() {
-        addCursorRect(bounds, cursor: cropEditing || dustEditing ? .crosshair : .openHand)
+        addCursorRect(bounds, cursor: cropEditing || dustEditing || gradientEditing ? .crosshair : .openHand)
+    }
+
+    // MARK: Gradient editor
+
+    /// Top-left view point → AppKit (bottom-left) point for layer paths.
+    private func ak(_ p: CGPoint) -> CGPoint { CGPoint(x: p.x, y: bounds.height - p.y) }
+
+    /// Handle positions of a guide in view coordinates (2 for a line, 3 for an ellipse, none for the polynomial).
+    private func gradientHandlePoints(_ g: GradientGesture) -> [CGPoint] {
+        switch g.shape {
+        case .line: return [viewPoint(g.center), viewPoint(g.end)]
+        case .ellipse:
+            let c = g.center
+            return [viewPoint(c),
+                    viewPoint(CGPoint(x: c.x + g.a * cos(g.angle), y: c.y + g.a * sin(g.angle))),
+                    viewPoint(CGPoint(x: c.x - g.b * sin(g.angle), y: c.y + g.b * cos(g.angle)))]
+        case .polynomial: return []
+        }
+    }
+
+    /// Path of a guide: the line with a small arrow head at its end, or the ellipse with its axes.
+    private func gradientPath(_ g: GradientGesture, axes: Bool) -> CGPath {
+        let path = CGMutablePath()
+        switch g.shape {
+        case .line:
+            let p0 = ak(viewPoint(g.center)), p1 = ak(viewPoint(g.end))
+            path.move(to: p0); path.addLine(to: p1)
+            let ang = atan2(p1.y - p0.y, p1.x - p0.x)
+            for d in [CGFloat(2.6), CGFloat(-2.6)] {
+                path.move(to: p1); path.addLine(to: CGPoint(x: p1.x - 10 * cos(ang + d), y: p1.y - 10 * sin(ang + d)))
+            }
+        case .ellipse:
+            let c = ak(viewPoint(g.center))
+            // The view's y points down, AppKit's up: the rotation flips sign.
+            var t = CGAffineTransform(translationX: c.x, y: c.y).rotated(by: -g.angle)
+            let ra = g.a * zoom, rb = g.b * zoom
+            path.addEllipse(in: CGRect(x: -ra, y: -rb, width: 2 * ra, height: 2 * rb), transform: t)
+            if axes {
+                path.move(to: CGPoint(x: -ra, y: 0), transform: t); path.addLine(to: CGPoint(x: ra, y: 0), transform: t)
+                path.move(to: CGPoint(x: 0, y: -rb), transform: t); path.addLine(to: CGPoint(x: 0, y: rb), transform: t)
+            }
+            t = .identity
+        case .polynomial: break
+        }
+        return path
+    }
+
+    private func regionRect(_ r: GradientRegion) -> CGRect {
+        let c = viewPoint(r.center)
+        return toAppKit(CGRect(x: c.x - r.a * zoom, y: c.y - r.b * zoom, width: 2 * r.a * zoom, height: 2 * r.b * zoom))
+    }
+
+    /// Handles of the selected region: on its rim to the right (a) and below (b) the centre.
+    private func regionHandlePoints(_ r: GradientRegion) -> [CGPoint] {
+        [viewPoint(CGPoint(x: r.x + r.a, y: r.y)), viewPoint(CGPoint(x: r.x, y: r.y + r.b))]
+    }
+
+    private func updateGradientOverlay() {
+        let all = [gradientLayer, gradientRefinedLayer, regionLayer, regionSelectedLayer] + gradientHandles + regionHandles
+        guard gradientEditing, imageSize != .zero else { all.forEach { $0.isHidden = true }; return }
+        if let g = gradientGesture, g.shape != .polynomial {
+            gradientLayer.isHidden = false
+            gradientLayer.path = gradientPath(g, axes: true)
+            let pts = gradientHandlePoints(g)
+            for (i, h) in gradientHandles.enumerated() {
+                h.isHidden = i >= pts.count
+                if i < pts.count { h.frame = toAppKit(CGRect(x: pts[i].x - 5, y: pts[i].y - 5, width: 10, height: 10)) }
+            }
+            if let r = gradientRefined, r != g, r.shape == g.shape {
+                gradientRefinedLayer.isHidden = false
+                gradientRefinedLayer.path = gradientPath(r, axes: false)
+            } else { gradientRefinedLayer.isHidden = true }
+        } else {
+            gradientLayer.isHidden = true; gradientRefinedLayer.isHidden = true
+            gradientHandles.forEach { $0.isHidden = true }
+        }
+        let others = CGMutablePath(), selected = CGMutablePath()
+        var handles: [CGPoint] = []
+        for r in gradientRegions {
+            if r.id == selectedGradientRegion { selected.addEllipse(in: regionRect(r)); handles = regionHandlePoints(r) }
+            else { others.addEllipse(in: regionRect(r)) }
+        }
+        regionLayer.isHidden = false; regionLayer.path = others
+        regionSelectedLayer.isHidden = false; regionSelectedLayer.path = selected
+        for (i, h) in regionHandles.enumerated() {
+            h.isHidden = i >= handles.count
+            if i < handles.count { h.frame = toAppKit(CGRect(x: handles[i].x - 5, y: handles[i].y - 5, width: 10, height: 10)) }
+        }
+    }
+
+    /// The region under a view point (the smallest when several overlap).
+    private func gradientRegion(at p: CGPoint) -> GradientRegion? {
+        let ip = imagePoint(p)
+        return gradientRegions.filter { $0.contains(x: ip.x, y: ip.y) }.min { $0.a * $0.b < $1.a * $1.b }
+    }
+
+    /// Distance from a view point to the drawn line segment.
+    private func distanceToGradientLine(_ p: CGPoint, _ g: GradientGesture) -> CGFloat {
+        let a = viewPoint(g.center), b = viewPoint(g.end)
+        let dx = b.x - a.x, dy = b.y - a.y
+        let l2 = max(dx * dx + dy * dy, 1e-6)
+        let t = min(max(((p.x - a.x) * dx + (p.y - a.y) * dy) / l2, 0), 1)
+        return hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
+    }
+
+    private func gradientMouseDown(_ p: CGPoint) {
+        if let g = gradientGesture, g.shape != .polynomial {
+            for (i, h) in gradientHandlePoints(g).enumerated() where hypot(p.x - h.x, p.y - h.y) <= 8 { drag = .gradientHandle(i); return }
+        }
+        if let id = selectedGradientRegion, let r = gradientRegions.first(where: { $0.id == id }) {
+            for (i, h) in regionHandlePoints(r).enumerated() where hypot(p.x - h.x, p.y - h.y) <= 8 { drag = .regionResize(id, i); return }
+        }
+        if let r = gradientRegion(at: p) {
+            if r.id != selectedGradientRegion { onGradientRegionSelect?(r.id) }
+            drag = .regionMove(r.id, r, imagePoint(p))
+            return
+        }
+        if let g = gradientGesture, g.shape == .line, distanceToGradientLine(p, g) <= 6 { drag = .gradientMove(g, imagePoint(p)); return }
+        if !gradientProtectMode, gradientShape != .polynomial, gradientGesture == nil || gradientGesture?.shape == .polynomial {
+            drag = .gradientCreate(imagePoint(p)); return
+        }
+        drag = .gradientPan(last: p, start: p, moved: false)
+    }
+
+    private func gradientMouseDragged(_ p: CGPoint, _ ip: CGPoint) {
+        switch drag {
+        case .gradientPan(let last, let start, let moved):
+            origin.x += p.x - last.x; origin.y += p.y - last.y
+            drag = .gradientPan(last: p, start: start, moved: moved || hypot(p.x - start.x, p.y - start.y) > 3)
+            clampOrigin()
+            needsLayout = true
+        case .gradientCreate(let start):
+            guard hypot(ip.x - start.x, ip.y - start.y) >= 2 else { return }
+            let g: GradientGesture
+            if gradientShape == .line { g = .line(from: start, to: ip) }
+            else { g = .ellipse(center: start, a: max(abs(ip.x - start.x), 1), b: max(abs(ip.y - start.y), 1)) }
+            gradientGesture = g
+            onGradientGestureChange?(g)
+        case .gradientHandle(let i):
+            guard var g = gradientGesture else { return }
+            switch (g.shape, i) {
+            case (.line, 0): g.x = ip.x; g.y = ip.y
+            case (.line, _): g.x2 = ip.x; g.y2 = ip.y
+            case (.ellipse, 0): g.x = ip.x; g.y = ip.y
+            case (.ellipse, 1):
+                g.a = max(hypot(ip.x - g.x, ip.y - g.y), 1); g.angle = atan2(ip.y - g.y, ip.x - g.x)
+            case (.ellipse, _):
+                // Projection of the pointer on the b-axis direction.
+                let bx = -sin(g.angle), by = cos(g.angle)
+                g.b = max(abs((ip.x - g.x) * bx + (ip.y - g.y) * by), 1)
+            default: break
+            }
+            gradientGesture = g
+            onGradientGestureChange?(g)
+        case .gradientMove(let start, let anchor):
+            var g = start
+            let dx = ip.x - anchor.x, dy = ip.y - anchor.y
+            g.x += dx; g.y += dy; g.x2 += dx; g.y2 += dy
+            gradientGesture = g
+            onGradientGestureChange?(g)
+        case .regionMove(let id, let start, let anchor):
+            guard let i = gradientRegions.firstIndex(where: { $0.id == id }) else { return }
+            var regions = gradientRegions
+            regions[i].x = min(max(start.x + ip.x - anchor.x, 0), imageSize.width)
+            regions[i].y = min(max(start.y + ip.y - anchor.y, 0), imageSize.height)
+            gradientRegions = regions
+            onGradientRegionsChange?(regions)
+        case .regionResize(let id, let axis):
+            guard let i = gradientRegions.firstIndex(where: { $0.id == id }) else { return }
+            var regions = gradientRegions
+            if axis == 0 { regions[i].a = max(3, abs(ip.x - regions[i].x)) } else { regions[i].b = max(3, abs(ip.y - regions[i].y)) }
+            gradientRegions = regions
+            onGradientRegionsChange?(regions)
+        default: break
+        }
     }
 
     // MARK: Dust spots
@@ -342,6 +578,7 @@ final class ZoomPanNSView: NSView {
         let p = topLeftPoint(event)
         if event.clickCount == 2 { onDoubleClick?(); return }
         if dustEditing { dustMouseDown(p); return }
+        if gradientEditing { gradientMouseDown(p); return }
         if cropEditing {
             let ip = imagePoint(p)
             if let d = cropDraft {
@@ -362,6 +599,7 @@ final class ZoomPanNSView: NSView {
         switch drag {
         case .none: break
         case .dustPan, .dustMove, .dustResize: dustMouseDragged(p, ip)
+        case .gradientPan, .gradientCreate, .gradientHandle, .gradientMove, .regionMove, .regionResize: gradientMouseDragged(p, ip)
         case .pan(let last):
             origin.x += p.x - last.x; origin.y += p.y - last.y
             drag = .pan(p)
@@ -392,6 +630,11 @@ final class ZoomPanNSView: NSView {
             let ip = imagePoint(start)
             if ip.x >= 0, ip.y >= 0, ip.x < imageSize.width, ip.y < imageSize.height { onDustAdd?(ip) } else { onDustSelect?(nil) }
         }
+        if case .gradientPan(_, let start, let moved) = drag, !moved {
+            let ip = imagePoint(start)
+            if gradientProtectMode, ip.x >= 0, ip.y >= 0, ip.x < imageSize.width, ip.y < imageSize.height { onGradientRegionAdd?(ip) }
+            else { onGradientRegionSelect?(nil) }
+        }
         drag = .none
     }
 
@@ -408,7 +651,8 @@ final class ZoomPanNSView: NSView {
         case "-": perform(.zoomOut)
         case "0": perform(.fit)
         case "1": perform(.actualSize)
-        case "\u{7F}", "\u{08}": if dustEditing { onDustDelete?() } else { super.keyDown(with: event) }
+        case "\u{7F}", "\u{08}":
+            if dustEditing { onDustDelete?() } else if gradientEditing { onGradientDelete?() } else { super.keyDown(with: event) }
         default: super.keyDown(with: event)
         }
     }
@@ -429,6 +673,11 @@ struct PreviewView: NSViewRepresentable {
         v.onDustAdd = { p in Task { @MainActor in model.addDustSpot(at: p) } }
         v.onDustSelect = { id in Task { @MainActor in model.selectedDustSpot = id } }
         v.onDustDelete = { Task { @MainActor in model.removeSelectedDustSpot() } }
+        v.onGradientGestureChange = { g in Task { @MainActor in model.setGradientGesture(g) } }
+        v.onGradientRegionsChange = { r in Task { @MainActor in model.updateGradientRegions(r) } }
+        v.onGradientRegionAdd = { p in Task { @MainActor in model.addGradientRegion(at: p) } }
+        v.onGradientRegionSelect = { id in Task { @MainActor in model.selectedGradientRegion = id } }
+        v.onGradientDelete = { Task { @MainActor in model.removeSelectedGradientRegion() } }
         v.onDoubleClick = { [weak v] in
             guard let v else { return }
             if abs(v.zoom * v.backing - 1) < 0.01 { v.perform(.fit) } else { v.perform(.actualSize) }
@@ -448,6 +697,17 @@ struct PreviewView: NSViewRepresentable {
         let spots = model.dustEditing.map { model.dustSpots(for: $0) } ?? []
         if v.dustSpots != spots { v.dustSpots = spots }
         if v.selectedDustSpot != model.selectedDustSpot { v.selectedDustSpot = model.selectedDustSpot }
+        let gradientEditing = model.gradientEditing != nil
+        if v.gradientEditing != gradientEditing { v.gradientEditing = gradientEditing }
+        let gesture = model.editedGradientSpec?.gesture
+        if v.gradientGesture != gesture { v.gradientGesture = gesture }
+        let refined = model.gradientFit.flatMap { $0.kind == model.gradientEditing ? $0.gesture : nil }
+        if v.gradientRefined != refined { v.gradientRefined = refined }
+        if v.gradientShape != model.gradientShape { v.gradientShape = model.gradientShape }
+        let regions = gradientEditing ? model.gradientRegions : []
+        if v.gradientRegions != regions { v.gradientRegions = regions }
+        if v.selectedGradientRegion != model.selectedGradientRegion { v.selectedGradientRegion = model.selectedGradientRegion }
+        if v.gradientProtectMode != model.gradientProtectMode { v.gradientProtectMode = model.gradientProtectMode }
         if context.coordinator.fitRequest != model.fitRequest {
             context.coordinator.fitRequest = model.fitRequest
             DispatchQueue.main.async { v.perform(.fit) }

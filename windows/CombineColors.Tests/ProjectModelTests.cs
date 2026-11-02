@@ -442,6 +442,80 @@ public class ProjectModelTests : IDisposable
         Assert.Empty(m.Dust.SpotsFor(ChannelKind.Luminance)); Assert.False(m.OriginalImages.ContainsKey(ChannelKind.Luminance));
     }
 
+    [Fact]
+    public void GradientEditing()
+    {
+        var m = f.LoadedModel();
+        var original = m.Sources[ChannelKind.Ha].Image;
+        // Live preview while editing, dropped on cancel.
+        m.BeginGradientEditing(ChannelKind.Ha);
+        Assert.Equal(ChannelKind.Ha, m.GradientEditing); Assert.NotNull(m.GradientDraft); Assert.Null(m.EditedGradientSpec);
+        Assert.Equal(CombineMode.Monochrome, m.DisplayedSettings.Mode);
+        m.SetGradientGesture(GradientGesture.Ellipse(100, 75, 120, 90));
+        Assert.Equal(GradientShape.Ellipse, m.EditedGradientSpec!.Gesture.Shape);
+        Assert.Equal(GradientMode.Subtract, m.EditedGradientSpec!.Mode);
+        Assert.True(f.Wait(() => !ReferenceEquals(m.Sources[ChannelKind.Ha].Image, original) && m.GradientFit != null));
+        Assert.Equal(ChannelKind.Ha, m.GradientFit!.Kind);
+        // The background view shows the model alone (smooth) with its own statistics.
+        var corrected = m.Sources[ChannelKind.Ha].Image; float channelNoise = m.Sources[ChannelKind.Ha].Stats.Noise;
+        m.GradientView = GradientView.Background;
+        Assert.True(f.Wait(() => !ReferenceEquals(m.Sources[ChannelKind.Ha].Image, corrected)));
+        var bg = m.Sources[ChannelKind.Ha].Image;
+        float hp = 0, hpc = 0;
+        for (int i = 1; i < bg.Count; i++) { hp += Math.Abs(bg.Data[i] - bg.Data[i - 1]); hpc += Math.Abs(corrected.Data[i] - corrected.Data[i - 1]); }
+        Assert.True(hp < hpc * 0.2f, "the model is smooth");
+        Assert.True(m.Sources[ChannelKind.Ha].Stats.Noise < channelNoise * 0.5f, "the model source gets its own statistics");
+        m.GradientView = GradientView.Corrected;
+        Assert.True(f.Wait(() => !ReferenceEquals(m.Sources[ChannelKind.Ha].Image, bg)));
+        m.GradientProtectMode = true;
+        m.AddGradientRegion(new Point(100, 75));
+        Assert.Single(m.GradientRegions); Assert.NotNull(m.SelectedGradientRegion);
+        m.RemoveSelectedGradientRegion();
+        Assert.Empty(m.GradientRegions);
+        m.CancelGradientEditing();
+        Assert.Null(m.GradientEditing); Assert.Null(m.GradientDraft); Assert.True(m.Gradient.IsEmpty);
+        Assert.True(f.Wait(() => ReferenceEquals(m.Sources[ChannelKind.Ha].Image, original) && !m.IsLoading));
+        // Commit: the model copied to every channel is applied; a divide-mode spec round-trips.
+        m.BeginGradientEditing(ChannelKind.Ha);
+        m.SetGradientGesture(GradientGesture.Ellipse(100, 75, 120, 90));
+        var spec = m.EditedGradientSpec!.Clone();
+        spec.Mode = GradientMode.Divide; spec.Refine = false;
+        m.UpdateGradientSpec(spec);
+        Assert.Equal(GradientMode.Divide, m.GradientDraft!.Mode);
+        m.CopyGradientToAllChannels();
+        Assert.Equal(spec, m.GradientDraft!.SpecFor(ChannelKind.OIII)); Assert.Equal(spec, m.GradientDraft!.SpecFor(ChannelKind.SII));
+        m.CommitGradientEditing();
+        Assert.Null(m.GradientEditing);
+        Assert.True(f.Wait(() => !m.IsLoading && !ReferenceEquals(m.Sources[ChannelKind.Ha].Image, original) && !ReferenceEquals(m.Sources[ChannelKind.OIII].Image, m.OriginalImages[ChannelKind.OIII]) && m.Context != null));
+        Assert.Equal(spec, m.Gradient.SpecFor(ChannelKind.Ha));
+        Assert.Equal(m.Gradient, m.ProjectDocument().Gradient);
+        // Save / open re-applies the same models.
+        var path = Path.Combine(f.Dir, "gradient.json");
+        m.SaveProject(path);
+        var m2 = f.NewModel();
+        m2.OpenProject(path);
+        Assert.True(f.Wait(() => m2.Sources.Count == 3 && !m2.IsLoading && m2.Context != null));
+        Assert.Equal(m.Gradient, m2.Gradient);
+        Assert.Equal(0, m2.Sources[ChannelKind.Ha].Image.MaxAbsDifference(m.Sources[ChannelKind.Ha].Image));
+        // Moving the channel takes its model along; rotating maps it; removing drops it.
+        m.Reassign(ChannelKind.Ha, ChannelKind.Luminance);
+        Assert.Equal(spec, m.Gradient.SpecFor(ChannelKind.Luminance)); Assert.Null(m.Gradient.SpecFor(ChannelKind.Ha));
+        m.RotateClockwise();
+        Assert.True(f.Wait(() => !m.IsLoading && m.ImageSize?.Width == 150));
+        var r = m.Gradient.SpecFor(ChannelKind.Luminance)!.Gesture;
+        Assert.Equal(150 - 75, r.X, 1e-9); Assert.Equal(100, r.Y, 1e-9); Assert.Equal(Math.PI / 2, r.Angle, 1e-9);
+        m.RemoveChannel(ChannelKind.Luminance);
+        Assert.Null(m.Gradient.SpecFor(ChannelKind.Luminance));
+        // Opening the dust editor closes the gradient editor and vice versa.
+        m.BeginGradientEditing(ChannelKind.OIII);
+        m.BeginDustEditing(ChannelKind.OIII);
+        Assert.Null(m.GradientEditing); Assert.Equal(ChannelKind.OIII, m.DustEditing);
+        m.BeginGradientEditing(ChannelKind.OIII);
+        Assert.Null(m.DustEditing); Assert.Equal(ChannelKind.OIII, m.GradientEditing);
+        m.CancelGradientEditing();
+        Assert.True(f.Wait(() => !m.IsLoading));
+    }
+
     /// <summary>
     /// A peek left behind must not override the edited channel, and switching channels re-previews the
     /// one shown (its draft may have changed through Copy to all while another channel was on screen).

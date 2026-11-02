@@ -141,6 +141,18 @@ struct ChannelSlotView: View {
                     .help("\(n) dust spot\(n == 1 ? "" : "s") healed on this channel")
             }
         }
+        .overlay(alignment: .bottomTrailing) {
+            if source != nil, let spec = model.gradientSpec(for: kind) {
+                Image(systemName: "circle.lefthalf.filled")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 4).padding(.vertical, 1)
+                    .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 3))
+                    .padding(4)
+                    .allowsHitTesting(false)
+                    .help("Gradient removed on this channel (\(spec.gesture.shape.displayName.lowercased()) guide, \(spec.mode.displayName.lowercased()))")
+            }
+        }
         .overlay(alignment: .topTrailing) {
             if let s = source {
                 Menu {
@@ -151,6 +163,7 @@ struct ChannelSlotView: View {
                     }
                     Divider()
                     Button("Heal Dust Spots…") { model.beginDustEditing(kind) }
+                    Button("Remove Gradient…") { model.beginGradientEditing(kind) }
                     Button("Save channel as FITS…") {
                         Panels.save(name: s.fileName.replacingOccurrences(of: ".fits", with: "") + "-\(kind.rawValue).fits", type: UTType("public.fits") ?? .data, message: "Save the channel (cropped if a crop is set).") { url in
                             try? model.exportChannel(kind, to: url, format: .fits32)

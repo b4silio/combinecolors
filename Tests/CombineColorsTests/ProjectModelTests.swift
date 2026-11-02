@@ -506,6 +506,86 @@ extension ProjectModelTests {
         XCTAssertTrue(m.dust.spots(for: .luminance).isEmpty); XCTAssertNil(m.originalImages[.luminance])
     }
 
+    func testGradientEditing() async throws {
+        let m = try await loadedModel()
+        let original = m.sources[.ha]!.image
+        // Live preview while editing, dropped on cancel.
+        m.beginGradientEditing(.ha)
+        XCTAssertEqual(m.gradientEditing, .ha); XCTAssertNotNil(m.gradientDraft); XCTAssertNil(m.editedGradientSpec)
+        XCTAssertEqual(m.displayedSettings.mode, .monochrome)
+        m.gradientDraft?.refine = false   // the geometry search is slow in debug builds; covered by GradientRemovalTests
+        m.setGradientGesture(.ellipse(center: CGPoint(x: 100, y: 75), a: 120, b: 90))
+        XCTAssertEqual(m.editedGradientSpec?.gesture.shape, .ellipse)
+        XCTAssertEqual(m.editedGradientSpec?.mode, .subtract, "new models take the defaults")
+        await wait(timeout: 30) { m.sources[.ha]!.image !== original && m.gradientFit != nil }
+        XCTAssertTrue(m.sources[.ha]!.image !== original, "the preview corrects a copy")
+        XCTAssertEqual(m.gradientFit?.kind, .ha)
+        // The background view shows the model alone (smooth: far less variance than the channel) with its own statistics.
+        let corrected = m.sources[.ha]!.image, channelNoise = m.sources[.ha]!.stats.noise
+        m.gradientView = .background
+        await wait(timeout: 30) { m.sources[.ha]!.image !== corrected }
+        let bg = m.sources[.ha]!.image
+        XCTAssertTrue(bg !== corrected && bg !== original)
+        // Smooth: the pixel-to-pixel differences of the model are far below the channel's noise grain.
+        var hp: Float = 0, hpc: Float = 0
+        for i in 1..<bg.count { hp += abs(bg.pointer[i] - bg.pointer[i - 1]); hpc += abs(corrected.pointer[i] - corrected.pointer[i - 1]) }
+        XCTAssertLessThan(hp, hpc * 0.2, "the model is smooth")
+        XCTAssertLessThan(m.sources[.ha]!.stats.noise, channelNoise * 0.5, "the model source gets its own statistics (a smooth model has almost no noise)")
+        m.gradientView = .corrected
+        await wait(timeout: 30) { m.sources[.ha]!.image !== bg }
+        m.gradientProtectMode = true
+        m.addGradientRegion(at: CGPoint(x: 100, y: 75))
+        XCTAssertEqual(m.gradientRegions.count, 1); XCTAssertNotNil(m.selectedGradientRegion)
+        m.removeSelectedGradientRegion()
+        XCTAssertTrue(m.gradientRegions.isEmpty)
+        m.cancelGradientEditing()
+        XCTAssertNil(m.gradientEditing); XCTAssertNil(m.gradientDraft); XCTAssertTrue(m.gradient.isEmpty)
+        await wait { m.sources[.ha]!.image === original && !m.isLoading }
+        XCTAssertTrue(m.sources[.ha]!.image === original, "cancel restores the applied state")
+        // Commit: the model copied to every channel is applied; a divide-mode spec round-trips.
+        m.beginGradientEditing(.ha)
+        m.setGradientGesture(.ellipse(center: CGPoint(x: 100, y: 75), a: 120, b: 90))
+        var spec = m.editedGradientSpec!
+        spec.mode = .divide; spec.refine = false   // the applied defaults (refine on) came back with the new draft
+        m.updateGradientSpec(spec)
+        XCTAssertEqual(m.gradientDraft?.mode, .divide, "edited parameters become the defaults for new models")
+        m.copyGradientToAllChannels()
+        XCTAssertEqual(m.gradientDraft?.spec(for: .oiii), spec); XCTAssertEqual(m.gradientDraft?.spec(for: .sii), spec)
+        m.commitGradientEditing()
+        XCTAssertNil(m.gradientEditing)
+        await wait(timeout: 30) { !m.isLoading && m.sources[.ha]!.image !== original && m.sources[.oiii]!.image !== m.originalImages[.oiii]! && m.context != nil }
+        XCTAssertEqual(m.gradient.spec(for: .ha), spec)
+        XCTAssertEqual(m.projectDocument().gradient, m.gradient)
+        // Save / open re-applies the same models.
+        let url = dir.appendingPathComponent("gradient.json")
+        try m.saveProject(to: url)
+        let m2 = ProjectModel(defaults: defaults)
+        m2.openProject(from: url)
+        await wait(timeout: 30) { m2.sources.count == 3 && !m2.isLoading && m2.context != nil }
+        XCTAssertEqual(m2.gradient, m.gradient)
+        guard let reopened = m2.sources[.ha]?.image else { return XCTFail("reopened project not loaded: sources \(m2.sources.keys) loading \(m2.isLoading) context \(m2.context != nil) error \(m2.errorMessage ?? "-")") }
+        var maxDiff: Float = 0
+        for i in 0..<reopened.count { maxDiff = max(maxDiff, abs(reopened.pointer[i] - m.sources[.ha]!.image.pointer[i])) }
+        XCTAssertEqual(maxDiff, 0, "the reopened project applies the same models")
+        // Moving the channel takes its model along; rotating maps it; removing drops it.
+        m.reassign(.ha, to: .luminance)
+        XCTAssertEqual(m.gradient.spec(for: .luminance), spec); XCTAssertNil(m.gradient.spec(for: .ha))
+        m.rotateClockwise()
+        await wait { !m.isLoading && m.imageSize?.width == 150 }
+        let r = m.gradient.spec(for: .luminance)!.gesture
+        XCTAssertEqual(r.x, 150 - 75, accuracy: 1e-9); XCTAssertEqual(r.y, 100, accuracy: 1e-9); XCTAssertEqual(r.angle, .pi / 2, accuracy: 1e-9)
+        m.removeChannel(.luminance)
+        XCTAssertNil(m.gradient.spec(for: .luminance))
+        // Opening the dust editor closes the gradient editor and vice versa.
+        m.beginGradientEditing(.oiii)
+        m.beginDustEditing(.oiii)
+        XCTAssertNil(m.gradientEditing); XCTAssertEqual(m.dustEditing, .oiii)
+        m.beginGradientEditing(.oiii)
+        XCTAssertNil(m.dustEditing); XCTAssertEqual(m.gradientEditing, .oiii)
+        m.cancelGradientEditing()
+        await wait { !m.isLoading }
+    }
+
     /// A peek left behind (the slot menu swallows the gesture end) must not override the edited
     /// channel, and switching channels re-previews the one shown (its draft may have changed
     /// through Copy to all while another channel was on screen).

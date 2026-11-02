@@ -173,6 +173,44 @@ extension ProjectDocument {
         rotation = ((c.value("rotation", d.rotation) % 4) + 4) % 4
         flipped = c.value("flipped", d.flipped)
         dust = c.value("dust", d.dust)
+        gradient = c.value("gradient", d.gradient)
+    }
+}
+
+extension GradientGesture {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: AnyKey.self)
+        shape = c.value("shape", GradientShape.ellipse)
+        x = c.value("x", 0); y = c.value("y", 0); x2 = c.value("x2", 0); y2 = c.value("y2", 0)
+        a = c.value("a", 1); b = c.value("b", 1); angle = c.value("angle", 0)
+    }
+}
+
+extension GradientRegion {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: AnyKey.self)
+        id = c.value("id", UUID()); x = c.value("x", 0); y = c.value("y", 0); a = max(c.value("a", 1), 1); b = max(c.value("b", 1), 1)
+    }
+}
+
+extension GradientSpec {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: AnyKey.self)
+        let d = GradientSpec(gesture: .polynomial())
+        gesture = c.value("gesture", d.gesture); mode = c.value("mode", d.mode); residual = c.value("residual", d.residual)
+        sectors = c.value("sectors", d.sectors); smoothness = c.value("smoothness", d.smoothness); degree = c.value("degree", d.degree)
+        refine = c.value("refine", d.refine)
+    }
+}
+
+extension GradientSettings {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: AnyKey.self)
+        let d = GradientSettings()
+        specs = c.value("specs", d.specs); protect = c.value("protect", d.protect)
+        shape = c.value("shape", d.shape); mode = c.value("mode", d.mode); residual = c.value("residual", d.residual)
+        sectors = c.value("sectors", d.sectors); smoothness = c.value("smoothness", d.smoothness); degree = c.value("degree", d.degree)
+        refine = c.value("refine", d.refine)
     }
 }
 
