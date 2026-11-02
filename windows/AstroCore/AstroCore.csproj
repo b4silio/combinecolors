@@ -1,28 +1,44 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net9.0-windows</TargetFramework>
+    <!-- net9.0-windows: the WPF build (Windows Imaging Component for PNG / JPEG, Direct3D 11 denoise).
+         net9.0: portable build for the Avalonia app and the CLI on Linux / macOS (built-in PNG codec + SkiaSharp for JPEG,
+         CPU denoise only). The processing code is identical; the two differ only in RasterIO.cs and GpuDenoise.cs
+         (`#if WINDOWS` in RasterIO.cs, a separate stub file for GpuDenoise). -->
+    <TargetFrameworks>net9.0;net9.0-windows</TargetFrameworks>
     <RootNamespace>AstroCore</RootNamespace>
-    <!-- PresentationCore gives us the Windows Imaging Component (PNG / JPEG / fallback TIFF decoding,
-         display bitmaps); everything else in the library is plain .NET. -->
-    <UseWPF>true</UseWPF>
     <Optimize Condition="'$(Configuration)' == 'Release'">true</Optimize>
     <Description>CombineColors processing library: FITS/TIFF I/O, statistics, stretch, normalisation, palettes, Pixel Math, denoise, dust removal and the renderer.</Description>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net9.0-windows'">
+    <!-- PresentationCore gives us the Windows Imaging Component (PNG / JPEG / fallback TIFF decoding, display bitmaps). -->
+    <UseWPF>true</UseWPF>
   </PropertyGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="AstroCore.Tests" />
     <InternalsVisibleTo Include="CombineColors" />
     <InternalsVisibleTo Include="CombineColors.Tests" />
+    <InternalsVisibleTo Include="CombineColors.Avalonia" />
   </ItemGroup>
 
   <ItemGroup>
     <Using Include="System.IO" />
   </ItemGroup>
 
-  <ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net9.0-windows'">
     <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
     <PackageReference Include="Vortice.D3DCompiler" Version="3.8.3" />
+    <Compile Remove="Processing\GpuDenoise.Portable.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' != 'net9.0-windows'">
+    <!-- JPEG and exotic PNGs (PNG itself goes through the exact built-in PngCodec). Same SkiaSharp version as Avalonia 11.3. -->
+    <PackageReference Include="SkiaSharp" Version="2.88.9" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux" Version="2.88.9" />
+    <!-- The HLSL source inside GpuDenoise.cs holds #define lines, which the C# lexer would choke on even in a disabled #if region. -->
+    <Compile Remove="Processing\GpuDenoise.cs" />
   </ItemGroup>
 
 </Project>

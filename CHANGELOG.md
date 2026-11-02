@@ -5,6 +5,11 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 (`scripts/bump.sh`). The version lives in `VERSION` and is stamped into the app at build time;
 `scripts/release.sh` tags it and publishes the DMG as a GitHub release.
 
+## [1.4.0] – 2026-11-02
+
+- Linux: Avalonia UI app (windows/CombineColors.Avalonia) and CLI on the portable net9.0 build of AstroCore (built-in exact PNG codec + SkiaSharp for JPEG, CPU denoise); windows/scripts/publish-linux.sh; the Windows targets compile on macOS / Linux
+- Releases: `scripts/release.sh` also builds and attaches the self-contained `CombineColors-<version>-linux-x64.tar.gz` (untar, install libfontconfig1 and the X11 libraries, run `./CombineColors`)
+
 ## [1.3.0] – 2026-10-29
 
 - Windows: dark interface (Fluent dark theme, independent of the system setting), `--screenshot` developer switch, `windows/scripts/release.ps1` to publish the zip as a GitHub release asset

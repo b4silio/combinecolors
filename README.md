@@ -1,7 +1,7 @@
 # CombineColors
 
-A native macOS and Windows app for turning stacked monochrome astrophotography
-channels (Hα, OIII, SII, Hβ, L, R, G, B) into colour images. Drop FITS or TIFF
+A native macOS and Windows app, plus a Linux build, for turning stacked monochrome
+astrophotography channels (Hα, OIII, SII, Hβ, L, R, G, B) into colour images. Drop FITS or TIFF
 stacks (16-bit integer or 32-bit float, linear or already stretched), pick a
 palette from live thumbnails, tune the balance with a real-time preview, then
 export at full resolution.
@@ -128,11 +128,13 @@ export at full resolution.
   file needed) and come back when it is reopened.
 * **CLI** (`combinecolors-cli`) for headless batch rendering and testing.
 
-## Windows
+## Windows and Linux
 
 A Windows port lives in `windows/` (C# / .NET 9, WPF): same processing, same palettes and
-controls, same project files. See [windows/README.md](windows/README.md) for building it and the
-few differences (CPU instead of Metal, Ctrl instead of ⌘).
+controls, same project files. The same .NET code also builds a Linux app
+(`windows/CombineColors.Avalonia`, Avalonia UI) and a Linux CLI; the native SwiftUI app stays the
+macOS build. See [windows/README.md](windows/README.md) for building both and the Linux runtime
+requirements.
 
 ## Building
 

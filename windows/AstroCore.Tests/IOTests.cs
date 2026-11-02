@@ -102,9 +102,11 @@ public class RasterTests
         Assert.True(back.Planes[0].MaxAbsDifference(img) < 1.0f / 65535);
         var loaded = ImageLoader.Load(path);
         Assert.Equal("TIF 16-bit", loaded.FormatDescription);
-        // The Windows Imaging Component reads our TIFF the same way.
-        var wic = RasterReader.ReadWithWic(File.ReadAllBytes(path));
+#if WINDOWS
+        // The Windows Imaging Component reads our TIFF the same way (the portable codecs do not read TIFF).
+        var wic = RasterReader.ReadEncoded(File.ReadAllBytes(path));
         Assert.True(wic.Planes[0].MaxAbsDifference(img) < 1.0f / 65535);
+#endif
     }
 
     [Fact]
@@ -118,8 +120,10 @@ public class RasterTests
         A.Close(0.1f, back.Planes[0][4, 3], 1e-4f);
         A.Close(0.6f, back.Planes[1][4, 3], 1e-4f);
         A.Close(0.9f, back.Planes[2][4, 3], 1e-4f);
-        var wic = RasterReader.ReadWithWic(File.ReadAllBytes(path));
+#if WINDOWS
+        var wic = RasterReader.ReadEncoded(File.ReadAllBytes(path));
         A.Close(0.6f, wic.Planes[1][4, 3], 1e-4f);
+#endif
     }
 
     [Fact]
@@ -206,7 +210,12 @@ public class RasterTests
         Assert.Equal(255, bytes[2]); Assert.Equal(128, bytes[1]); Assert.Equal(255, bytes[0]); Assert.Equal(255, bytes[3]);
         var png = RasterWriter.PngData(rgb);
         Assert.True(png.Length > 20);
+#if WINDOWS
         Assert.NotNull(RasterWriter.BitmapFromPng(png));
+#else
+        var back = RasterReader.ReadEncoded(png);
+        Assert.Equal(3, back.Planes.Count); Assert.Equal(4, back.Planes[0].Width);
+#endif
     }
 }
 

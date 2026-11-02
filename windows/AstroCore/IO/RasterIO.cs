@@ -1,8 +1,11 @@
 using System.Buffers.Binary;
-using System.Runtime.InteropServices;
+#if WINDOWS
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+#else
+using SkiaSharp;
+#endif
 
 namespace AstroCore;
 
@@ -24,9 +27,10 @@ public sealed class ImageIOException : Exception
 
 /// <summary>
 /// Reading TIFF / PNG / JPEG into float planes. TIFF goes through the built-in reader (exact values,
-/// no colour management); PNG / JPEG and any TIFF it cannot handle go through the Windows Imaging
-/// Component with the pixel format preserved. Values are returned exactly as stored (integer codes
-/// divided by their maximum, floats untouched).
+/// no colour management); PNG / JPEG and any TIFF it cannot handle go through the platform codec with
+/// the pixel format preserved: the Windows Imaging Component on Windows; elsewhere PNG through the
+/// exact built-in <see cref="PngCodec"/> and the rest (JPEG, exotic PNGs) through SkiaSharp at 8 bits.
+/// Values are returned exactly as stored (integer codes divided by their maximum, floats untouched).
 /// </summary>
 public static class RasterReader
 {
@@ -49,10 +53,14 @@ public static class RasterReader
                 var t = TiffReader.Read(data);
                 return new Result { Planes = t.Planes, BitsPerComponent = t.BitsPerSample, IsFloat = t.IsFloat };
             }
-            catch (ImageIOException e) when (e.Kind == ImageIOErrorKind.UnsupportedFormat) { /* fall through to WIC */ }
+            catch (ImageIOException e) when (e.Kind == ImageIOErrorKind.UnsupportedFormat) { /* fall through to the platform codec */ }
         }
-        return ReadWithWic(data);
+        return ReadEncoded(data);
     }
+
+#if WINDOWS
+    /// <summary>Decodes PNG / JPEG / TIFF bytes with the platform codec (WIC here).</summary>
+    public static Result ReadEncoded(byte[] data) => ReadWithWic(data);
 
     public static Result ReadWithWic(byte[] data)
     {
@@ -120,6 +128,48 @@ public static class RasterReader
         foreach (var p in planes) Vec.ZeroNonFinite(p.Data);
         return new Result { Planes = planes, BitsPerComponent = bits, IsFloat = isFloat };
     }
+#else
+    /// <summary>Decodes PNG / JPEG bytes: exact PNG reader first, SkiaSharp (8-bit) for everything else.</summary>
+    public static Result ReadEncoded(byte[] data)
+    {
+        if (PngCodec.LooksLikePng(data) && PngCodec.TryDecode(data) is PngCodec.Decoded png)
+            return new Result { Planes = png.Planes, BitsPerComponent = png.BitsPerComponent, IsFloat = false };
+        return ReadWithSkia(data);
+    }
+
+    /// <summary>SkiaSharp decode (JPEG, palette / interlaced PNG, …): 8 bits per component, gray or RGB.</summary>
+    public static Result ReadWithSkia(byte[] data)
+    {
+        SKCodec? codec;
+        try { codec = SKCodec.Create(new SKMemoryStream(data)); }
+        catch (Exception e) { throw new ImageIOException(ImageIOErrorKind.CannotDecode, e.Message); }
+        if (codec == null) throw new ImageIOException(ImageIOErrorKind.UnsupportedFormat, "the image format is not recognised");
+        using (codec)
+        {
+            int w = codec.Info.Width, h = codec.Info.Height;
+            bool gray = codec.Info.ColorType == SKColorType.Gray8;
+            var info = new SKImageInfo(w, h, gray ? SKColorType.Gray8 : SKColorType.Rgba8888, SKAlphaType.Unpremul);
+            var bytes = new byte[info.BytesSize];
+            SKCodecResult res;
+            unsafe { fixed (byte* p = bytes) res = codec.GetPixels(info, (IntPtr)p); }
+            if (res != SKCodecResult.Success && res != SKCodecResult.IncompleteInput) throw new ImageIOException(ImageIOErrorKind.CannotDecode, res.ToString());
+            int channels = gray ? 1 : 3, comps = gray ? 1 : 4, stride = info.RowBytes;
+            var planes = new PlanarImage[channels];
+            for (int c = 0; c < channels; c++) planes[c] = PlanarImage.Uninitialized(w, h);
+            Par.Rows(h, (long)w * channels, (y0, y1) =>
+            {
+                for (int y = y0; y < y1; y++)
+                    for (int c = 0; c < channels; c++)
+                    {
+                        var dst = planes[c].Data.AsSpan(y * w, w);
+                        int row = y * stride;
+                        for (int x = 0; x < w; x++) dst[x] = bytes[row + x * comps + c] / 255f;
+                    }
+            });
+            return new Result { Planes = planes, BitsPerComponent = 8, IsFloat = false };
+        }
+    }
+#endif
 }
 
 /// <summary>Output file formats.</summary>
@@ -161,11 +211,81 @@ public static class RasterFormats
         RasterFormat.Jpeg => "JPEG image|*.jpg;*.jpeg",
         _ => "FITS image|*.fits;*.fit;*.fts",
     };
+
+    /// <summary>File name patterns of the format (for pickers that take patterns rather than filter strings).</summary>
+    public static string[] Patterns(this RasterFormat f) => f switch
+    {
+        RasterFormat.Tiff16 or RasterFormat.Tiff32 => ["*.tif", "*.tiff"],
+        RasterFormat.Png16 or RasterFormat.Png8 => ["*.png"],
+        RasterFormat.Jpeg => ["*.jpg", "*.jpeg"],
+        _ => ["*.fits", "*.fit", "*.fts"],
+    };
 }
 
 /// <summary>Export helpers and display-bitmap conversion.</summary>
 public static class RasterWriter
 {
+    /// <summary>BGRA bytes (8-bit, values × 255 rounded, clamped) of an RGB image.</summary>
+    public static byte[] DisplayBytes(RGBImage rgb)
+    {
+        int w = rgb.Width, h = rgb.Height, n = w * h;
+        var bytes = new byte[n * 4];
+        var r = rgb.R.Data; var g = rgb.G.Data; var b = rgb.B.Data;
+        Par.Rows(h, w * 4, (y0, y1) =>
+        {
+            for (int i = y0 * w; i < y1 * w; i++)
+            {
+                int o = i * 4;
+                bytes[o] = To8(b[i]); bytes[o + 1] = To8(g[i]); bytes[o + 2] = To8(r[i]); bytes[o + 3] = 255;
+            }
+        });
+        return bytes;
+    }
+
+    static byte To8(float v)
+    {
+        float s = v * 255;
+        if (!(s > 0)) return 0;
+        if (s >= 255) return 255;
+        return (byte)(s + 0.5f);
+    }
+
+    /// <summary>Shrinks an image to at most <paramref name="maxWidth"/> pixels wide (thumbnails).</summary>
+    static RGBImage Thumbnail(RGBImage rgb, int maxWidth)
+    {
+        var img = rgb;
+        while (img.Width > maxWidth * 2) img = img.Downsampled2x();
+        if (img.Width > maxWidth)
+        {
+            int h = Math.Max(1, img.Height * maxWidth / img.Width);
+            img = new RGBImage(img.R.Resized(maxWidth, h), img.G.Resized(maxWidth, h), img.B.Resized(maxWidth, h));
+        }
+        return img;
+    }
+
+    public static void Write(IReadOnlyList<PlanarImage> planes, string path, RasterFormat format, double jpegQuality = 0.92)
+    {
+        switch (format)
+        {
+            case RasterFormat.Fits32: FitsWriter.Write(planes, path, FitsWriter.Depth.Float32); return;
+            case RasterFormat.Fits16: FitsWriter.Write(planes, path, FitsWriter.Depth.UInt16); return;
+            case RasterFormat.Tiff16: TiffWriter.Write(planes, path, TiffWriter.SampleType.UInt16); return;
+            case RasterFormat.Tiff32: TiffWriter.Write(planes, path, TiffWriter.SampleType.Float32); return;
+        }
+        var tmp = path + ".tmp";
+        try
+        {
+            using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None)) WriteEncoded(planes, fs, format, jpegQuality);
+            File.Move(tmp, path, true);
+        }
+        catch (Exception e) when (e is not ImageIOException)
+        {
+            try { File.Delete(tmp); } catch { }
+            throw new ImageIOException(ImageIOErrorKind.CannotWrite, e.Message);
+        }
+    }
+
+#if WINDOWS
     /// <summary>Builds a WIC bitmap from 1 or 3 float planes with the requested depth (values clamped to [0,1]).</summary>
     public static BitmapSource MakeBitmap(IReadOnlyList<PlanarImage> planes, int bitsPerComponent)
     {
@@ -205,44 +325,12 @@ public static class RasterWriter
         return bmp;
     }
 
-    /// <summary>BGRA bytes (8-bit, values × 255 rounded, clamped) of an RGB image.</summary>
-    public static byte[] DisplayBytes(RGBImage rgb)
-    {
-        int w = rgb.Width, h = rgb.Height, n = w * h;
-        var bytes = new byte[n * 4];
-        var r = rgb.R.Data; var g = rgb.G.Data; var b = rgb.B.Data;
-        Par.Rows(h, w * 4, (y0, y1) =>
-        {
-            for (int i = y0 * w; i < y1 * w; i++)
-            {
-                int o = i * 4;
-                bytes[o] = To8(b[i]); bytes[o + 1] = To8(g[i]); bytes[o + 2] = To8(r[i]); bytes[o + 3] = 255;
-            }
-        });
-        return bytes;
-    }
-
-    static byte To8(float v)
-    {
-        float s = v * 255;
-        if (!(s > 0)) return 0;
-        if (s >= 255) return 255;
-        return (byte)(s + 0.5f);
-    }
-
     public static BitmapSource MakeDisplayImage(PlanarImage gray) => MakeDisplayImage(new RGBImage(gray, gray, gray));
 
     /// <summary>Small PNG (8-bit) in memory, e.g. for preset thumbnails.</summary>
     public static byte[] PngData(RGBImage rgb, int maxWidth = 160)
     {
-        var img = rgb;
-        while (img.Width > maxWidth * 2) img = img.Downsampled2x();
-        if (img.Width > maxWidth)
-        {
-            int h = Math.Max(1, img.Height * maxWidth / img.Width);
-            img = new RGBImage(img.R.Resized(maxWidth, h), img.G.Resized(maxWidth, h), img.B.Resized(maxWidth, h));
-        }
-        var bmp = MakeBitmap(img.Planes, 8);
+        var bmp = MakeBitmap(Thumbnail(rgb, maxWidth).Planes, 8);
         var enc = new PngBitmapEncoder();
         enc.Frames.Add(BitmapFrame.Create(bmp));
         using var ms = new MemoryStream();
@@ -263,15 +351,8 @@ public static class RasterWriter
         catch { return null; }
     }
 
-    public static void Write(IReadOnlyList<PlanarImage> planes, string path, RasterFormat format, double jpegQuality = 0.92)
+    static void WriteEncoded(IReadOnlyList<PlanarImage> planes, Stream stream, RasterFormat format, double jpegQuality)
     {
-        switch (format)
-        {
-            case RasterFormat.Fits32: FitsWriter.Write(planes, path, FitsWriter.Depth.Float32); return;
-            case RasterFormat.Fits16: FitsWriter.Write(planes, path, FitsWriter.Depth.UInt16); return;
-            case RasterFormat.Tiff16: TiffWriter.Write(planes, path, TiffWriter.SampleType.UInt16); return;
-            case RasterFormat.Tiff32: TiffWriter.Write(planes, path, TiffWriter.SampleType.Float32); return;
-        }
         BitmapEncoder enc;
         BitmapSource bmp;
         switch (format)
@@ -281,16 +362,52 @@ public static class RasterWriter
             default: enc = new JpegBitmapEncoder { QualityLevel = (int)Math.Round(jpegQuality * 100) }; bmp = MakeBitmap(planes, 8); break;
         }
         enc.Frames.Add(BitmapFrame.Create(bmp));
-        var tmp = path + ".tmp";
-        try
+        enc.Save(stream);
+    }
+#else
+    /// <summary>8-bit RGBA Skia bitmap from float planes (values clamped to [0,1]); the caller disposes it.</summary>
+    public static SKBitmap MakeSkiaBitmap(IReadOnlyList<PlanarImage> planes)
+    {
+        int w = planes[0].Width, h = planes[0].Height;
+        bool gray = planes.Count == 1;
+        var bmp = new SKBitmap(new SKImageInfo(w, h, gray ? SKColorType.Gray8 : SKColorType.Rgba8888, SKAlphaType.Opaque));
+        int stride = bmp.RowBytes, comps = gray ? 1 : 4;
+        var bytes = new byte[(long)stride * h];
+        var tmp = new float[w];
+        for (int y = 0; y < h; y++)
+            for (int c = 0; c < (gray ? 1 : 3); c++)
+            {
+                Vec.Clip(planes[c].Data.AsSpan(y * w, w), 0, 1, tmp);
+                int row = y * stride;
+                for (int x = 0; x < w; x++) bytes[row + x * comps + c] = (byte)MathF.Round(tmp[x] * 255, MidpointRounding.AwayFromZero);
+                if (!gray) for (int x = 0; x < w; x++) bytes[row + x * 4 + 3] = 255;
+            }
+        unsafe { fixed (byte* p = bytes) Buffer.MemoryCopy(p, (void*)bmp.GetPixels(), bytes.Length, bytes.Length); }
+        return bmp;
+    }
+
+    /// <summary>Small PNG (8-bit) in memory, e.g. for preset thumbnails.</summary>
+    public static byte[] PngData(RGBImage rgb, int maxWidth = 160)
+    {
+        using var ms = new MemoryStream();
+        PngCodec.Encode(Thumbnail(rgb, maxWidth).Planes, 8, ms);
+        return ms.ToArray();
+    }
+
+    static void WriteEncoded(IReadOnlyList<PlanarImage> planes, Stream stream, RasterFormat format, double jpegQuality)
+    {
+        switch (format)
         {
-            using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None)) enc.Save(fs);
-            File.Move(tmp, path, true);
-        }
-        catch (Exception e) when (e is not ImageIOException)
-        {
-            try { File.Delete(tmp); } catch { }
-            throw new ImageIOException(ImageIOErrorKind.CannotWrite, e.Message);
+            case RasterFormat.Png16: PngCodec.Encode(planes, 16, stream); break;
+            case RasterFormat.Png8: PngCodec.Encode(planes, 8, stream); break;
+            default:
+            {
+                using var bmp = MakeSkiaBitmap(planes);
+                using var data = bmp.Encode(SKEncodedImageFormat.Jpeg, (int)Math.Round(jpegQuality * 100)) ?? throw new ImageIOException(ImageIOErrorKind.CannotWrite, "JPEG encoding failed");
+                data.SaveTo(stream);
+                break;
+            }
         }
     }
+#endif
 }

@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Cross-platform desktop app (Linux, macOS, Windows) on Avalonia UI. Same Model layer and view
+         structure as the WPF app; the processing comes from AstroCore's portable net9.0 build. -->
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>CombineColors</RootNamespace>
+    <AssemblyName>CombineColors</AssemblyName>
+    <Description>Combine monochrome astrophotography channels into colour images.</Description>
+    <BuiltInComInteropSupport>false</BuiltInComInteropSupport>
+    <ApplicationManifest Condition="Exists('app.manifest')">app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.3.22" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.22" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.22" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.22" />
+    <PackageReference Include="Avalonia.Diagnostics" Version="11.3.22" Condition="'$(Configuration)' == 'Debug'" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AstroCore\AstroCore.csproj" AdditionalProperties="TargetFramework=net9.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AvaloniaResource Include="..\CombineColors\Resources\AppIcon-256.png" Link="Resources\AppIcon-256.png" Condition="Exists('..\CombineColors\Resources\AppIcon-256.png')" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="System.IO" />
+  </ItemGroup>
+
+</Project>

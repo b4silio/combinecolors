@@ -9,6 +9,8 @@
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <NoWarn>$(NoWarn);CA1416;CS1591;WPF0001</NoWarn>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- Lets `dotnet build` compile the net9.0-windows targets on macOS / Linux (the WPF app cannot run there, but it compiles). -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Deterministic>true</Deterministic>
     <Authors>Basilio Noris</Authors>
     <Product>CombineColors</Product>

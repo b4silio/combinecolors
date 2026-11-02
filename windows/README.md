@@ -1,35 +1,44 @@
-# CombineColors for Windows
+# CombineColors for Windows and Linux (.NET)
 
-A port of the macOS app to Windows: the same processing (FITS / TIFF loading, statistics,
+A port of the macOS app to Windows and Linux: the same processing (FITS / TIFF loading, statistics,
 normalisation, stretch, palettes, Pixel Math, luminance, colour bands, denoise, dust spot healing,
 crop / rotation, presets, recent sets, project files, export) rewritten in C# on .NET 9, with a
-WPF front-end. Project files (`.json`) are interchangeable with the Mac app.
+WPF front-end on Windows and an Avalonia UI front-end on Linux. Project files (`.json`) are
+interchangeable with the Mac app. The native SwiftUI app remains the macOS build.
 
 ```
 windows/
   CombineColors.sln
-  AstroCore/            processing library (no UI) — same layout as Sources/AstroCore
+  AstroCore/            processing library (no UI) — same layout as Sources/AstroCore; builds for
+                        net9.0-windows (WIC, Direct3D) and plain net9.0 (PngCodec + SkiaSharp, CPU only)
     Image/              PlanarImage, Pyramid, PixelRect/AutoCrop, Statistics, StarMask, Vec (SIMD kernels)
-    IO/                 FITS reader/writer, TIFF reader/writer, PNG/JPEG via WIC, loader, channel detection
-    Processing/         Stretch, Normalization, Palettes, PostProcess, Denoise, Bm3d, DualBand, DustRemoval
+    IO/                 FITS reader/writer, TIFF reader/writer, PngCodec (exact 8/16-bit PNG), RasterIO
+                        (PNG/JPEG via WIC on Windows, PngCodec + SkiaSharp elsewhere), loader, channel detection
+    Processing/         Stretch, Normalization, Palettes, PostProcess, Denoise, Bm3d, DualBand, DustRemoval,
+                        GpuDenoise (D3D11, Windows) / GpuDenoise.Portable (stub)
     PixelMath/          lexer, parser, vectorised evaluator, programs
     Pipeline/           CombineSettings, Json (tolerant project format), ChannelSource, Renderer, ProjectDocument
   CombineColors/        WPF app (Model: ProjectModel, RenderCoordinator, Preferences, RecentSets; Views)
-  CombineColorsCli/     headless renderer (combinecolors-cli.exe), same options as the Mac CLI
+  CombineColors.Avalonia/ Avalonia UI app for Linux (also runs on macOS / Windows): same Model and Views,
+                        built in code against Avalonia instead of WPF (see "Linux" below)
+  CombineColorsCli/     headless renderer (combinecolors-cli), same options as the Mac CLI; net9.0 + net9.0-windows
   AstroCore.Tests/      xUnit port of the AstroCore test suite (real-data tests use C:\_Astrophotography when present)
   CombineColors.Tests/  model-level app tests (loading, crop, rotation, presets, dust spots, recent sets)
   scripts/release.ps1   tags, pushes, builds the zip and attaches it to the GitHub release (gh CLI)
   scripts/publish.ps1   self-contained build → build\CombineColors-<version>-win-x64.zip
+  scripts/publish-linux.sh  self-contained Linux build (x64 + arm64) → build/CombineColors-<version>-linux-<arch>.tar.gz
 ```
 
 ## Releasing
 
 ```powershell
-.scriptselease.ps1          # tag v<VERSION>, push, build the zip, create or update the GitHub release
+.scripts
+elease.ps1          # tag v<VERSION>, push, build the zip, create or update the GitHub release
 ```
 
 The Mac `scripts/release.sh` and this script share the tag: whichever runs first creates the
-release (notes from the CHANGELOG section), the other attaches its asset. Run `release.ps1 -NoTag`
+release (notes from the CHANGELOG section), the other attaches its asset. `release.sh` also builds
+and attaches the Linux x64 tarball (`scripts/publish-linux.sh`). Run `release.ps1 -NoTag`
 to only upload the zip to an existing release. Needs the GitHub CLI (`winget install GitHub.cli`,
 then `gh auth login`).
 
@@ -78,3 +87,38 @@ live in `%LOCALAPPDATA%\CombineColors\preferences.json`.
 * The interface is dark only (the .NET 9 Fluent theme in dark mode, independent of the Windows
   setting); the layout follows the Mac app (channel column · preview · palettes + presets,
   processing strip underneath).
+
+## Linux
+
+`CombineColors.Avalonia/` is the Linux front-end: the WPF app's Model layer and view code ported to
+[Avalonia UI](https://avaloniaui.net) 11 (Fluent dark theme, Skia rendering). The processing library
+is the same `AstroCore`, built for plain `net9.0`:
+
+* **PNG / JPEG**: PNG is read and written by the exact built-in `PngCodec` (8/16-bit gray, RGB and
+  RGBA, non-interlaced; other variants fall back to SkiaSharp at 8 bits); JPEG goes through SkiaSharp.
+  The Windows build keeps the Windows Imaging Component.
+* **GPU denoise** is Windows only (Direct3D 11); on Linux non-local means and BM3D run on the CPU
+  (`GpuDenoise.Portable.cs` is the stub that makes the callers take the CPU paths).
+* **Not yet on Linux**: copying the preview to the clipboard (Avalonia has no portable image
+  clipboard), native menus (the menu bar lives inside the window), app icon packaging.
+* The interface follows the Windows app, so the keyboard shortcuts above apply (Ctrl). The same
+  `--prefs <file>`, `--screenshot <png>` (plus `--screenshot-delay <s>`) developer switches exist;
+  preferences live in `~/.local/share/CombineColors/preferences.json`.
+
+Building and running (any OS with the .NET 9 SDK; no Linux machine is needed to build):
+
+```bash
+cd windows
+dotnet build CombineColors.Avalonia -c Release
+dotnet run --project CombineColors.Avalonia -c Release            # also runs on macOS and Windows
+dotnet test AstroCore.Tests -f net9.0                            # the engine's tests on the portable build
+scripts/publish-linux.sh                                           # self-contained tar.gz for linux-x64 and linux-arm64
+```
+
+On the Linux machine the self-contained build needs only X11 (or XWayland) and fontconfig:
+`sudo apt install libfontconfig1 libice6 libsm6 libx11-6 libxext6 libxi6 libxrandr2 libxcursor1 libxrender1`,
+then `./CombineColors` (or `./combinecolors-cli …`). A headless check without a desktop:
+`xvfb-run -a ./CombineColors --screenshot out.png --screenshot-delay 20 *.fits`.
+
+The Windows targets (`net9.0-windows`, WPF) also compile on macOS / Linux thanks to
+`EnableWindowsTargeting` in `Directory.Build.props`; running them still needs Windows.
