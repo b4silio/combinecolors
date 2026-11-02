@@ -35,6 +35,8 @@ public struct ProjectDocument: Codable {
     public var flipped: Bool = false
     /// Dust spots healed on the loaded channels (oriented coordinates) and the estimation parameters.
     public var dust: DustSettings = DustSettings()
+    /// Gradient models removed from the loaded channels (oriented coordinates) and the shared protected regions.
+    public var gradient: GradientSettings = GradientSettings()
 
     public var orientation: Orientation {
         get { Orientation(rotation: rotation, flipped: flipped) }

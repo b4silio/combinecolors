@@ -30,6 +30,11 @@ import AstroCore
 //      --dust <kind>:x,y,r[;x,y,r…]  heal dust spots on a channel before anything else (repeatable; a project's
 //                             spots are applied too);  --dust-model surface | radial;  --dust-smooth <px>;  --dust-feather <0..0.5>
 //                             (the three parameters apply to the spots given with --dust)
+//      --gradient <kind>:line:x0,y0,x1,y1 | <kind>:ellipse:cx,cy,a,b[,angle°] | <kind>:poly[:degree]
+//                             remove a gradient from a channel guided by the drawn shape (repeatable; a project's models are
+//                             applied too);  --gradient-mode subtract | divide;  --gradient-residual none | plane | quadratic
+//                             --gradient-sectors <1|4|8|12>;  --gradient-smooth <bins>;  --gradient-norefine (keep the geometry as given)
+//                             --gradient-protect cx,cy,a,b  region left out of the estimate (repeatable, every channel)
 
 var args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else {
@@ -125,6 +130,31 @@ case "render":
             if v.count == 3 { dust.spots[k, default: []].append(dust.newSpot(x: v[0], y: v[1], radius: v[2])) } else { print("bad --dust item \(item)") }
         }
     }
+    // Gradient models: from the project file, then from --gradient.
+    var gradient = projectDoc?.gradient ?? GradientSettings()
+    if let m = option("--gradient-mode").flatMap({ GradientMode(rawValue: $0) }) { gradient.mode = m }
+    if let r = option("--gradient-residual").flatMap({ GradientResidual(rawValue: $0) }) { gradient.residual = r }
+    if let v = option("--gradient-sectors").flatMap(Int.init) { gradient.sectors = v }
+    if let v = option("--gradient-smooth").flatMap(Double.init) { gradient.smoothness = v }
+    if flag("--gradient-norefine") { gradient.refine = false }
+    while let p = option("--gradient-protect") {
+        let v = p.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+        if v.count == 4 { gradient.protect.append(GradientRegion(x: v[0], y: v[1], a: v[2], b: v[3])) } else { print("bad --gradient-protect \(p)") }
+    }
+    while let g = option("--gradient") {
+        let parts = g.split(separator: ":", maxSplits: 2).map(String.init)
+        guard parts.count >= 2, let k = ChannelKind(rawValue: parts[0]) ?? ChannelKind.fromPixelMathIdentifier(parts[0]) else { print("bad --gradient \(g)"); continue }
+        let v = parts.count == 3 ? parts[2].split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) } : []
+        var gesture: GradientGesture? = nil
+        switch parts[1] {
+        case "line" where v.count == 4: gesture = .line(from: CGPoint(x: v[0], y: v[1]), to: CGPoint(x: v[2], y: v[3]))
+        case "ellipse" where v.count >= 4: gesture = .ellipse(center: CGPoint(x: v[0], y: v[1]), a: v[2], b: v[3], angle: (v.count > 4 ? v[4] : 0) * .pi / 180)
+        case "poly", "polynomial": gesture = .polynomial(); if let d = v.first { gradient.degree = Int(d) }
+        default: break
+        }
+        guard let ge = gesture else { print("bad --gradient \(g)"); continue }
+        gradient.specs[k] = gradient.newSpec(gesture: ge)
+    }
     try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 
     // Load channels (in parallel).
@@ -144,11 +174,26 @@ case "render":
             } else if let k = kind {
                 let spots = dust.spots(for: k)
                 let t1 = Date()
-                let plane = DustRemoval.heal(f.planes[0], spots: spots)
+                var plane = DustRemoval.heal(f.planes[0], spots: spots)
                 let healMs = Int(Date().timeIntervalSince(t1) * 1000)
+                var gradientNote = ""
+                if let spec = gradient.spec(for: k) {
+                    let t2 = Date()
+                    if let (corrected, fit) = GradientRemoval.correct(plane, spec: spec, protect: gradient.protect) {
+                        plane = corrected
+                        let g = fit.gesture
+                        let geo: String
+                        switch g.shape {
+                        case .line: geo = String(format: "line %.0f,%.0f → %.0f,%.0f", g.x, g.y, g.x2, g.y2)
+                        case .ellipse: geo = String(format: "ellipse centre %.0f,%.0f axes %.0f×%.0f angle %.1f°", g.x, g.y, g.a, g.b, g.angle * 180 / .pi)
+                        case .polynomial: geo = "polynomial degree \(spec.degree)"
+                        }
+                        gradientNote = String(format: ", gradient removed in %d ms (%@, %@, residual %.2fσ)", Int(Date().timeIntervalSince(t2) * 1000), geo, spec.mode.rawValue, fit.residualSigma)
+                    } else { gradientNote = ", gradient model could not be fitted" }
+                }
                 let src = ChannelSource(kind: k, image: plane, fileName: f.fileName, url: url, formatDescription: f.formatDescription)
                 lock.lock(); sources[k] = src; lock.unlock()
-                print("loaded \(f.fileName) → \(k.rawValue) (\(Int(src.analysisMillis)) ms analysis\(spots.isEmpty ? "" : ", \(spots.count) dust spots healed in \(healMs) ms"))")
+                print("loaded \(f.fileName) → \(k.rawValue) (\(Int(src.analysisMillis)) ms analysis\(spots.isEmpty ? "" : ", \(spots.count) dust spots healed in \(healMs) ms")\(gradientNote))")
             } else {
                 print("skipped \(f.fileName): channel not recognised (use --assign)")
             }
@@ -201,6 +246,7 @@ case "render":
         doc.settings = s
         doc.crop = crop
         doc.dust = dust
+        doc.gradient = gradient
         doc.channels = sources.values.sorted { $0.kind.rawValue < $1.kind.rawValue }.compactMap { src in src.url.map { ProjectDocument.ChannelRef(kind: src.kind, path: $0.path) } }
         try doc.data().write(to: URL(fileURLWithPath: sp))
         print("project written to \(sp)")

@@ -94,6 +94,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // When files are given at launch AppKit treats them as documents and SwiftUI skips the
         // WindowGroup window (there is no DocumentGroup). A reopen request makes SwiftUI create it.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { AppDelegate.ensureWindow() }
+        // Developer switch: `-screenshot <file.png> [-screenshotDelay <s>]` writes the main window
+        // after the delay (default 8 s) and quits — no screen-recording permission needed.
+        if let path = UserDefaults.standard.string(forKey: "screenshot"), !path.isEmpty {
+            let delay = max(1, UserDefaults.standard.double(forKey: "screenshotDelay") == 0 ? 8 : UserDefaults.standard.double(forKey: "screenshotDelay"))
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                if let w = NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }), let v = w.contentView,
+                   let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) {
+                    v.cacheDisplay(in: v.bounds, to: rep)
+                    try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                }
+                NSApp.terminate(nil)
+            }
+        }
     }
 
     static func ensureWindow() {

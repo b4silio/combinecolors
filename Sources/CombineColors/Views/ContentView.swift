@@ -105,8 +105,9 @@ struct ContentView: View {
     private var previewToolbar: some View {
         VStack(alignment: .trailing, spacing: 4) {
             if model.dustEditing != nil { dustToolbar }
+            if model.gradientEditing != nil { gradientToolbar }
             HStack(spacing: 4) {
-                if model.dustEditing != nil {
+                if model.dustEditing != nil || model.gradientEditing != nil {
                     EmptyView()
                 } else if model.cropEditing {
                     Button("Apply") { model.commitCropEditing() }.keyboardShortcut(.return, modifiers: [])
@@ -216,6 +217,107 @@ struct ContentView: View {
                 .textFieldStyle(.roundedBorder)
             }
             Text("Click a shadow to add a fitted spot · drag to move · drag the handle to resize · drag empty sky to pan")
+                .font(.system(size: 9)).foregroundStyle(.secondary)
+        }
+    }
+
+    /// Gradient editor: channel switch, guide shape and model parameters, protected regions,
+    /// before / after toggle, fit read-out.
+    private var gradientToolbar: some View {
+        let kind = model.gradientEditing ?? .luminance
+        let loaded = ChannelKind.allCases.filter { model.sources[$0] != nil }
+        let spec = model.editedGradientSpec
+        let defaults = model.gradientDraft ?? GradientSettings()
+        // Parameters: the edited channel's model, or the defaults given to the next one.
+        func edit<T>(_ get: @escaping (GradientSpec) -> T, _ fallback: T, _ set: @escaping (inout GradientSpec, T) -> Void, _ setDefault: @escaping (inout GradientSettings, T) -> Void) -> Binding<T> {
+            Binding(get: { model.editedGradientSpec.map(get) ?? fallback },
+                    set: { v in if var sp = model.editedGradientSpec { set(&sp, v); model.updateGradientSpec(sp) } else { var d = model.gradientDraft ?? GradientSettings(); setDefault(&d, v); model.gradientDraft = d } })
+        }
+        let shape = Binding<GradientShape>(get: { model.gradientShape }, set: { model.setGradientShape($0) })
+        let mode = edit({ $0.mode }, defaults.mode, { $0.mode = $1 }, { $0.mode = $1 })
+        let residual = edit({ $0.residual }, defaults.residual, { $0.residual = $1 }, { $0.residual = $1 })
+        let sectors = edit({ $0.sectors }, defaults.sectors, { $0.sectors = $1 }, { $0.sectors = $1 })
+        let degree = edit({ $0.degree }, defaults.degree, { $0.degree = $1 }, { $0.degree = $1 })
+        let refine = edit({ $0.refine }, defaults.refine, { $0.refine = $1 }, { $0.refine = $1 })
+        let smooth = edit({ Float($0.smoothness) }, Float(defaults.smoothness), { $0.smoothness = Double($1) }, { $0.smoothness = Double($1) })
+        let fit = model.gradientFit.flatMap { $0.kind == kind ? $0 : nil }
+        let regions = model.gradientRegions
+        return VStack(alignment: .trailing, spacing: 4) {
+            HStack(spacing: 6) {
+                Label("Gradient", systemImage: "circle.lefthalf.filled").font(.caption.bold())
+                Picker("", selection: Binding(get: { kind }, set: { model.switchGradientChannel($0) })) {
+                    ForEach(loaded) { k in Text(k.shortName).tag(k) }
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
+                .help("Channel shown; the models of every channel are kept until Apply")
+                Picker("", selection: $model.gradientView) { ForEach(GradientView.allCases) { Text($0.displayName).tag($0) } }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize()
+                    .help("Corrected: the channel with the model taken out.\nOriginal: the channel untouched (B toggles).\nBackground: the model alone — what is taken away — auto-stretched on its own (M toggles).")
+                // Keyboard toggles for the view (invisible buttons carry the shortcuts).
+                Button("") { model.gradientView = model.gradientView == .original ? .corrected : .original }
+                    .keyboardShortcut("b", modifiers: []).buttonStyle(.plain).frame(width: 0, height: 0).opacity(0)
+                Button("") { model.gradientView = model.gradientView == .background ? .corrected : .background }
+                    .keyboardShortcut("m", modifiers: []).buttonStyle(.plain).frame(width: 0, height: 0).opacity(0)
+                Button("Apply") { model.commitGradientEditing() }.keyboardShortcut(.return, modifiers: [])
+                Button("Cancel") { model.cancelGradientEditing() }.keyboardShortcut(.escape, modifiers: [])
+            }
+            HStack(spacing: 6) {
+                Picker("", selection: shape) { ForEach(GradientShape.allCases) { Text($0.displayName).tag($0) } }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize()
+                    .help("Line: the background varies along the line and is constant across it (light pollution from one side).\nEllipse: the background is a function of the distance to the centre, which may lie outside the frame (vignetting, a glow from a bright source).\nPolynomial: no guide, a plain 2-D polynomial of the chosen degree.")
+                Picker("", selection: mode) { ForEach(GradientMode.allCases) { Text($0.displayName).tag($0) } }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize()
+                    .help("Subtract: the background is taken off, the overall level kept (sky glow, stretched data).\nDivide: the pixels are divided by the background normalised to its brightest level (vignetting / missing flats on linear data: stars at the edge get their flux back).")
+                MenuPicker(title: "Residual", selection: residual, options: GradientResidual.allCases) { $0.displayName }
+                    .help("Low-order 2-D term fitted after the guided profile, for what the profile cannot explain (a sky gradient on top of the vignetting)")
+                if shape.wrappedValue == .ellipse {
+                    MenuPicker(title: "Sectors", selection: sectors, options: [1, 4, 8, 12]) { $0 == 1 ? "1 (round)" : "\($0)" }
+                        .help("Angular sectors of the profile: 1 = the same fall-off in every direction; 4–12 let it differ with the direction (tilted sensor, asymmetric vignetting)")
+                }
+                if shape.wrappedValue == .polynomial {
+                    MenuPicker(title: "Degree", selection: degree, options: [1, 2, 3, 4, 5, 6]) { "\($0)" }
+                }
+                SliderRow(title: "Smooth", value: smooth, range: 0...6, defaultValue: 1.5, format: "%.1f",
+                          help: "Smoothing of the profile along the guide, in bins (120 bins across the frame)", labelWidth: 46)
+                    .frame(width: 160)
+            }
+            HStack(spacing: 6) {
+                if shape.wrappedValue != .polynomial {
+                    Toggle("Refine", isOn: refine).toggleStyle(.checkbox)
+                        .help("Optimise the drawing from the data (line direction; ellipse centre, axis ratio and angle). The guide used is shown dashed in orange when it differs from the drawing.")
+                    Button("Adopt") { model.adoptRefinedGradient() }
+                        .disabled(fit == nil || fit?.gesture == spec?.gesture)
+                        .help("Replace the drawing by the refined guide")
+                }
+                Divider().frame(height: 14)
+                Toggle(isOn: $model.gradientProtectMode) { Text("Protect") }
+                    .toggleStyle(.button).keyboardShortcut("p", modifiers: [])
+                    .help("Click the preview to add a protected region (nebula, galaxy) that is left out of the background estimate, for every channel; drag to move, drag the handles to resize, ⌫ removes the selected one (P)")
+                Button("Delete") { model.removeSelectedGradientRegion() }.disabled(model.selectedGradientRegion == nil).help("Remove the selected protected region (⌫)")
+                Button("Clear regions") { model.clearGradientRegions() }.disabled(regions.isEmpty)
+                Divider().frame(height: 14)
+                Button("Remove model") { model.clearGradient() }.disabled(spec == nil).help("Drop this channel's model (the channel is shown untouched)")
+                Button("Copy to all") { model.copyGradientToAllChannels() }.disabled(spec == nil || loaded.count < 2)
+                    .help("Give every other loaded channel the same model (vignetting is the same for every filter)")
+            }
+            HStack(spacing: 6) {
+                if let f = fit {
+                    let g = f.gesture
+                    let geo: String = {
+                        switch g.shape {
+                        case .line: return String(format: "line %.0f,%.0f → %.0f,%.0f", g.x, g.y, g.x2, g.y2)
+                        case .ellipse: return String(format: "ellipse centre %.0f,%.0f · axes %.0f × %.0f · %.0f°", g.x, g.y, g.a, g.b, g.angle * 180 / .pi)
+                        case .polynomial: return "polynomial, degree \(spec?.degree ?? 0)"
+                        }
+                    }()
+                    Text(verbatim: String(format: "Fit: %@ · residual %.2fσ · %d ms", geo, f.residualSigma, Int(f.millis)))
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                } else if spec == nil {
+                    Text(shape.wrappedValue == .line ? "Drag along the gradient, from the dark side towards the bright side" : "Drag from the centre of the gradient outwards (the centre may be dragged outside the frame afterwards)")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Text("Drag the handles to adjust the guide · drag empty sky to pan · regions: Protect then click · B original, M background")
                 .font(.system(size: 9)).foregroundStyle(.secondary)
         }
     }
