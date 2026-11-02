@@ -406,9 +406,14 @@ public sealed class ProjectModel : INotifyPropertyChanged
         s.Mode = CombineMode.Monochrome;
         s.MonoChannels = [kind];
         s.PaletteID = "monochrome";
-        var adj = s.Adjust(kind).Clone(); adj.Enabled = true; adj.Weight = 1; s.SetAdjust(kind, adj);
+        // The editors (dust, gradient) and the peek show the channel's data with the stretch only: no gain / offset, normalisation or finishing stage.
+        s.SetAdjust(kind, new ChannelAdjust());
+        s.Normalization.Method = NormalizationMethod.None;
         s.Luminance.Enabled = false;
         s.Post = new PostSettings();
+        s.Detail = new DetailSettings();
+        s.Denoise = new DenoiseSettings();
+        s.ColorBands = new ColorBandsSettings();
         s.Stars.Enabled = false;
         if (s.Stretch.Method == StretchMethod.AutoSTF) s.Stretch.Linked = false;
         return s;

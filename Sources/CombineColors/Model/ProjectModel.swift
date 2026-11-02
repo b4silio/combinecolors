@@ -226,9 +226,16 @@ final class ProjectModel {
         s.mode = .monochrome
         s.monoChannels = [kind]
         s.paletteID = "monochrome"
-        var adj = s.adjust(kind); adj.enabled = true; adj.weight = 1; s.setAdjust(kind, adj)
+        // The editors (dust, gradient) and the peek show the channel's data with the stretch only:
+        // no gain / offset, normalisation or finishing stage (clarity, denoise, bands…), which would
+        // otherwise hide what is being edited.
+        s.setAdjust(kind, ChannelAdjust())
+        s.normalization.method = .none
         s.luminance.enabled = false
         s.post = PostSettings()
+        s.detail = DetailSettings()
+        s.denoise = DenoiseSettings()
+        s.colorBands = ColorBandsSettings()
         s.stars.enabled = false
         if s.stretch.method == .autoSTF { s.stretch.linked = false }
         return s

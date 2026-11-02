@@ -5,6 +5,10 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 (`scripts/bump.sh`). The version lives in `VERSION` and is stamped into the app at build time;
 `scripts/release.sh` tags it and publishes the DMG as a GitHub release.
 
+## [1.6.1] – 2026-11-02
+
+- Gradient / dust editors and the channel peek show the channel's data with the stretch only (no gain / offset, normalisation, Detail, Denoise or Colour bands): editing a gradient no longer needs Reset all
+
 ## [1.6.0] – 2026-11-02
 
 - .NET apps (Windows WPF, Linux Avalonia) and CLI: guided gradient removal with the same models, editor and project format as the Mac app

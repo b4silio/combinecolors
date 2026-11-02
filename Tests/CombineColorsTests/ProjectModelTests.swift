@@ -444,6 +444,16 @@ final class PeekTests: XCTestCase {
         await base.wait { m.frame?.settings.mode == .monochrome }
         let f = m.frame!
         XCTAssertEqual(f.rgb.r.toArray(), f.rgb.b.toArray(), "peek frame is grayscale")
+        // Finishing stages must not reach the single-channel view (the gradient / dust editors use it too).
+        m.settings.detail.clarity = 1.5; m.settings.denoise.amount = 0.8; var band = ColorBandAdjust(); band.saturation = 0.5; m.settings.colorBands.bands[.reds] = band
+        var adj = m.settings.adjust(.oiii); adj.gain = 2; adj.offsetSigma = 1; m.settings.setAdjust(.oiii, adj)
+        m.peekChannel = .oiii
+        XCTAssertEqual(m.displayedSettings.adjust(.oiii), ChannelAdjust()); XCTAssertEqual(m.displayedSettings.normalization.method, .none)
+        var keptStretch = m.settings.stretch; keptStretch.linked = false   // auto-STF is shown unlinked (one channel)
+        XCTAssertEqual(m.displayedSettings.stretch, keptStretch, "the stretch is the one thing kept")
+        XCTAssertEqual(m.displayedSettings.detail, DetailSettings()); XCTAssertEqual(m.displayedSettings.denoise, DenoiseSettings())
+        XCTAssertEqual(m.displayedSettings.colorBands, ColorBandsSettings()); XCTAssertEqual(m.displayedSettings.post, PostSettings())
+        XCTAssertEqual(m.settings.detail.clarity, 1.5, "the real settings are untouched")
         m.peekChannel = nil
         await base.wait { m.frame?.settings.mode == .matrix }
         XCTAssertEqual(m.frame?.settings.mode, .matrix)
