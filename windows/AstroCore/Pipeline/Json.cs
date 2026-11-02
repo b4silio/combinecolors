@@ -380,13 +380,13 @@ public sealed partial class DetailSettings : IJsonSettings
 {
     public JsonObject ToJson() => new()
     {
-        ["texture"] = SettingsJson.V(Texture), ["clarity"] = SettingsJson.V(Clarity), ["dehaze"] = SettingsJson.V(Dehaze),
+        ["micro"] = SettingsJson.V(Micro), ["texture"] = SettingsJson.V(Texture), ["clarity"] = SettingsJson.V(Clarity), ["dehaze"] = SettingsJson.V(Dehaze), ["lowFrequency"] = SettingsJson.V(LowFrequency),
         ["sharpen"] = SettingsJson.V(Sharpen), ["sharpenRadius"] = SettingsJson.V(SharpenRadius), ["sharpenMasking"] = SettingsJson.V(SharpenMasking),
     };
 
     public static DetailSettings FromJson(JsonObject? c) => new()
     {
-        Texture = SettingsJson.F(c, "texture", 0), Clarity = SettingsJson.F(c, "clarity", 0), Dehaze = SettingsJson.F(c, "dehaze", 0),
+        Micro = SettingsJson.F(c, "micro", 0), Texture = SettingsJson.F(c, "texture", 0), Clarity = SettingsJson.F(c, "clarity", 0), Dehaze = SettingsJson.F(c, "dehaze", 0), LowFrequency = SettingsJson.F(c, "lowFrequency", 0),
         Sharpen = SettingsJson.F(c, "sharpen", 0), SharpenRadius = SettingsJson.F(c, "sharpenRadius", 1.5f), SharpenMasking = SettingsJson.F(c, "sharpenMasking", 0),
     };
 }

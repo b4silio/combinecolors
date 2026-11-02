@@ -217,9 +217,11 @@ public static class PostProcess
     public static int BlurLevels(int width, float relativeRadius)
         => Math.Max(1, (int)MathF.Round(MathF.Log2(MathF.Max(width * relativeRadius, 1)), MidpointRounding.AwayFromZero));
 
+    public const float MicroRadius = 0.002f;
     public const float TextureRadius = 0.006f;
     public const float ClarityRadius = 0.06f;
     public const float DehazeRadius = 0.25f;
+    public const float LowFrequencyRadius = 0.5f;
 
     /// <summary>Star cap of a luminance: its 99th percentile, at least 0.15.</summary>
     static float StarCap(PlanarImage y)
@@ -316,8 +318,9 @@ public static class PostProcess
     }
 
     /// <summary>
-    /// Texture (fine), clarity (mid) and dehaze (large-scale) local contrast plus sharpening,
-    /// applied to the luminance and propagated to RGB by ratio. The local-contrast radii are
+    /// Local contrast at five scales — low frequency (50 % of the width), dehaze (25 %, haze
+    /// subtraction), clarity (6 %), texture (0.6 %), micro-structures (0.2 %), applied coarse to fine —
+    /// plus sharpening, on the luminance and propagated to RGB by ratio. The local-contrast radii are
     /// relative to the width of the <em>whole</em> image so every pyramid level, a zoomed-in crop
     /// and the export agree; the sharpening radius is in full-resolution pixels and scaled by
     /// <paramref name="scale"/> (rendered px per full-res px).
@@ -364,6 +367,7 @@ public static class PostProcess
                 apply(t, n, w, PyramidBlur(StarCapped(target, cap), levels));
             }
         }
+        if (d.LowFrequency != 0) Stage(LowFrequencyRadius, (t, n, width, blur) => LocalContrast(t, n, width, blur, d.LowFrequency * 1.2f, 0.7f));
         if (d.Dehaze != 0)
         {
             float k = d.Dehaze * 0.6f;
@@ -384,6 +388,7 @@ public static class PostProcess
         }
         if (d.Clarity != 0) Stage(ClarityRadius, (t, n, width, blur) => LocalContrast(t, n, width, blur, d.Clarity * 1.2f, 0.7f));
         if (d.Texture != 0) Stage(TextureRadius, (t, n, width, blur) => LocalContrast(t, n, width, blur, d.Texture * 1.0f, 0.5f));
+        if (d.Micro != 0) Stage(MicroRadius, (t, n, width, blur) => LocalContrast(t, n, width, blur, d.Micro * 1.0f, 0.5f));
         if (d.Sharpen > 0)
         {
             // Below ~0.25 px the blur is the identity and the mask vanishes (a down-sampled preview

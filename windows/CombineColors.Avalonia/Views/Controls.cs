@@ -375,7 +375,7 @@ public static class Ui
 /// <summary>File dialogs (Avalonia storage provider; all asynchronous).</summary>
 public static class Panels
 {
-    public static readonly FilePickerFileType Images = new("Images") { Patterns = ["*.fits", "*.fit", "*.fts", "*.tif", "*.tiff", "*.png", "*.jpg", "*.jpeg"] };
+    public static readonly FilePickerFileType Images = new("Images") { Patterns = ["*.fits", "*.fit", "*.fts", "*.xisf", "*.tif", "*.tiff", "*.png", "*.jpg", "*.jpeg"] };
     public static readonly FilePickerFileType Fits = new("FITS") { Patterns = ["*.fits", "*.fit", "*.fts"] };
     public static readonly FilePickerFileType Tiff = new("TIFF") { Patterns = ["*.tif", "*.tiff"] };
     public static readonly FilePickerFileType Project = new("CombineColors project") { Patterns = ["*.json"] };

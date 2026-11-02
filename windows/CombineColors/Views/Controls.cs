@@ -356,7 +356,7 @@ public static class Ui
 /// <summary>File dialogs.</summary>
 public static class Panels
 {
-    public const string ImageFilter = "Images|*.fits;*.fit;*.fts;*.tif;*.tiff;*.png;*.jpg;*.jpeg|FITS|*.fits;*.fit;*.fts|TIFF|*.tif;*.tiff|All files|*.*";
+    public const string ImageFilter = "Images|*.fits;*.fit;*.fts;*.xisf;*.tif;*.tiff;*.png;*.jpg;*.jpeg|FITS|*.fits;*.fit;*.fts|XISF|*.xisf|TIFF|*.tif;*.tiff|All files|*.*";
 
     public static List<string> OpenImages(Window owner)
     {

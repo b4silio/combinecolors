@@ -202,7 +202,7 @@ enum Panels {
         let p = NSOpenPanel()
         p.allowsMultipleSelection = true
         p.canChooseDirectories = true
-        p.allowedContentTypes = [.tiff, .png, .jpeg, UTType("public.fits") ?? .data, .data]
+        p.allowedContentTypes = [.tiff, .png, .jpeg, UTType("public.fits") ?? .data, UTType(filenameExtension: "xisf") ?? .data, .data]
         p.message = "Choose FITS or TIFF channel images (or a folder)."
         p.begin { r in if r == .OK { completion(DropHelpers.expandDirectories(p.urls)) } }
     }

@@ -17,11 +17,12 @@ public struct LoadedFile {
 
 public enum ImageLoader {
     public static let fitsExtensions: Set<String> = ["fits", "fit", "fts"]
+    public static let xisfExtensions: Set<String> = ["xisf"]
     public static let rasterExtensions: Set<String> = ["tif", "tiff", "png", "jpg", "jpeg", "heic"]
+    public static var allExtensions: Set<String> { fitsExtensions.union(xisfExtensions).union(rasterExtensions) }
 
     public static func isSupported(_ url: URL) -> Bool {
-        let ext = url.pathExtension.lowercased()
-        return fitsExtensions.contains(ext) || rasterExtensions.contains(ext)
+        allExtensions.contains(url.pathExtension.lowercased())
     }
 
     public static func load(url: URL) throws -> LoadedFile {
@@ -41,6 +42,20 @@ public enum ImageLoader {
             }
             return LoadedFile(url: url, planes: f.planes, header: f.header, filterName: filter, detectedKind: kind,
                               formatDescription: "FITS \(depth)\(f.planes.count > 1 ? " ×\(f.planes.count)" : "")")
+        }
+        if xisfExtensions.contains(ext) {
+            let x = try XISFReader.read(url: url)
+            let filter = XISFReader.filterName(x)
+            let kind = x.planes.count == 1 ? ChannelDetection.detect(fileName: url.lastPathComponent, filterKeyword: filter) : nil
+            let depth: String
+            switch x.sampleFormat {
+            case "Float32": depth = "32-bit float"
+            case "Float64": depth = "64-bit float"
+            case "UInt8": depth = "8-bit"
+            default: depth = x.sampleFormat.replacingOccurrences(of: "UInt", with: "") + "-bit integer"
+            }
+            return LoadedFile(url: url, planes: x.planes, header: x.header, filterName: filter, detectedKind: kind,
+                              formatDescription: "XISF \(depth)\(x.planes.count > 1 ? " ×\(x.planes.count)" : "")\(x.compression.map { " (\($0))" } ?? "")")
         }
         let r = try RasterReader.read(url: url)
         let kind = r.planes.count == 1 ? ChannelDetection.detect(fileName: url.lastPathComponent) : nil

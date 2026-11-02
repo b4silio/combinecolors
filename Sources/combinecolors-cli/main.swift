@@ -16,6 +16,7 @@ import AstroCore
 //      --sat <factor>         saturation
 //      --hue <deg>            hue shift
 //      --texture <-1..1>      fine local contrast;  --clarity <-0.5..2>  mid-scale;  --dehaze <-1..1>  large-scale
+//      --micro <-1..1>        micro-structure contrast (0.2 % radius);  --lowfreq <-0.5..2>  largest structures (50 %)
 //      --sharpen <0..2>       unsharp mask amount;  --sharpen-radius <px>  its radius in full-resolution pixels (default 1.5)
 //      --sharpen-masking <0..1>  protect low-contrast (noise) areas from the sharpening
 //      --denoise <0..1>       luminance noise reduction;  --denoise-method wavelets | nonLocalMeans | guided | bm3d
@@ -98,6 +99,8 @@ case "render":
     let texture = Float(option("--texture") ?? "0") ?? 0
     let clarity = Float(option("--clarity") ?? "0") ?? 0
     let dehaze = Float(option("--dehaze") ?? "0") ?? 0
+    let micro = Float(option("--micro") ?? "0") ?? 0
+    let lowFrequency = Float(option("--lowfreq") ?? "0") ?? 0
     let sharpen = Float(option("--sharpen") ?? "0") ?? 0
     let sharpenRadius = Float(option("--sharpen-radius") ?? "1.5") ?? 1.5
     let sharpenMasking = Float(option("--sharpen-masking") ?? "0") ?? 0
@@ -228,6 +231,7 @@ case "render":
     settings.post.saturation = sat
     settings.post.hueShift = hue
     settings.detail.texture = texture; settings.detail.clarity = clarity; settings.detail.dehaze = dehaze
+    settings.detail.micro = micro; settings.detail.lowFrequency = lowFrequency
     settings.detail.sharpen = sharpen; settings.detail.sharpenRadius = sharpenRadius; settings.detail.sharpenMasking = sharpenMasking
     settings.denoise.amount = denoise; settings.denoise.method = denoiseMethod; settings.denoise.color = denoiseColor
     if let l = lum { applyLum(l, &settings) }

@@ -272,24 +272,28 @@ public sealed partial class ColorBandsSettings : IEquatable<ColorBandsSettings>
 /// <summary>Local-contrast operations (Camera Raw "Clarity" and "Dehaze").</summary>
 public sealed partial class DetailSettings : IEquatable<DetailSettings>
 {
+    /// <summary>−1…1: finest local contrast, micro-structures (radius ≈ 0.2 % of the image width).</summary>
+    public float Micro = 0;
     /// <summary>−1…1: fine-detail local contrast (radius ≈ 0.6 % of the image width).</summary>
     public float Texture = 0;
     /// <summary>−0.5…2: mid-tone local contrast at a broader scale (radius ≈ 6 % of the width).</summary>
     public float Clarity = 0;
     /// <summary>−1…1: removes (or adds) the large-scale haze component (radius ≈ 25 % of the width).</summary>
     public float Dehaze = 0;
+    /// <summary>−0.5…2: local contrast of the largest structures (radius ≈ 50 % of the width).</summary>
+    public float LowFrequency = 0;
     /// <summary>0…2: unsharp-mask amount on the luminance.</summary>
     public float Sharpen = 0;
     /// <summary>Unsharp-mask radius (Gaussian σ) in full-resolution pixels.</summary>
     public float SharpenRadius = 1.5f;
     /// <summary>0…1: protects low-contrast (noise) areas from the sharpening, like Camera Raw's Masking.</summary>
     public float SharpenMasking = 0;
-    public bool IsNeutral => Texture == 0 && Clarity == 0 && Dehaze == 0 && Sharpen == 0;
+    public bool IsNeutral => Micro == 0 && Texture == 0 && Clarity == 0 && Dehaze == 0 && LowFrequency == 0 && Sharpen == 0;
 
     public DetailSettings Clone() => (DetailSettings)MemberwiseClone();
-    public bool Equals(DetailSettings? o) => o != null && Texture == o.Texture && Clarity == o.Clarity && Dehaze == o.Dehaze && Sharpen == o.Sharpen && SharpenRadius == o.SharpenRadius && SharpenMasking == o.SharpenMasking;
+    public bool Equals(DetailSettings? o) => o != null && Micro == o.Micro && Texture == o.Texture && Clarity == o.Clarity && Dehaze == o.Dehaze && LowFrequency == o.LowFrequency && Sharpen == o.Sharpen && SharpenRadius == o.SharpenRadius && SharpenMasking == o.SharpenMasking;
     public override bool Equals(object? obj) => Equals(obj as DetailSettings);
-    public override int GetHashCode() => HashCode.Combine(Texture, Clarity, Dehaze, Sharpen, SharpenRadius, SharpenMasking);
+    public override int GetHashCode() => HashCode.Combine(Micro, Texture, Clarity, Dehaze, LowFrequency, Sharpen, SharpenRadius, SharpenMasking);
 }
 
 public enum DenoiseMethod { Wavelets, NonLocalMeans, Guided, Bm3d }

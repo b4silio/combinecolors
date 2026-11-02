@@ -405,6 +405,7 @@ public class TolerantDecodingTests
         Assert.False(doc.Flipped);
         Assert.Equal(0, doc.Settings.Detail.Sharpen);                                     // pre-sharpen file → off
         Assert.Equal(1.5f, doc.Settings.Detail.SharpenRadius);
+        Assert.Equal(0, doc.Settings.Detail.Micro); Assert.Equal(0, doc.Settings.Detail.LowFrequency);   // pre-1.7 file → off
         Assert.Equal(1.5f, doc.Settings.Post.Saturation);
         Assert.Equal(2, doc.Settings.Adjust(ChannelKind.OIII).Gain);
         Assert.Equal(new PixelRect(1, 2, 30, 40), doc.Crop);
@@ -764,14 +765,19 @@ public class ColorBandsAndDetailTests
         for (int c = 0; c < 3; c++) Assert.True(det.Image.Planes[c].MaxAbsDifference(strips.Planes[c]) < 1e-4f);
         Assert.Equal(7, PostProcess.BlurLevels(7272, 0.015f));
         Assert.Equal(6, PostProcess.BlurLevels(3636, 0.015f));
-        // The three scales are ordered: texture < clarity < dehaze.
-        Assert.True(PostProcess.BlurLevels(2000, PostProcess.TextureRadius) < PostProcess.BlurLevels(2000, PostProcess.ClarityRadius));
-        Assert.True(PostProcess.BlurLevels(2000, PostProcess.ClarityRadius) < PostProcess.BlurLevels(2000, PostProcess.DehazeRadius));
+        // The five scales are ordered: micro < texture < clarity < dehaze < low frequency.
+        float[] radii = [PostProcess.MicroRadius, PostProcess.TextureRadius, PostProcess.ClarityRadius, PostProcess.DehazeRadius, PostProcess.LowFrequencyRadius];
+        for (int i = 0; i + 1 < radii.Length; i++) Assert.True(PostProcess.BlurLevels(4000, radii[i]) < PostProcess.BlurLevels(4000, radii[i + 1]));
+        var mic = s.Clone(); mic.Detail = new DetailSettings { Micro = 0.8f };
+        Assert.True(HighPassStd(Renderer.Render(new RenderRequest(planes, mic, ctx, samples)).Image.Luma()) > HighPassStd(plain.Image.Luma()));
+        var low = s.Clone(); low.Detail = new DetailSettings { LowFrequency = 1 };
+        Assert.True(Renderer.Render(new RenderRequest(planes, low, ctx, samples)).Image.R.MaxAbsDifference(plain.Image.R) > 0.01f);
+        Assert.True(new DetailSettings().IsNeutral); Assert.False(low.Detail.IsNeutral);
         var tex = s.Clone(); tex.Detail = new DetailSettings { Texture = 0.8f };
         var tx = Renderer.Render(new RenderRequest(planes, tex, ctx, samples));
         Assert.True(HighPassStd(tx.Image.Luma()) > HighPassStd(plain.Image.Luma()));
         // Settings round trip with bands and sharpening.
-        s.ColorBands.Set(ColorBand.Teals, new ColorBandAdjust { Hue = 12 }); s.Detail.Sharpen = 0.7f; s.Detail.SharpenRadius = 2.5f;
+        s.ColorBands.Set(ColorBand.Teals, new ColorBandAdjust { Hue = 12 }); s.Detail.Sharpen = 0.7f; s.Detail.SharpenRadius = 2.5f; s.Detail.Micro = 0.3f; s.Detail.LowFrequency = -0.2f;
         Assert.Equal(s, CombineSettings.Parse(s.Json()));
     }
 

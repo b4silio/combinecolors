@@ -18,6 +18,7 @@ using AstroCore;
 //      --sat <factor>         saturation
 //      --hue <deg>            hue shift
 //      --texture <-1..1>      fine local contrast;  --clarity <-0.5..2>  mid-scale;  --dehaze <-1..1>  large-scale
+//      --micro <-1..1>        micro-structure contrast (0.2 % radius);  --lowfreq <-0.5..2>  largest structures (50 %)
 //      --sharpen <0..2>       unsharp mask amount;  --sharpen-radius <px>  its radius in full-resolution pixels (default 1.5)
 //      --sharpen-masking <0..1>  protect low-contrast (noise) areas from the sharpening
 //      --denoise <0..1>       luminance noise reduction;  --denoise-method wavelets | nonLocalMeans | guided | bm3d
@@ -107,6 +108,7 @@ switch (command)
         int maxPixels = int.TryParse(Option("--max") ?? "2000000", out var mp) ? mp : 2_000_000;
         float scnr = F(Option("--scnr"), 0), sat = F(Option("--sat"), 1), hue = F(Option("--hue"), 0);
         float texture = F(Option("--texture"), 0), clarity = F(Option("--clarity"), 0), dehaze = F(Option("--dehaze"), 0);
+        float micro = F(Option("--micro"), 0), lowFrequency = F(Option("--lowfreq"), 0);
         float sharpen = F(Option("--sharpen"), 0), sharpenRadius = F(Option("--sharpen-radius"), 1.5f), sharpenMasking = F(Option("--sharpen-masking"), 0);
         float denoise = F(Option("--denoise"), 0);
         var denoiseMethod = EnumRaw.Parse<DenoiseMethod>(Option("--denoise-method") ?? "wavelets") ?? DenoiseMethod.Wavelets;
@@ -267,6 +269,7 @@ switch (command)
         settings.Post.Saturation = sat;
         settings.Post.HueShift = hue;
         settings.Detail.Texture = texture; settings.Detail.Clarity = clarity; settings.Detail.Dehaze = dehaze;
+        settings.Detail.Micro = micro; settings.Detail.LowFrequency = lowFrequency;
         settings.Detail.Sharpen = sharpen; settings.Detail.SharpenRadius = sharpenRadius; settings.Detail.SharpenMasking = sharpenMasking;
         settings.Denoise.Amount = denoise; settings.Denoise.Method = denoiseMethod; settings.Denoise.Color = denoiseColor;
         if (lum != null) ApplyLum(lum, settings);

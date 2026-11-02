@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.IO.Compression;
 using System.Text;
 using AstroCore;
 
@@ -249,5 +250,136 @@ public class ChannelDetectionTests
         Assert.Null(ChannelDetection.DetectFileName("stars.tif"));
         Assert.Equal(ChannelKind.Green, ChannelDetection.Detect("stars.tif", "Green"));
         Assert.Equal(ChannelKind.Ha, ChannelDetection.DetectFileName(@"C:\data\Soul_25h-top60-Hydrogen-alpha-0228_0301.fits"));
+    }
+}
+
+public class XisfTests
+{
+    /// <summary>Builds a monolithic XISF file around one Image element (header block padded to 4 KiB, as PixInsight does).</summary>
+    static byte[] Xisf(string imageAttributes, byte[] payload, string children = "")
+    {
+        int dataStart = 16 + 4096;
+        var xml = $"<?xml version=\"1.0\" encoding=\"UTF-8\"?><xisf version=\"1.0\" xmlns=\"http://www.pixinsight.com/xisf\"><Image {imageAttributes} location=\"attachment:{dataStart}:{payload.Length}\">{children}</Image></xisf>";
+        var header = Encoding.UTF8.GetBytes(xml);
+        var d = new List<byte>(Encoding.ASCII.GetBytes("XISF0100"));
+        var len = new byte[4]; BinaryPrimitives.WriteUInt32LittleEndian(len, 4096); d.AddRange(len);
+        d.AddRange(new byte[4]);
+        d.AddRange(header); d.AddRange(Enumerable.Repeat((byte)0x20, 4096 - header.Length));
+        d.AddRange(payload);
+        return d.ToArray();
+    }
+
+    static byte[] FloatBytes(PlanarImage p)
+    {
+        var d = new byte[p.Count * 4];
+        Buffer.BlockCopy(p.Data, 0, d, 0, d.Length);
+        return d;
+    }
+
+    static byte[] Zlib(byte[] src)
+    {
+        using var ms = new MemoryStream();
+        using (var z = new ZLibStream(ms, CompressionLevel.Optimal, true)) z.Write(src);
+        return ms.ToArray();
+    }
+
+    static byte[] Shuffle(byte[] src, int itemSize)
+    {
+        int n = src.Length / itemSize;
+        var out_ = new byte[src.Length];
+        for (int i = 0; i < n; i++) for (int j = 0; j < itemSize; j++) out_[j * n + i] = src[i * itemSize + j];
+        for (int k = n * itemSize; k < src.Length; k++) out_[k] = src[k];
+        return out_;
+    }
+
+    /// <summary>LZ4 block: all but the last 8 bytes as literals, one match of 8 bytes at offset 8, then an empty last sequence.</summary>
+    static byte[] Lz4(byte[] src)
+    {
+        var out_ = new List<byte>();
+        int lit = src.Length - 8;
+        out_.Add((byte)((Math.Min(lit, 15) << 4) | (8 - 4)));
+        if (lit >= 15) { int r = lit - 15; while (r >= 255) { out_.Add(255); r -= 255; } out_.Add((byte)r); }
+        out_.AddRange(src.AsSpan(0, lit).ToArray());
+        out_.Add(8); out_.Add(0);
+        out_.Add(0);
+        return out_.ToArray();
+    }
+
+    [Fact]
+    public void Float32GrayWithFitsKeywordsLoadsAndDetectsTheFilter()
+    {
+        var img = Synth.Channel(41, 13);
+        var file = Xisf("geometry=\"41:13:1\" sampleFormat=\"Float32\" bounds=\"0:1\" colorSpace=\"Gray\"", FloatBytes(img),
+                        "<FITSKeyword name=\"FILTER\" value=\"'Ha'\" comment=\"Name of filter\"/><Property id=\"Instrument:Filter:Name\" type=\"String\">Ha</Property>");
+        var x = XisfReader.Read(file);
+        Assert.Equal(41, x.Width); Assert.Equal(13, x.Height); Assert.Single(x.Planes);
+        Assert.Equal(0, x.Planes[0].MaxAbsDifference(img));
+        Assert.Equal("Ha", x.Header.String("FILTER"));
+        Assert.Equal("Ha", x.Properties["Instrument:Filter:Name"]);
+        Assert.Equal("Ha", x.FilterName);
+        Assert.Null(x.Compression);
+        var path = Synth.TempPath("gray.xisf");
+        File.WriteAllBytes(path, file);
+        var loaded = ImageLoader.Load(path);
+        Assert.Equal(ChannelKind.Ha, loaded.DetectedKind);
+        Assert.Equal("XISF 32-bit float", loaded.FormatDescription);
+        Assert.True(ImageLoader.IsSupported(path));
+    }
+
+    [Fact]
+    public void UInt16RgbPlanarZlibShuffledAndBigEndian()
+    {
+        int w = 7, h = 5;
+        var samples = new byte[3 * w * h * 2];
+        for (int c = 0; c < 3; c++) for (int i = 0; i < w * h; i++) BinaryPrimitives.WriteUInt16BigEndian(samples.AsSpan((c * w * h + i) * 2, 2), (ushort)(c == 0 ? 16384 : c == 1 ? 32768 : 65535));
+        var file = Xisf($"geometry=\"7:5:3\" sampleFormat=\"UInt16\" colorSpace=\"RGB\" byteOrder=\"big\" compression=\"zlib+sh:{samples.Length}:2\"", Zlib(Shuffle(samples, 2)));
+        var x = XisfReader.Read(file);
+        Assert.Equal(3, x.Planes.Count);
+        A.Close(16384f / 65535, x.Planes[0][3, 2], 1e-6f);
+        A.Close(32768f / 65535, x.Planes[1][0, 0], 1e-6f);
+        A.Close(1, x.Planes[2][6, 4], 1e-6f);
+        Assert.Equal("zlib+sh", x.Compression);
+    }
+
+    [Fact]
+    public void Float32InterleavedLz4AndBoundsRescale()
+    {
+        int w = 6, h = 4;
+        var samples = new byte[w * h * 3 * 4];
+        for (int i = 0; i < w * h; i++) for (int c = 0; c < 3; c++) BinaryPrimitives.WriteSingleLittleEndian(samples.AsSpan((i * 3 + c) * 4, 4), 100 * c + i);
+        // The last 8 bytes must repeat the 8 before them for the synthetic LZ4 match.
+        Array.Copy(samples, samples.Length - 16, samples, samples.Length - 8, 8);
+        var file = Xisf($"geometry=\"6:4:3\" sampleFormat=\"Float32\" pixelStorage=\"Normal\" bounds=\"0:400\" compression=\"lz4:{samples.Length}\"", Lz4(samples));
+        var x = XisfReader.Read(file);
+        Assert.Equal(3, x.Planes.Count);
+        A.Close(1f / 400, x.Planes[0][1, 0], 1e-6f);
+        A.Close(101f / 400, x.Planes[1][1, 0], 1e-6f);
+        A.Close(200f / 400, x.Planes[2][0, 0], 1e-6f);
+    }
+
+    [Fact]
+    public void RejectsNonXisfAndUnsupportedCompression()
+    {
+        Assert.Throws<XisfException>(() => XisfReader.Read(Encoding.ASCII.GetBytes("SIMPLE  = T")));
+        var file = Xisf("geometry=\"2:2:1\" sampleFormat=\"Float32\" compression=\"zstd:16\"", new byte[16]);
+        var e = Assert.Throws<XisfException>(() => XisfReader.Read(file));
+        Assert.Contains("zstd", e.Message);
+    }
+
+    [Fact]
+    public void RealPixInsightFiles()
+    {
+        const string dir = "/Users/basilio/Pictures/Astrophotography/_Processing/Tino/";
+        if (!File.Exists(dir + "Stack_Ha.xisf")) return;   // sample files not present
+        foreach (var (name, kind, filter) in new[] { ("Stack_Ha.xisf", ChannelKind.Ha, "Ha"), ("Stack_Sii.xisf", ChannelKind.SII, "SII") })
+        {
+            var loaded = ImageLoader.Load(dir + name);
+            Assert.Equal(6224, loaded.Width); Assert.Equal(4168, loaded.Height); Assert.Single(loaded.Planes);
+            Assert.Equal(kind, loaded.DetectedKind);
+            Assert.Equal(filter, loaded.FilterName);
+            var (lo, hi) = loaded.Planes[0].MinMax();
+            Assert.True(lo >= 0 && hi <= 1 && hi > lo);
+            Assert.Equal("M 43", loaded.Header!.String("OBJECT"));
+        }
     }
 }

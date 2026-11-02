@@ -197,9 +197,11 @@ public enum PostProcess {
         max(1, Int((log2(max(Float(width) * relativeRadius, 1))).rounded()))
     }
 
+    public static let microRadius: Float = 0.002
     public static let textureRadius: Float = 0.006
     public static let clarityRadius: Float = 0.06
     public static let dehazeRadius: Float = 0.25
+    public static let lowFrequencyRadius: Float = 0.5
 
     /// Star cap of a luminance: its 99th percentile, at least 0.15.
     static func starCap(_ y: PlanarImage) -> Float {
@@ -279,8 +281,9 @@ public enum PostProcess {
         }
     }
 
-    /// Texture (fine), clarity (mid) and dehaze (large-scale) local contrast plus sharpening,
-    /// applied to the luminance and propagated to RGB by ratio. The local-contrast radii are
+    /// Local contrast at five scales — low frequency (50 % of the width), dehaze (25 %, haze
+    /// subtraction), clarity (6 %), texture (0.6 %), micro-structures (0.2 %), applied coarse to fine —
+    /// plus sharpening, on the luminance and propagated to RGB by ratio. The local-contrast radii are
     /// relative to the width of the *whole* image so every pyramid level, a zoomed-in crop and the
     /// export agree; the sharpening radius is in full-resolution pixels and scaled by `scale`
     /// (rendered px per full-res px).
@@ -317,6 +320,9 @@ public enum PostProcess {
                 apply(t, n, pyramidBlur(starCapped(target, cap: cap), levels: levels))
             }
         }
+        if d.lowFrequency != 0 {
+            stage(relativeRadius: lowFrequencyRadius) { t, n, blur in localContrast(t, count: n, blur: blur, amount: d.lowFrequency * 1.2, darkFactor: 0.7) }
+        }
         if d.dehaze != 0 {
             let k = d.dehaze * 0.6
             stage(relativeRadius: dehazeRadius) { t, n, haze in
@@ -333,6 +339,9 @@ public enum PostProcess {
         }
         if d.texture != 0 {
             stage(relativeRadius: textureRadius) { t, n, blur in localContrast(t, count: n, blur: blur, amount: d.texture * 1.0, darkFactor: 0.5) }
+        }
+        if d.micro != 0 {
+            stage(relativeRadius: microRadius) { t, n, blur in localContrast(t, count: n, blur: blur, amount: d.micro * 1.0, darkFactor: 0.5) }
         }
         if d.sharpen > 0 {
             // Below ~0.25 px the blur is the identity and the mask vanishes (a down-sampled preview

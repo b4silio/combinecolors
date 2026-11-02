@@ -19,6 +19,7 @@ public sealed class LoadedFile
 public static class ImageLoader
 {
     public static readonly HashSet<string> FitsExtensions = new(StringComparer.OrdinalIgnoreCase) { "fits", "fit", "fts" };
+    public static readonly HashSet<string> XisfExtensions = new(StringComparer.OrdinalIgnoreCase) { "xisf" };
     public static readonly HashSet<string> RasterExtensions = new(StringComparer.OrdinalIgnoreCase) { "tif", "tiff", "png", "jpg", "jpeg" };
 
     public static string Extension(string path) => Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
@@ -26,7 +27,7 @@ public static class ImageLoader
     public static bool IsSupported(string path)
     {
         var ext = Extension(path);
-        return FitsExtensions.Contains(ext) || RasterExtensions.Contains(ext);
+        return FitsExtensions.Contains(ext) || XisfExtensions.Contains(ext) || RasterExtensions.Contains(ext);
     }
 
     public static LoadedFile Load(string path)
@@ -51,6 +52,24 @@ public static class ImageLoader
             {
                 Path = path, Planes = f.Planes, Header = f.Header, FilterName = filter, DetectedKind = kind,
                 FormatDescription = $"FITS {depth}{(f.Planes.Count > 1 ? $" ×{f.Planes.Count}" : "")}",
+            };
+        }
+        if (XisfExtensions.Contains(ext))
+        {
+            var x = XisfReader.Read(path);
+            var filter = x.FilterName;
+            var kind = x.Planes.Count == 1 ? ChannelDetection.Detect(fileName, filter) : null;
+            string depth = x.SampleFormat switch
+            {
+                "Float32" => "32-bit float",
+                "Float64" => "64-bit float",
+                "UInt8" => "8-bit",
+                _ => x.SampleFormat.Replace("UInt", "") + "-bit integer",
+            };
+            return new LoadedFile
+            {
+                Path = path, Planes = x.Planes, Header = x.Header, FilterName = filter, DetectedKind = kind,
+                FormatDescription = $"XISF {depth}{(x.Planes.Count > 1 ? $" ×{x.Planes.Count}" : "")}{(x.Compression != null ? $" ({x.Compression})" : "")}",
             };
         }
         var r = RasterReader.Read(path);

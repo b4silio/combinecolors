@@ -332,6 +332,7 @@ final class TolerantDecodingTests: XCTestCase {
         XCTAssertFalse(doc.flipped)
         XCTAssertEqual(doc.settings.detail.sharpen, 0)                                     // pre-sharpen file → off
         XCTAssertEqual(doc.settings.detail.sharpenRadius, 1.5)
+        XCTAssertEqual(doc.settings.detail.micro, 0); XCTAssertEqual(doc.settings.detail.lowFrequency, 0)   // pre-1.7 file → off
         XCTAssertEqual(doc.settings.post.saturation, 1.5)
         XCTAssertEqual(doc.settings.adjust(.oiii).gain, 2)
         XCTAssertEqual(doc.crop, PixelRect(x: 1, y: 2, width: 30, height: 40))
@@ -613,14 +614,26 @@ final class ColorBandsAndDetailTests: XCTestCase {
         for (p, q) in zip(det.image.planes, strips.planes) { XCTAssertLessThan(p.maxAbsDifference(q), 1e-4) }
         XCTAssertEqual(PostProcess.blurLevels(width: 7272, relativeRadius: 0.015), 7)
         XCTAssertEqual(PostProcess.blurLevels(width: 3636, relativeRadius: 0.015), 6)
-        // The three scales are ordered: texture < clarity < dehaze.
-        XCTAssertLessThan(PostProcess.blurLevels(width: 2000, relativeRadius: PostProcess.textureRadius), PostProcess.blurLevels(width: 2000, relativeRadius: PostProcess.clarityRadius))
-        XCTAssertLessThan(PostProcess.blurLevels(width: 2000, relativeRadius: PostProcess.clarityRadius), PostProcess.blurLevels(width: 2000, relativeRadius: PostProcess.dehazeRadius))
+        // The five scales are ordered: micro < texture < clarity < dehaze < low frequency.
+        let radii = [PostProcess.microRadius, PostProcess.textureRadius, PostProcess.clarityRadius, PostProcess.dehazeRadius, PostProcess.lowFrequencyRadius]
+        for (a, b) in zip(radii, radii.dropFirst()) {
+            XCTAssertLessThan(PostProcess.blurLevels(width: 4000, relativeRadius: a), PostProcess.blurLevels(width: 4000, relativeRadius: b))
+        }
+        // Micro-structures raise the finest high-pass more than texture does, for the same amount.
+        var mic = s; mic.detail = DetailSettings(); mic.detail.micro = 0.8
+        let mi = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: samples, settings: mic, context: ctx))
+        XCTAssertGreaterThan(highPassStd(mi.image.luma()), highPassStd(plain.image.luma()))
+        // Low frequency changes the large-scale balance (block means) and is neutral at 0.
+        var low = s; low.detail = DetailSettings(); low.detail.lowFrequency = 1
+        let lo = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: samples, settings: low, context: ctx))
+        XCTAssertGreaterThan(lo.image.r.maxAbsDifference(plain.image.r), 0.01)
+        XCTAssertTrue(DetailSettings().isNeutral)
+        XCTAssertFalse(low.detail.isNeutral)
         var tex = s; tex.detail = DetailSettings(); tex.detail.texture = 0.8
         let tx = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: samples, settings: tex, context: ctx))
         XCTAssertGreaterThan(highPassStd(tx.image.luma()), highPassStd(plain.image.luma()))
         // Settings round trip with bands and sharpening.
-        var ba = ColorBandAdjust(); ba.hue = 12; s.colorBands.set(.teals, ba); s.detail.sharpen = 0.7; s.detail.sharpenRadius = 2.5
+        var ba = ColorBandAdjust(); ba.hue = 12; s.colorBands.set(.teals, ba); s.detail.sharpen = 0.7; s.detail.sharpenRadius = 2.5; s.detail.micro = 0.3; s.detail.lowFrequency = -0.2
         XCTAssertEqual(try JSONDecoder().decode(CombineSettings.self, from: try JSONEncoder().encode(s)), s)
     }
 

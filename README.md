@@ -11,9 +11,12 @@ export at full resolution.
 ## Features
 
 * **Input**: FITS (BITPIX 8/16/32/-32/-64, BZERO/BSCALE, NAXIS3 colour cubes,
-  ROWORDER) and TIFF/PNG/JPEG (8/16-bit integer, 32-bit float) through ImageIO.
-  Channel slots are filled automatically from the FITS `FILTER` keyword or the
-  file name (`Hydrogen-alpha`, `O3`, `SII`, `_R`, `Lum`, …); unknown files ask.
+  ROWORDER), XISF (PixInsight's format: monolithic files, UInt8–64 and Float32/64
+  samples, planar or interleaved, uncompressed / zlib / LZ4, byte-shuffled or not)
+  and TIFF/PNG/JPEG (8/16-bit integer, 32-bit float) through ImageIO.
+  Channel slots are filled automatically from the FITS `FILTER` keyword (also
+  inside XISF files) or the file name (`Hydrogen-alpha`, `O3`, `SII`, `_R`,
+  `Lum`, …); unknown files ask.
 * **Dual-band splitting** (separate pre-processing step): a one-shot-colour
   image taken through an Hα/OIII (or SII/Hβ) filter is split into two
   monochrome channels with adjustable R/G/B weights and cross-talk correction;
@@ -60,8 +63,9 @@ export at full resolution.
   Without a Metal device non-local means falls back to the CPU and BM3D to
   the wavelets.
 * **Colour**: saturation, vibrance, SCNR green removal, hue rotation,
-  black/white point, gamma. **Detail**: texture (fine), clarity (mid-scale)
-  and dehaze (large-scale) local contrast, as in Camera Raw; the blurs are
+  black/white point, gamma. **Detail**: local contrast at five scales — micro-structures (0.2 % of the
+  width), texture (0.6 %), clarity (6 %), dehaze (25 %, haze subtraction) and
+  low frequency (50 %), as in Camera Raw with two extra scales for large frames; the blurs are
   taken from a star-clipped luminance so stars get no dark halos, and radii
   are relative to the image so preview and export agree. Sharpening is an
   unsharp mask with amount, radius (full-resolution pixels, so judge it at
@@ -364,5 +368,5 @@ See `PLAN.md` for the phase plan and the test matrix.
   channels; a StarNet/StarXTerminator stars-only image works best (disable the
   mask).
 * Gradients are not corrected; the normalisation assumes a flat sky.
-* Only the primary HDU of a FITS file is read; compressed FITS (`.fz`) and
-  XISF are not supported.
+* Only the primary HDU of a FITS file is read; compressed FITS (`.fz`) is not
+  supported, nor are Zstandard-compressed or distributed XISF files.

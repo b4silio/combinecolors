@@ -47,7 +47,7 @@ public sealed class ControlsStripView : Border
         scroller.AddHandler(PointerReleasedEvent, (_, _) => EndDrag(), RoutingStrategies.Tunnel);
         Child = scroller;
         Add("channels", "Channels", 250); Add("stretch", "Stretch", 262); Add("normalisation", "Normalisation", 290); Add("luminance", "Luminance", 250);
-        Add("bands", "Colour bands", 226); Add("colour", "Colour", 250); Add("denoise", "Denoise", 330); Add("detail", "Detail", 266); Add("stars", "RGB stars", 262);
+        Add("bands", "Colour bands", 226); Add("colour", "Colour", 250); Add("denoise", "Denoise", 330); Add("detail", "Detail", 500); Add("stars", "RGB stars", 262);
         model.Changed += OnChanged;
         Rebuild();
     }
@@ -394,16 +394,23 @@ public sealed class ControlsStripView : Border
     void DetailSection(StackPanel p)
     {
         const double lw = 84;
-        p.Children.Add(S("Texture", x => x.Detail.Texture, (x, v) => x.Detail.Texture = v, -1, 1, 0, help: "Fine-detail local contrast (radius ≈ 0.6 % of the width); stars are excluded from the blur to avoid dark halos.", note: "0.6%", labelWidth: lw));
-        p.Children.Add(S("Clarity", x => x.Detail.Clarity, (x, v) => x.Detail.Clarity = v, -0.5f, 2, 0, help: "Mid-tone local contrast at a broader scale (radius ≈ 6 % of the width).", note: "6%", labelWidth: lw));
-        p.Children.Add(S("Dehaze", x => x.Detail.Dehaze, (x, v) => x.Detail.Dehaze = v, -1, 1, 0, help: "Subtracts the large-scale haze component (radius ≈ 25 % of the width); negative adds haze.", note: "25%", labelWidth: lw));
-        p.Children.Add(new Separator { Margin = new Thickness(0, 3, 0, 3) });
-        p.Children.Add(S("Sharpen", x => x.Detail.Sharpen, (x, v) => x.Detail.Sharpen = v, 0, 2, 0, help: "Unsharp mask on the luminance (stars excluded from the blur). The radius is in full-resolution pixels, so judge it at 1:1 with HQ on; a fitted preview shows little of it.", labelWidth: lw));
-        p.Children.Add(S("Radius", x => x.Detail.SharpenRadius, (x, v) => x.Detail.SharpenRadius = v, 0.5f, 5, 1.5f, "0.0", help: "Sharpening radius in full-resolution pixels.", note: "px", labelWidth: lw));
-        p.Children.Add(S("Masking", x => x.Detail.SharpenMasking, (x, v) => x.Detail.SharpenMasking = v, 0, 1, 0, help: "Protects flat, noisy areas: only detail above this fraction of the noise level is sharpened (like Camera Raw's Masking).", labelWidth: lw));
+        // Two columns: local contrast by scale (fine → coarse) on the left, sharpening on the right.
+        var left = new StackPanel { Width = 238 };
+        left.Children.Add(S("Micro", x => x.Detail.Micro, (x, v) => x.Detail.Micro = v, -1, 1, 0, help: "Micro-structure local contrast, the finest scale (radius ≈ 0.2 % of the width); stars are excluded from the blur to avoid dark halos.", note: "0.2%", labelWidth: lw));
+        left.Children.Add(S("Texture", x => x.Detail.Texture, (x, v) => x.Detail.Texture = v, -1, 1, 0, help: "Fine-detail local contrast (radius ≈ 0.6 % of the width); stars are excluded from the blur to avoid dark halos.", note: "0.6%", labelWidth: lw));
+        left.Children.Add(S("Clarity", x => x.Detail.Clarity, (x, v) => x.Detail.Clarity = v, -0.5f, 2, 0, help: "Mid-tone local contrast at a broader scale (radius ≈ 6 % of the width).", note: "6%", labelWidth: lw));
+        left.Children.Add(S("Dehaze", x => x.Detail.Dehaze, (x, v) => x.Detail.Dehaze = v, -1, 1, 0, help: "Subtracts the large-scale haze component (radius ≈ 25 % of the width); negative adds haze.", note: "25%", labelWidth: lw));
+        left.Children.Add(S("Low freq.", x => x.Detail.LowFrequency, (x, v) => x.Detail.LowFrequency = v, -0.5f, 2, 0, help: "Local contrast of the largest structures (radius ≈ 50 % of the width): separates big nebula regions from the sky without touching fine detail.", note: "50%", labelWidth: lw));
+        var right = new StackPanel { Width = 238, Margin = new Thickness(8, 0, 0, 0) };
+        right.Children.Add(S("Sharpen", x => x.Detail.Sharpen, (x, v) => x.Detail.Sharpen = v, 0, 2, 0, help: "Unsharp mask on the luminance (stars excluded from the blur). The radius is in full-resolution pixels, so judge it at 1:1 with HQ on; a fitted preview shows little of it.", labelWidth: lw));
+        right.Children.Add(S("Radius", x => x.Detail.SharpenRadius, (x, v) => x.Detail.SharpenRadius = v, 0.5f, 5, 1.5f, "0.0", help: "Sharpening radius in full-resolution pixels.", note: "px", labelWidth: lw));
+        right.Children.Add(S("Masking", x => x.Detail.SharpenMasking, (x, v) => x.Detail.SharpenMasking = v, 0, 1, 0, help: "Protects flat, noisy areas: only detail above this fraction of the noise level is sharpened (like Camera Raw's Masking).", labelWidth: lw));
         var reset = Ui.SmallButton("Reset", () => model.UpdateSettings(x => x.Detail = new DetailSettings()));
         reset.HorizontalAlignment = HorizontalAlignment.Right; reset.IsEnabled = !model.Settings.Detail.Equals(new DetailSettings());
-        p.Children.Add(reset);
+        right.Children.Add(reset);
+        var columns = new StackPanel { Orientation = Orientation.Horizontal };
+        columns.Children.Add(left); columns.Children.Add(right);
+        p.Children.Add(columns);
     }
 
     // Stars
