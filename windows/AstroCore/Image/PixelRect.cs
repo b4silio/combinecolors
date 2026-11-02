@@ -122,3 +122,6 @@ public static class AutoCrop
         return new PixelRect(bx0, by0, bx1 - bx0, by1 - by0);
     }
 }
+
+/// <summary>A fractional rectangle in the pixel coordinates of some image (origin top-left).</summary>
+public readonly record struct SampleRect(double X, double Y, double Width, double Height);

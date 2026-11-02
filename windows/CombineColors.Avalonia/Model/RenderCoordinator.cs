@@ -103,15 +103,37 @@ public sealed class RenderCoordinator
             var lvl = src.Pyramid.Level(level);
             planes[k] = wholeLevel ? lvl : lvl.Cropped(x0, y0, cw, ch);
         }
-        var result = Renderer.Render(new RenderRequest(planes, req.Settings, req.Context, req.AnalysisSamples, req.FixedPostStretch, scale: (float)sc));
-        var bmp = DisplayBitmaps.Make(result.Image);
         double inv = 1 / sc;
         var rect = new Rect(x0 * inv, y0 * inv, cw * inv, ch * inv);
+        var overview = wholeLevel ? null : OverviewPlanes.Overview(req.Sources, level, x0 * inv, y0 * inv, cw * inv, ch * inv);
+        var result = Renderer.Render(new RenderRequest(planes, req.Settings, req.Context, req.AnalysisSamples, req.FixedPostStretch, scale: (float)sc,
+                                                       overview: overview?.planes, overviewRect: overview?.rect));
+        var bmp = DisplayBitmaps.Make(result.Image);
         return new PreviewFrame
         {
             Bitmap = bmp, Rgb = result.Image, Level = level, Rect = rect, Millis = result.Millis, PostStretch = result.PostStretch,
             ChannelStretch = result.ChannelStretch, Settings = req.Settings,
         };
+    }
+}
+
+/// <summary>The whole picture at a coarse level for the detail stage of cropped renders.</summary>
+static class OverviewPlanes
+{
+    /// <summary>
+    /// The whole picture at a coarse pyramid level (no finer than <paramref name="level"/>) for the
+    /// detail stage of a cropped render covering the given full-resolution rectangle, with the
+    /// crop's region in overview pixels.
+    /// </summary>
+    public static (Dictionary<ChannelKind, PlanarImage> planes, SampleRect rect)? Overview(Dictionary<ChannelKind, ChannelSource> sources, int level, double x, double y, double w, double h, int maxPixels = 300_000)
+    {
+        var any = sources.Values.FirstOrDefault();
+        if (any == null) return null;
+        int ol = Math.Max(level, any.Pyramid.LevelIndex(maxPixels));
+        double os = Math.Pow(2.0, -ol);
+        var planes = new Dictionary<ChannelKind, PlanarImage>();
+        foreach (var (k, src) in sources) planes[k] = src.Pyramid.Level(ol);
+        return (planes, new SampleRect(x * os, y * os, w * os, h * os));
     }
 }
 
@@ -162,11 +184,16 @@ public sealed class ThumbnailCoordinator
         int x0 = (int)(region.X * sc), y0 = (int)(region.Y * sc);
         int cw = Math.Max(1, (int)(region.Width * sc)), ch = Math.Max(1, (int)(region.Height * sc));
         var planes = new Dictionary<ChannelKind, PlanarImage>();
+        bool wholeLevel = true;
         foreach (var (k, src) in job.Sources)
         {
             var lvl = src.Pyramid.Level(level);
-            planes[k] = (x0 == 0 && y0 == 0 && cw == lvl.Width && ch == lvl.Height) ? lvl : lvl.Cropped(x0, y0, cw, ch);
+            bool whole = x0 == 0 && y0 == 0 && cw == lvl.Width && ch == lvl.Height;
+            wholeLevel &= whole;
+            planes[k] = whole ? lvl : lvl.Cropped(x0, y0, cw, ch);
         }
+        double inv = 1 / sc;
+        var overview = wholeLevel ? null : OverviewPlanes.Overview(job.Sources, level, x0 * inv, y0 * inv, cw * inv, ch * inv);
         foreach (var palette in job.Palettes)
         {
             bool stale;
@@ -176,7 +203,8 @@ public sealed class ThumbnailCoordinator
             settings.Select(palette);
             try
             {
-                var res = Renderer.Render(new RenderRequest(planes, settings, job.Context, job.AnalysisSamples, scale: (float)sc));
+                var res = Renderer.Render(new RenderRequest(planes, settings, job.Context, job.AnalysisSamples, scale: (float)sc,
+                                                            overview: overview?.planes, overviewRect: overview?.rect));
                 var bmp = DisplayBitmaps.Make(res.Image);
                 OnThumbnail?.Invoke(palette.Id, bmp, gen);
             }

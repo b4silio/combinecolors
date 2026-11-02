@@ -1,5 +1,14 @@
 import Foundation
 import Accelerate
+import CoreGraphics
+
+/// The whole picture at a coarse resolution, for the detail stage of a cropped render (see `PostProcess.detail`).
+public struct DetailOverview {
+    public let image: RGBImage
+    /// Region of the cropped render inside `image`, in overview pixels (fractional).
+    public let rect: CGRect
+    public init(image: RGBImage, rect: CGRect) { self.image = image; self.rect = rect }
+}
 
 /// Colour post-processing on stretched [0,1] RGB data. Everything is point-wise.
 public enum PostProcess {
@@ -192,13 +201,18 @@ public enum PostProcess {
     public static let clarityRadius: Float = 0.06
     public static let dehazeRadius: Float = 0.25
 
-    /// Luminance with the stars clipped off (99th percentile, at least 0.15): the blurs are taken
-    /// from this copy so bright stars do not dig dark halos around themselves.
-    static func starCapped(_ y: PlanarImage) -> PlanarImage {
+    /// Star cap of a luminance: its 99th percentile, at least 0.15.
+    static func starCap(_ y: PlanarImage) -> Float {
         var opts = StatsOptions(); opts.maxSamples = 200_000
         var sample = Statistics.sample(image: y, options: opts).0
         sample.sort()
-        var lo: Float = 0, hi = max(Statistics.percentile(sorted: sample, q: 0.99), 0.15)
+        return max(Statistics.percentile(sorted: sample, q: 0.99), 0.15)
+    }
+
+    /// Luminance with the stars clipped off at `cap` (see `starCap`): the blurs are taken from this
+    /// copy so bright stars do not dig dark halos around themselves.
+    static func starCapped(_ y: PlanarImage, cap: Float? = nil) -> PlanarImage {
+        var lo: Float = 0, hi = cap ?? starCap(y)
         let out = PlanarImage(width: y.width, height: y.height)
         vDSP_vclip(y.pointer, 1, &lo, &hi, out.pointer, 1, vDSP_Length(y.count))
         return out
@@ -240,8 +254,8 @@ public enum PostProcess {
     /// darkening halved, like the other scales. `sigma` is in pixels of `t`. `masking` (0…1)
     /// fades the mask out where the high-pass is below `masking × 4σ` of the high-pass noise
     /// (median absolute deviation), so flat noisy sky is left alone and edges are sharpened.
-    static func sharpen(_ t: UnsafeMutablePointer<Float>, count n: Int, source: PlanarImage, sigma: Float, amount: Float, masking: Float = 0) {
-        let blur = gaussianBlur(starCapped(source), sigma: sigma)
+    static func sharpen(_ t: UnsafeMutablePointer<Float>, count n: Int, source: PlanarImage, sigma: Float, amount: Float, masking: Float = 0, cap: Float? = nil) {
+        let blur = gaussianBlur(starCapped(source, cap: cap), sigma: sigma)
         let bp = blur.pointer
         var threshold: Float = 0
         if masking > 0 {
@@ -267,37 +281,64 @@ public enum PostProcess {
 
     /// Texture (fine), clarity (mid) and dehaze (large-scale) local contrast plus sharpening,
     /// applied to the luminance and propagated to RGB by ratio. The local-contrast radii are
-    /// relative to the image width so every pyramid level and the export agree; the sharpening
-    /// radius is in full-resolution pixels and scaled by `scale` (rendered px per full-res px).
-    public static func detail(_ img: RGBImage, settings d: DetailSettings, scale: Float = 1) {
+    /// relative to the width of the *whole* image so every pyramid level, a zoomed-in crop and the
+    /// export agree; the sharpening radius is in full-resolution pixels and scaled by `scale`
+    /// (rendered px per full-res px).
+    ///
+    /// `img` may be a crop of the picture (a zoomed-in preview). Then `overview` — the whole picture at
+    /// a coarse resolution plus the crop's position in it — provides the star cap and the large-radius
+    /// blurs: its luminance goes through the same stages, each blur is taken from it and resampled
+    /// over the crop, so the crop sees the haze and the local means of the whole picture, not of
+    /// itself. Without an overview the image is taken to be the whole picture.
+    public static func detail(_ img: RGBImage, settings d: DetailSettings, scale: Float = 1, overview: DetailOverview? = nil) {
         guard !d.isNeutral else { return }
         let n = img.width * img.height
         let y = img.luma()
         let target = y.copy()
         let t = target.pointer, yp = y.pointer
+        let ov = overview.flatMap { o -> (luma: PlanarImage, rect: CGRect)? in
+            o.rect.width > 0 && o.rect.height > 0 && o.image.width > 0 ? (o.image.luma(), o.rect) : nil
+        }
+        /// Width of the whole picture in pixels of `img`.
+        let fullWidth = ov.map { Double($0.luma.width) * Double(img.width) / $0.rect.width } ?? Double(img.width)
+
+        /// One local-contrast stage: `apply(t, n, blur)` on the target, and on the overview so the
+        /// following stages see the same picture. The blur radius is `relativeRadius × full width`;
+        /// it comes from the overview when it spans at least two overview pixels, from the target
+        /// itself otherwise (a small radius against a much larger crop).
+        func stage(relativeRadius: Float, _ apply: (UnsafeMutablePointer<Float>, Int, PlanarImage) -> Void) {
+            let cap = starCap(ov?.luma ?? target)
+            if let ov, Float(ov.luma.width) * relativeRadius >= 2 {
+                let b = pyramidBlur(starCapped(ov.luma, cap: cap), levels: blurLevels(width: ov.luma.width, relativeRadius: relativeRadius))
+                apply(t, n, b.sampled(x: ov.rect.minX, y: ov.rect.minY, width: ov.rect.width, height: ov.rect.height, toWidth: img.width, toHeight: img.height))
+                apply(ov.luma.pointer, ov.luma.count, b)
+            } else {
+                let levels = blurLevels(width: Int(fullWidth.rounded()), relativeRadius: relativeRadius)
+                apply(t, n, pyramidBlur(starCapped(target, cap: cap), levels: levels))
+            }
+        }
         if d.dehaze != 0 {
-            let haze = pyramidBlur(starCapped(target), levels: blurLevels(width: img.width, relativeRadius: dehazeRadius))
-            let hp = haze.pointer
             let k = d.dehaze * 0.6
-            for i in 0..<n {
-                // Remove a fraction of the local haze level, renormalise so bright areas stay put.
-                let v = (t[i] - k * hp[i]) / max(1 - k, 0.05)
-                t[i] = min(max(v, 0), 1)
+            stage(relativeRadius: dehazeRadius) { t, n, haze in
+                let hp = haze.pointer
+                for i in 0..<n {
+                    // Remove a fraction of the local haze level, renormalise so bright areas stay put.
+                    let v = (t[i] - k * hp[i]) / max(1 - k, 0.05)
+                    t[i] = min(max(v, 0), 1)
+                }
             }
         }
         if d.clarity != 0 {
-            let blur = pyramidBlur(starCapped(target), levels: blurLevels(width: img.width, relativeRadius: clarityRadius))
-            localContrast(t, count: n, blur: blur, amount: d.clarity * 1.2, darkFactor: 0.7)
+            stage(relativeRadius: clarityRadius) { t, n, blur in localContrast(t, count: n, blur: blur, amount: d.clarity * 1.2, darkFactor: 0.7) }
         }
         if d.texture != 0 {
-            let blur = pyramidBlur(starCapped(target), levels: blurLevels(width: img.width, relativeRadius: textureRadius))
-            localContrast(t, count: n, blur: blur, amount: d.texture * 1.0, darkFactor: 0.5)
+            stage(relativeRadius: textureRadius) { t, n, blur in localContrast(t, count: n, blur: blur, amount: d.texture * 1.0, darkFactor: 0.5) }
         }
         if d.sharpen > 0 {
             // Below ~0.25 px the blur is the identity and the mask vanishes (a down-sampled preview
             // of a 1 px sharpening legitimately shows nothing).
             let sigma = d.sharpenRadius * scale
-            if sigma >= 0.25 { sharpen(t, count: n, source: target, sigma: sigma, amount: d.sharpen, masking: d.sharpenMasking) }
+            if sigma >= 0.25 { sharpen(t, count: n, source: target, sigma: sigma, amount: d.sharpen, masking: d.sharpenMasking, cap: ov.map { starCap($0.luma) }) }
         }
         let r = img.r.pointer, g = img.g.pointer, b = img.b.pointer
         for i in 0..<n {

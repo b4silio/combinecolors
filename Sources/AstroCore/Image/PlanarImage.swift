@@ -141,6 +141,46 @@ public final class PlanarImage {
         return out
     }
 
+    /// Bilinear resample of a fractional region of this image (own pixel coordinates, origin
+    /// top-left) to `nw × nh`; samples beyond the edges are clamped to the edge.
+    public func sampled(x: Double, y: Double, width rw: Double, height rh: Double, toWidth nw: Int, toHeight nh: Int) -> PlanarImage {
+        let out = PlanarImage(width: nw, height: nh)
+        guard nw > 0, nh > 0, width > 0, height > 0 else { return out }
+        let sx = rw / Double(nw), sy = rh / Double(nh)
+        // Column indices (1-based for vDSP_vgathr) and weights, shared by every row.
+        var i0 = [vDSP_Length](repeating: 1, count: nw), i1 = i0
+        var fx = [Float](repeating: 0, count: nw), gx = fx
+        for ox in 0..<nw {
+            let cx = min(max(x + (Double(ox) + 0.5) * sx - 0.5, 0), Double(width - 1))
+            let c0 = Int(cx.rounded(.down)), c1 = min(c0 + 1, width - 1)
+            i0[ox] = vDSP_Length(c0 + 1); i1[ox] = vDSP_Length(c1 + 1)
+            fx[ox] = Float(cx - Double(c0)); gx[ox] = 1 - fx[ox]
+        }
+        let scratch = UnsafeMutablePointer<Float>.allocate(capacity: 2 * nw)
+        defer { scratch.deallocate() }
+        let n = vDSP_Length(nw)
+        // dst = row[i0]·gx + row[i1]·fx
+        func interpolate(row: UnsafeMutablePointer<Float>, into dst: UnsafeMutablePointer<Float>) {
+            vDSP_vgathr(row, i0, 1, dst, 1, n)
+            vDSP_vmul(dst, 1, gx, 1, dst, 1, n)
+            vDSP_vgathr(row, i1, 1, scratch + nw, 1, n)
+            vDSP_vma(scratch + nw, 1, fx, 1, dst, 1, dst, 1, n)
+        }
+        for oy in 0..<nh {
+            let cy = min(max(y + (Double(oy) + 0.5) * sy - 0.5, 0), Double(height - 1))
+            let r0 = Int(cy.rounded(.down)), r1 = min(r0 + 1, height - 1)
+            let wy = Float(cy - Double(r0))
+            let dst = out.pointer + oy * nw
+            interpolate(row: pointer + r0 * width, into: dst)
+            if wy > 0 && r1 != r0 {
+                interpolate(row: pointer + r1 * width, into: scratch)
+                var w0 = 1 - wy, w1 = wy
+                vDSP_vsmsma(dst, 1, &w0, scratch, 1, &w1, dst, 1, n)
+            }
+        }
+        return out
+    }
+
     // MARK: - Simple whole-image arithmetic helpers (in place)
 
     public func clamp(min lo: Float, max hi: Float) {

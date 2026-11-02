@@ -581,6 +581,91 @@ public class MonochromeModeTests
 
 public class ColorBandsAndDetailTests
 {
+    static float MeanAbs(PlanarImage a, PlanarImage b)
+    {
+        double sum = 0;
+        for (int i = 0; i < a.Count; i++) sum += Math.Abs(a.Data[i] - b.Data[i]);
+        return (float)(sum / a.Count);
+    }
+
+    static RGBImage Rgb(PlanarImage p) => new(p.Copy(), p.Copy(), p.Copy());
+
+    [Fact]
+    public void DetailOnCropWithOverviewMatchesWholePicture()
+    {
+        // A large soft blob on a sloped background: the dehaze and clarity radii span most of the picture.
+        int w = 1024, h = 768;
+        var baseImg = new PlanarImage(w, h);
+        for (int y = 0; y < h; y++) for (int x = 0; x < w; x++)
+        {
+            float dx = x - 600, dy = y - 400;
+            baseImg[x, y] = 0.15f + 0.1f * x / w + 0.6f * MathF.Exp(-(dx * dx + dy * dy) / (2 * 120 * 120));
+        }
+        var d = new DetailSettings { Dehaze = 0.6f, Clarity = 1, Texture = 0.5f };
+        var whole = Rgb(baseImg);
+        PostProcess.Detail(whole, d);
+        // The zoomed-in preview renders a crop around the blob on its own …
+        int cx = 480, cy = 300, cw = 256, ch = 192;
+        var crop = baseImg.Cropped(cx, cy, cw, ch);
+        var alone = Rgb(crop);
+        PostProcess.Detail(alone, d);
+        // … or with the whole picture at 1/4 resolution as overview.
+        var overview = Rgb(baseImg.Downsampled2x().Downsampled2x());
+        var withOverview = Rgb(crop);
+        PostProcess.Detail(withOverview, d, 1, new DetailOverview(overview, new SampleRect(cx / 4.0, cy / 4.0, cw / 4.0, ch / 4.0)));
+        var reference = whole.R.Cropped(cx, cy, cw, ch);
+        float errAlone = MeanAbs(alone.R, reference), errOverview = MeanAbs(withOverview.R, reference);
+        Assert.True(errOverview < 0.01f, $"crop + overview should reproduce the whole picture ({errOverview})");
+        Assert.True(errAlone > 4 * errOverview, $"a crop processed on its own differs ({errAlone} vs {errOverview})");
+    }
+
+    [Fact]
+    public void CroppedRenderWithOverviewMatchesWholeRender()
+    {
+        var sources = new Dictionary<ChannelKind, ChannelSource> { [ChannelKind.Ha] = Synth.Source(ChannelKind.Ha, width: 512, height: 384), [ChannelKind.OIII] = Synth.Source(ChannelKind.OIII, 0.4f, 2, 512, 384) };
+        var s = new CombineSettings(); s.Select(Palettes.Palette("hoo")!);
+        s.Detail.Dehaze = 0.8f; s.Detail.Clarity = 1;
+        var ctx = RenderContext.Make(s.Normalization, sources);
+        var samples = Renderer.AnalysisSamples(sources);
+        var whole = Renderer.Render(new RenderRequest(sources.ToDictionary(kv => kv.Key, kv => kv.Value.Image), s, ctx, samples));
+        int cx = 200, cy = 120, cw = 160, ch = 120;
+        var planes = sources.ToDictionary(kv => kv.Key, kv => kv.Value.Image.Cropped(cx, cy, cw, ch));
+        var alone = Renderer.Render(new RenderRequest(planes, s, ctx, samples));
+        var overview = sources.ToDictionary(kv => kv.Key, kv => kv.Value.Pyramid.Level(2));
+        var rect = new SampleRect(cx / 4.0, cy / 4.0, cw / 4.0, ch / 4.0);
+        var withOverview = Renderer.Render(new RenderRequest(planes, s, ctx, samples, overview: overview, overviewRect: rect));
+        for (int i = 0; i < 3; i++)
+        {
+            var reference = whole.Image.Planes[i].Cropped(cx, cy, cw, ch);
+            float errAlone = MeanAbs(alone.Image.Planes[i], reference), errOverview = MeanAbs(withOverview.Image.Planes[i], reference);
+            Assert.True(errOverview < 0.01f, $"plane {i}: {errOverview}");
+            Assert.True(errOverview < errAlone, $"plane {i}: {errOverview} vs {errAlone}");
+        }
+        // Without detail the overview changes nothing.
+        s.Detail = new DetailSettings();
+        var a = Renderer.Render(new RenderRequest(planes, s, ctx, samples));
+        var b = Renderer.Render(new RenderRequest(planes, s, ctx, samples, overview: overview, overviewRect: rect));
+        for (int i = 0; i < 3; i++) Assert.Equal(0, a.Image.Planes[i].MaxAbsDifference(b.Image.Planes[i]));
+    }
+
+    [Fact]
+    public void SampledRegionMatchesCropAndBilinearMidpoints()
+    {
+        var p = new PlanarImage(8, 6);
+        for (int y = 0; y < 6; y++) for (int x = 0; x < 8; x++) p[x, y] = x + 10 * y;
+        // Integer region at the same size is a plain crop.
+        var c = p.Sampled(2, 1, 4, 3, 4, 3);
+        Assert.Equal(0, c.MaxAbsDifference(p.Cropped(2, 1, 4, 3)));
+        // Half-pixel offset samples the midpoints of a linear ramp.
+        var m = p.Sampled(2.5, 1.5, 2, 2, 2, 2);
+        A.Close(2.5f + 15, m[0, 0], 1e-5f);
+        A.Close(3.5f + 25, m[1, 1], 1e-5f);
+        // Upsampling a region keeps the ramp (centres of the output pixels).
+        var u = p.Sampled(2, 1, 2, 2, 4, 4);
+        A.Close(1.75f + 10 * 0.75f, u[0, 0], 1e-5f);
+        A.Close(3.25f + 10 * 2.25f, u[3, 3], 1e-5f);
+    }
+
     [Fact]
     public void HslRoundTrip()
     {

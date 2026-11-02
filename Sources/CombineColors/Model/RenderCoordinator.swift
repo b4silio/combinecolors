@@ -92,11 +92,24 @@ final class RenderCoordinator {
             let lvl = src.pyramid.level(level)
             planes[k] = wholeLevel ? lvl : lvl.cropped(x: x0, y: y0, width: cw, height: ch)
         }
-        let result = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: req.analysisSamples, settings: req.settings, context: req.context, fixedPostStretch: req.fixedPostStretch, scale: Float(s)))
-        guard let cg = RasterWriter.makeDisplayImage(rgb: result.image) else { throw RenderError.noOutput }
         let inv = 1 / s
         let rect = CGRect(x: Double(x0) * inv, y: Double(y0) * inv, width: Double(cw) * inv, height: Double(ch) * inv)
+        let overview = wholeLevel ? nil : RenderCoordinator.overview(sources: req.sources, level: level, rect: rect)
+        let result = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: req.analysisSamples, settings: req.settings, context: req.context, fixedPostStretch: req.fixedPostStretch, scale: Float(s),
+                                                       overview: overview?.planes, overviewRect: overview?.rect))
+        guard let cg = RasterWriter.makeDisplayImage(rgb: result.image) else { throw RenderError.noOutput }
         return PreviewFrame(cgImage: cg, rgb: result.image, level: level, rect: rect, millis: result.millis, postStretch: result.postStretch, channelStretch: result.channelStretch, settings: req.settings)
+    }
+}
+
+extension RenderCoordinator {
+    /// The whole picture at a coarse pyramid level (no finer than `level`) for the detail stage of a
+    /// cropped render covering `rect` (full-resolution pixels), with the crop's region in overview pixels.
+    static func overview(sources: [ChannelKind: ChannelSource], level: Int, rect: CGRect, maxPixels: Int = 300_000) -> (planes: [ChannelKind: PlanarImage], rect: CGRect)? {
+        guard let any = sources.values.first else { return nil }
+        let ol = max(level, any.pyramid.levelIndex(maxPixels: maxPixels))
+        let os = pow(2.0, Double(-ol))
+        return (sources.mapValues { $0.pyramid.level(ol) }, CGRect(x: rect.minX * os, y: rect.minY * os, width: rect.width * os, height: rect.height * os))
     }
 }
 
@@ -136,16 +149,22 @@ final class ThumbnailCoordinator {
             let x0 = Int(region.minX * s), y0 = Int(region.minY * s)
             let cw = max(1, Int(region.width * s)), ch = max(1, Int(region.height * s))
             var planes: [ChannelKind: PlanarImage] = [:]
+            var wholeLevel = true
             for (k, src) in job.sources {
                 let lvl = src.pyramid.level(level)
-                planes[k] = (x0 == 0 && y0 == 0 && cw == lvl.width && ch == lvl.height) ? lvl : lvl.cropped(x: x0, y: y0, width: cw, height: ch)
+                let whole = x0 == 0 && y0 == 0 && cw == lvl.width && ch == lvl.height
+                wholeLevel = wholeLevel && whole
+                planes[k] = whole ? lvl : lvl.cropped(x: x0, y: y0, width: cw, height: ch)
             }
+            let inv = 1 / s
+            let overview = wholeLevel ? nil : RenderCoordinator.overview(sources: job.sources, level: level, rect: CGRect(x: Double(x0) * inv, y: Double(y0) * inv, width: Double(cw) * inv, height: Double(ch) * inv))
             for palette in job.palettes {
                 self.lock.lock(); let stale = gen != self.generation; self.lock.unlock()
                 if stale { return }
                 var settings = job.settings
                 settings.select(palette: palette)
-                guard let res = try? Renderer.render(RenderRequest(planes: planes, analysisPlanes: job.analysisSamples, settings: settings, context: job.context, scale: Float(s))),
+                guard let res = try? Renderer.render(RenderRequest(planes: planes, analysisPlanes: job.analysisSamples, settings: settings, context: job.context, scale: Float(s),
+                                                                   overview: overview?.planes, overviewRect: overview?.rect)),
                       let cg = RasterWriter.makeDisplayImage(rgb: res.image) else { continue }
                 DispatchQueue.main.async { self.onThumbnail?(palette.id, cg, gen) }
             }

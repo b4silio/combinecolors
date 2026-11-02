@@ -178,6 +178,45 @@ public sealed class PlanarImage
     /// <summary>Resample to an arbitrary size (bilinear, box-reduced first when shrinking a lot).</summary>
     public PlanarImage Resized(int nw, int nh) => Resample.Resize(this, nw, nh);
 
+    /// <summary>
+    /// Bilinear resample of a fractional region of this image (own pixel coordinates, origin
+    /// top-left) to nw × nh; samples beyond the edges are clamped to the edge.
+    /// </summary>
+    public PlanarImage Sampled(double x, double y, double rw, double rh, int nw, int nh)
+    {
+        var out_ = new PlanarImage(Math.Max(nw, 0), Math.Max(nh, 0));
+        if (nw <= 0 || nh <= 0 || Width <= 0 || Height <= 0) return out_;
+        double sx = rw / nw, sy = rh / nh;
+        int w = Width, h = Height;
+        // Column indices and weights, shared by every row.
+        var i0 = new int[nw]; var i1 = new int[nw]; var fx = new float[nw];
+        for (int ox = 0; ox < nw; ox++)
+        {
+            double cx = Math.Min(Math.Max(x + (ox + 0.5) * sx - 0.5, 0), w - 1);
+            int c0 = (int)Math.Floor(cx);
+            i0[ox] = c0; i1[ox] = Math.Min(c0 + 1, w - 1); fx[ox] = (float)(cx - c0);
+        }
+        var src = Data; var dst = out_.Data;
+        Par.Rows(nh, nw * 4, (ya, yb) =>
+        {
+            for (int oy = ya; oy < yb; oy++)
+            {
+                double cy = Math.Min(Math.Max(y + (oy + 0.5) * sy - 0.5, 0), h - 1);
+                int r0 = (int)Math.Floor(cy), r1 = Math.Min(r0 + 1, h - 1);
+                float wy = (float)(cy - r0), gy = 1 - wy;
+                int a = r0 * w, b = r1 * w, o = oy * nw;
+                for (int ox = 0; ox < nw; ox++)
+                {
+                    float f = fx[ox], g = 1 - f;
+                    float top = src[a + i0[ox]] * g + src[a + i1[ox]] * f;
+                    float bottom = src[b + i0[ox]] * g + src[b + i1[ox]] * f;
+                    dst[o + ox] = top * gy + bottom * wy;
+                }
+            }
+        });
+        return out_;
+    }
+
     // Simple whole-image arithmetic helpers (in place)
 
     public void Clamp(float lo, float hi) => Vec.Clip(Data, lo, hi, Data);

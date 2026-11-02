@@ -519,6 +519,79 @@ final class ColorBandsAndDetailTests: XCTestCase {
         XCTAssertGreaterThan(lum[128, 128], 0.9)
     }
 
+    func testDetailOnCropWithOverviewMatchesWholePicture() {
+        // A large soft blob on a sloped background: the dehaze and clarity radii span most of the picture.
+        let w = 1024, h = 768
+        let base = PlanarImage(width: w, height: h)
+        for y in 0..<h { for x in 0..<w {
+            let dx = Float(x - 600), dy = Float(y - 400)
+            base[x, y] = 0.15 + 0.1 * Float(x) / Float(w) + 0.6 * exp(-(dx * dx + dy * dy) / (2 * 120 * 120))
+        } }
+        func rgb(_ p: PlanarImage) -> RGBImage { RGBImage(r: p.copy(), g: p.copy(), b: p.copy()) }
+        var d = DetailSettings(); d.dehaze = 0.6; d.clarity = 1; d.texture = 0.5
+        let whole = rgb(base)
+        PostProcess.detail(whole, settings: d)
+        // The zoomed-in preview renders a crop around the blob on its own …
+        let cx = 480, cy = 300, cw = 256, ch = 192
+        let crop = base.cropped(x: cx, y: cy, width: cw, height: ch)
+        let alone = rgb(crop)
+        PostProcess.detail(alone, settings: d)
+        // … or with the whole picture at 1/4 resolution as overview.
+        let overview = rgb(base.downsampled2x().downsampled2x())
+        let withOverview = rgb(crop)
+        PostProcess.detail(withOverview, settings: d, overview: DetailOverview(image: overview, rect: CGRect(x: Double(cx) / 4, y: Double(cy) / 4, width: Double(cw) / 4, height: Double(ch) / 4)))
+        let reference = whole.r.cropped(x: cx, y: cy, width: cw, height: ch)
+        func meanAbs(_ a: PlanarImage, _ b: PlanarImage) -> Float { var s: Float = 0; for i in 0..<a.count { s += abs(a.pointer[i] - b.pointer[i]) }; return s / Float(a.count) }
+        let errAlone = meanAbs(alone.r, reference), errOverview = meanAbs(withOverview.r, reference)
+        print("DETAILERR alone=\(errAlone) overview=\(errOverview)")
+        XCTAssertLessThan(errOverview, 0.01, "crop + overview should reproduce the whole picture")
+        XCTAssertGreaterThan(errAlone, 4 * errOverview, "a crop processed on its own differs (radii relative to the crop, haze of the crop)")
+    }
+
+    func testCroppedRenderWithOverviewMatchesWholeRender() throws {
+        let sources: [ChannelKind: ChannelSource] = [.ha: Synth.source(.ha, width: 512, height: 384), .oiii: Synth.source(.oiii, scale: 0.4, seed: 2, width: 512, height: 384)]
+        var s = CombineSettings(); s.select(palette: Palettes.palette(id: "hoo")!)
+        s.detail.dehaze = 0.8; s.detail.clarity = 1
+        let ctx = RenderContext.make(settings: s.normalization, sources: sources)
+        let samples = Renderer.analysisSamples(sources: sources)
+        let whole = try Renderer.render(RenderRequest(planes: sources.mapValues { $0.image }, analysisPlanes: samples, settings: s, context: ctx))
+        let cx = 200, cy = 120, cw = 160, ch = 120
+        let planes = sources.mapValues { $0.image.cropped(x: cx, y: cy, width: cw, height: ch) }
+        let alone = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: samples, settings: s, context: ctx))
+        let overview = sources.mapValues { $0.pyramid.level(2) }
+        let rect = CGRect(x: Double(cx) / 4, y: Double(cy) / 4, width: Double(cw) / 4, height: Double(ch) / 4)
+        let withOverview = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: samples, settings: s, context: ctx, overview: overview, overviewRect: rect))
+        func meanAbs(_ a: PlanarImage, _ b: PlanarImage) -> Float { var s: Float = 0; for i in 0..<a.count { s += abs(a.pointer[i] - b.pointer[i]) }; return s / Float(a.count) }
+        for (i, p) in whole.image.planes.enumerated() {
+            let reference = p.cropped(x: cx, y: cy, width: cw, height: ch)
+            let errAlone = meanAbs(alone.image.planes[i], reference), errOverview = meanAbs(withOverview.image.planes[i], reference)
+            print("RENDERERR plane \(i) alone=\(errAlone) overview=\(errOverview)")
+            XCTAssertLessThan(errOverview, 0.01)
+            XCTAssertLessThan(errOverview, errAlone)
+        }
+        // Without detail the overview changes nothing.
+        s.detail = DetailSettings()
+        let a = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: samples, settings: s, context: ctx))
+        let b = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: samples, settings: s, context: ctx, overview: overview, overviewRect: rect))
+        for (p, q) in zip(a.image.planes, b.image.planes) { XCTAssertEqual(p.maxAbsDifference(q), 0) }
+    }
+
+    func testSampledRegionMatchesCropAndBilinearMidpoints() {
+        let p = PlanarImage(width: 8, height: 6)
+        for y in 0..<6 { for x in 0..<8 { p[x, y] = Float(x) + 10 * Float(y) } }
+        // Integer region at the same size is a plain crop.
+        let c = p.sampled(x: 2, y: 1, width: 4, height: 3, toWidth: 4, toHeight: 3)
+        XCTAssertEqual(c.maxAbsDifference(p.cropped(x: 2, y: 1, width: 4, height: 3)), 0)
+        // Half-pixel offset samples the midpoints of a linear ramp.
+        let m = p.sampled(x: 2.5, y: 1.5, width: 2, height: 2, toWidth: 2, toHeight: 2)
+        XCTAssertEqual(m[0, 0], 2.5 + 15, accuracy: 1e-5)
+        XCTAssertEqual(m[1, 1], 3.5 + 25, accuracy: 1e-5)
+        // Upsampling a region keeps the ramp (centres of the output pixels).
+        let u = p.sampled(x: 2, y: 1, width: 2, height: 2, toWidth: 4, toHeight: 4)
+        XCTAssertEqual(u[0, 0], 1.75 + 10 * 0.75, accuracy: 1e-5)
+        XCTAssertEqual(u[3, 3], 3.25 + 10 * 2.25, accuracy: 1e-5)
+    }
+
     func testDetailChangesLocalContrastAndStripsMatch() throws {
         let sources: [ChannelKind: ChannelSource] = [.ha: Synth.source(.ha), .oiii: Synth.source(.oiii, scale: 0.4, seed: 2)]
         let planes = sources.mapValues { $0.image }

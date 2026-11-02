@@ -5,6 +5,10 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 (`scripts/bump.sh`). The version lives in `VERSION` and is stamped into the app at build time;
 `scripts/release.sh` tags it and publishes the DMG as a GitHub release.
 
+## [1.6.2] – 2026-11-02
+
+- Zoomed-in preview matches the fit view and the export: the Detail stage (Dehaze, Clarity, Texture) of a cropped render takes its radii, haze and star cap from the whole picture (coarse overview) instead of the visible crop, so zooming no longer changes the look (beta report); Mac, Windows and Linux
+
 ## [1.6.1] – 2026-11-02
 
 - Gradient / dust editors and the channel peek show the channel's data with the stretch only (no gain / offset, normalisation, Detail, Denoise or Colour bands): editing a gradient no longer needs Reset all

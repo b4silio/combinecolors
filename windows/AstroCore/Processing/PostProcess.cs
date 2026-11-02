@@ -1,5 +1,14 @@
 namespace AstroCore;
 
+/// <summary>The whole picture at a coarse resolution, for the detail stage of a cropped render (see <see cref="PostProcess.Detail"/>).</summary>
+public sealed class DetailOverview
+{
+    public RGBImage Image { get; }
+    /// <summary>Region of the cropped render inside <see cref="Image"/>, in overview pixels (fractional).</summary>
+    public SampleRect Rect { get; }
+    public DetailOverview(RGBImage image, SampleRect rect) { Image = image; Rect = rect; }
+}
+
 /// <summary>Colour post-processing on stretched [0,1] RGB data. Everything is point-wise.</summary>
 public static class PostProcess
 {
@@ -212,16 +221,22 @@ public static class PostProcess
     public const float ClarityRadius = 0.06f;
     public const float DehazeRadius = 0.25f;
 
-    /// <summary>
-    /// Luminance with the stars clipped off (99th percentile, at least 0.15): the blurs are taken
-    /// from this copy so bright stars do not dig dark halos around themselves.
-    /// </summary>
-    static PlanarImage StarCapped(PlanarImage y)
+    /// <summary>Star cap of a luminance: its 99th percentile, at least 0.15.</summary>
+    static float StarCap(PlanarImage y)
     {
         var opts = new StatsOptions { MaxSamples = 200_000 };
         var sample = Statistics.Sample(y, opts).sample;
         Array.Sort(sample);
-        float hi = MathF.Max(Statistics.Percentile(sample, 0.99), 0.15f);
+        return MathF.Max(Statistics.Percentile(sample, 0.99), 0.15f);
+    }
+
+    /// <summary>
+    /// Luminance with the stars clipped off at <paramref name="cap"/> (see <see cref="StarCap"/>):
+    /// the blurs are taken from this copy so bright stars do not dig dark halos around themselves.
+    /// </summary>
+    static PlanarImage StarCapped(PlanarImage y, float? cap = null)
+    {
+        float hi = cap ?? StarCap(y);
         var out_ = PlanarImage.Uninitialized(y.Width, y.Height);
         Vec.Clip(y.Data, 0, hi, out_.Data);
         return out_;
@@ -266,9 +281,9 @@ public static class PostProcess
     /// masking × 4σ of the high-pass noise (median absolute deviation), so flat noisy sky is left
     /// alone and edges are sharpened.
     /// </summary>
-    static void Sharpen(float[] t, int n, int width, PlanarImage source, float sigma, float amount, float masking = 0)
+    static void Sharpen(float[] t, int n, int width, PlanarImage source, float sigma, float amount, float masking = 0, float? cap = null)
     {
-        var blur = GaussianBlur(StarCapped(source), sigma);
+        var blur = GaussianBlur(StarCapped(source, cap), sigma);
         var bp = blur.Data;
         float threshold = 0;
         if (masking > 0)
@@ -303,48 +318,78 @@ public static class PostProcess
     /// <summary>
     /// Texture (fine), clarity (mid) and dehaze (large-scale) local contrast plus sharpening,
     /// applied to the luminance and propagated to RGB by ratio. The local-contrast radii are
-    /// relative to the image width so every pyramid level and the export agree; the sharpening
-    /// radius is in full-resolution pixels and scaled by <paramref name="scale"/> (rendered px per full-res px).
+    /// relative to the width of the <em>whole</em> image so every pyramid level, a zoomed-in crop
+    /// and the export agree; the sharpening radius is in full-resolution pixels and scaled by
+    /// <paramref name="scale"/> (rendered px per full-res px).
+    /// <para>
+    /// <paramref name="img"/> may be a crop of the picture (a zoomed-in preview). Then
+    /// <paramref name="overview"/> — the whole picture at a coarse resolution plus the crop's position
+    /// in it — provides the star cap and the large-radius blurs: its luminance goes through the same
+    /// stages, each blur is taken from it and resampled over the crop, so the crop sees the haze and
+    /// the local means of the whole picture, not of itself. Without an overview the image is taken
+    /// to be the whole picture.
+    /// </para>
     /// </summary>
-    public static void Detail(RGBImage img, DetailSettings d, float scale = 1)
+    public static void Detail(RGBImage img, DetailSettings d, float scale = 1, DetailOverview? overview = null)
     {
         if (d.IsNeutral) return;
         int n = img.Width * img.Height, w = img.Width;
         var y = img.Luma();
         var target = y.Copy();
         var t = target.Data; var yp = y.Data;
+        PlanarImage? ovLuma = null; SampleRect ovRect = default;
+        if (overview != null && overview.Rect.Width > 0 && overview.Rect.Height > 0 && overview.Image.Width > 0)
+        {
+            ovLuma = overview.Image.Luma(); ovRect = overview.Rect;
+        }
+        // Width of the whole picture in pixels of img.
+        double fullWidth = ovLuma != null ? ovLuma.Width * (double)w / ovRect.Width : w;
+
+        // One local-contrast stage: apply(t, n, width, blur) on the target, and on the overview so the
+        // following stages see the same picture. The blur radius is relativeRadius × full width; it
+        // comes from the overview when it spans at least two overview pixels, from the target itself
+        // otherwise (a small radius against a much larger crop).
+        void Stage(float relativeRadius, Action<float[], int, int, PlanarImage> apply)
+        {
+            float cap = StarCap(ovLuma ?? target);
+            if (ovLuma != null && ovLuma.Width * relativeRadius >= 2)
+            {
+                var b = PyramidBlur(StarCapped(ovLuma, cap), BlurLevels(ovLuma.Width, relativeRadius));
+                apply(t, n, w, b.Sampled(ovRect.X, ovRect.Y, ovRect.Width, ovRect.Height, img.Width, img.Height));
+                apply(ovLuma.Data, ovLuma.Count, ovLuma.Width, b);
+            }
+            else
+            {
+                int levels = BlurLevels((int)Math.Round(fullWidth), relativeRadius);
+                apply(t, n, w, PyramidBlur(StarCapped(target, cap), levels));
+            }
+        }
         if (d.Dehaze != 0)
         {
-            var haze = PyramidBlur(StarCapped(target), BlurLevels(img.Width, DehazeRadius));
-            var hp = haze.Data;
             float k = d.Dehaze * 0.6f;
             float inv = 1 / MathF.Max(1 - k, 0.05f);
-            Par.Rows(img.Height, w * 2, (y0, y1) =>
+            Stage(DehazeRadius, (t, n, width, haze) =>
             {
-                for (int i = y0 * w; i < y1 * w; i++)
+                var hp = haze.Data;
+                Par.Rows(n / width, width * 2, (y0, y1) =>
                 {
-                    // Remove a fraction of the local haze level, renormalise so bright areas stay put.
-                    float v = (t[i] - k * hp[i]) * inv;
-                    t[i] = MathF.Min(MathF.Max(v, 0), 1);
-                }
+                    for (int i = y0 * width; i < y1 * width; i++)
+                    {
+                        // Remove a fraction of the local haze level, renormalise so bright areas stay put.
+                        float v = (t[i] - k * hp[i]) * inv;
+                        t[i] = MathF.Min(MathF.Max(v, 0), 1);
+                    }
+                });
             });
         }
-        if (d.Clarity != 0)
-        {
-            var blur = PyramidBlur(StarCapped(target), BlurLevels(img.Width, ClarityRadius));
-            LocalContrast(t, n, w, blur, d.Clarity * 1.2f, 0.7f);
-        }
-        if (d.Texture != 0)
-        {
-            var blur = PyramidBlur(StarCapped(target), BlurLevels(img.Width, TextureRadius));
-            LocalContrast(t, n, w, blur, d.Texture * 1.0f, 0.5f);
-        }
+        if (d.Clarity != 0) Stage(ClarityRadius, (t, n, width, blur) => LocalContrast(t, n, width, blur, d.Clarity * 1.2f, 0.7f));
+        if (d.Texture != 0) Stage(TextureRadius, (t, n, width, blur) => LocalContrast(t, n, width, blur, d.Texture * 1.0f, 0.5f));
         if (d.Sharpen > 0)
         {
             // Below ~0.25 px the blur is the identity and the mask vanishes (a down-sampled preview
             // of a 1 px sharpening legitimately shows nothing).
             float sigma = d.SharpenRadius * scale;
-            if (sigma >= 0.25f) Sharpen(t, n, w, target, sigma, d.Sharpen, d.SharpenMasking);
+            if (sigma >= 0.25f) Sharpen(t, n, w, target, sigma, d.Sharpen, d.SharpenMasking, ovLuma != null ? StarCap(ovLuma) : null);
         }
         var r = img.R.Data; var g = img.G.Data; var b = img.B.Data;
         Par.Rows(img.Height, w * 4, (y0, y1) =>

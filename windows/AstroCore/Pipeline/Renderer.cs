@@ -69,11 +69,21 @@ public sealed class RenderRequest
     /// pixel-based radii such as the sharpening radius are scaled by it.
     /// </summary>
     public float Scale = 1;
+    /// <summary>
+    /// The whole picture at a coarse pyramid level (every channel of <see cref="Planes"/>) when the
+    /// planes are a crop of it: the detail stage takes its star cap and large-radius blurs from there,
+    /// so a zoomed-in preview agrees with the whole picture and the export. <see cref="OverviewRect"/>
+    /// is the region covered by the planes, in overview pixels.
+    /// </summary>
+    public Dictionary<ChannelKind, PlanarImage>? Overview;
+    public SampleRect? OverviewRect;
 
     public RenderRequest(Dictionary<ChannelKind, PlanarImage> planes, CombineSettings settings, RenderContext context,
-                         Dictionary<ChannelKind, PlanarImage>? analysisPlanes = null, List<ResolvedStretch>? fixedPostStretch = null, bool applyDetail = true, float scale = 1)
+                         Dictionary<ChannelKind, PlanarImage>? analysisPlanes = null, List<ResolvedStretch>? fixedPostStretch = null, bool applyDetail = true, float scale = 1,
+                         Dictionary<ChannelKind, PlanarImage>? overview = null, SampleRect? overviewRect = null)
     {
         Planes = planes; AnalysisPlanes = analysisPlanes; Settings = settings; Context = context; FixedPostStretch = fixedPostStretch; ApplyDetail = applyDetail; Scale = scale;
+        Overview = overview; OverviewRect = overviewRect;
     }
 }
 
@@ -101,12 +111,7 @@ public static class Renderer
         var missing = MissingChannels(s, available);
         if (missing.Count > 0) throw RenderException.MissingChannels(missing);
         if (s.Mode == CombineMode.Monochrome && s.MonochromeChannels(available).Count == 0) throw RenderException.NoOutput();
-        var anyPlane = req.Planes.Values.FirstOrDefault() ?? throw RenderException.NoOutput();
-        int w = anyPlane.Width, h = anyPlane.Height;
-
-        // 1. Normalised linear channels (+ gain, pedestal).
-        var linear = new Dictionary<ChannelKind, PlanarImage>();
-        var linStats = new Dictionary<ChannelKind, ChannelStats>();
+        if (req.Planes.Count == 0) throw RenderException.NoOutput();
         var needed = s.AllChannels(available); needed.IntersectWith(available);
         Expr? lumExpr = null;
         if (s.LuminanceApplies && s.Luminance.ResolvedExpression(available) is string src)
@@ -114,9 +119,47 @@ public static class Renderer
             try { lumExpr = PixelMath.Parse(src); }
             catch (PixelMathException e) { throw RenderException.PixelMath(new PixelMathException("Luminance: " + e.Detail, e.Position)); }
         }
+        var main = Develop(req.Planes, s, req.Context, available, needed, lumExpr, req.AnalysisPlanes, req.FixedPostStretch);
+        var combined = main.Image;
+        // 7. Local contrast last (non point-wise; the strip renderer applies it on the whole image).
+        if (req.ApplyDetail)
+        {
+            DetailOverview? overview = null;
+            if (!s.Detail.IsNeutral && req.Overview is { } ov && req.OverviewRect is { } rect && needed.All(ov.ContainsKey))
+            {
+                // The whole picture developed the same way (same stretch), for the detail stage.
+                var o = Develop(ov, s, req.Context, available, needed, lumExpr, null, main.PostStretch);
+                overview = new DetailOverview(o.Image, rect);
+            }
+            Denoise.Apply(combined, s.Denoise);
+            PostProcess.Detail(combined, s.Detail, req.Scale, overview);
+        }
+        return new RenderResult { Image = combined, PostStretch = main.PostStretch, ChannelStretch = main.ChannelStretch, Millis = t0.Elapsed.TotalMilliseconds };
+    }
+
+    sealed class Developed
+    {
+        public required RGBImage Image;
+        public List<ResolvedStretch>? PostStretch;
+        public required Dictionary<ChannelKind, ResolvedStretch> ChannelStretch;
+    }
+
+    /// <summary>
+    /// Steps 1–6 — normalise, stretch, combine, luminance, colour, stars: everything up to the
+    /// non-point-wise detail stage — for one set of planes (the render itself, or its overview).
+    /// </summary>
+    static Developed Develop(Dictionary<ChannelKind, PlanarImage> reqPlanes, CombineSettings s, RenderContext context, HashSet<ChannelKind> available,
+                             HashSet<ChannelKind> needed, Expr? lumExpr, Dictionary<ChannelKind, PlanarImage>? analysisPlanes, List<ResolvedStretch>? fixedPostStretch)
+    {
+        var anyPlane = reqPlanes.Values.FirstOrDefault() ?? throw RenderException.NoOutput();
+        int w = anyPlane.Width, h = anyPlane.Height;
+
+        // 1. Normalised linear channels (+ gain, pedestal).
+        var linear = new Dictionary<ChannelKind, PlanarImage>();
+        var linStats = new Dictionary<ChannelKind, ChannelStats>();
         foreach (var k in needed)
         {
-            var (p, st) = PrepareLinear(k, req.Planes[k], s, req.Context);
+            var (p, st) = PrepareLinear(k, reqPlanes[k], s, context);
             linear[k] = p; linStats[k] = st;
         }
 
@@ -174,17 +217,17 @@ public static class Renderer
             //    samples, or — as a last resort — from this very render.
             //    Entries 0…2 are R, G, B; entry 3 (when present) is the luminance.
             List<ResolvedStretch> resolved;
-            if (req.FixedPostStretch is { Count: >= 3 } fixed_ && (lumLinear == null || fixed_.Count >= 4)) resolved = fixed_;
+            if (fixedPostStretch is { Count: >= 3 } fixed_ && (lumLinear == null || fixed_.Count >= 4)) resolved = fixed_;
             else
             {
                 var source = combined;
                 var lumSource = lumLinear;
-                if (req.AnalysisPlanes is { } analysis && needed.All(analysis.ContainsKey))
+                if (analysisPlanes is { } analysis && needed.All(analysis.ContainsKey))
                 {
                     var aLinear = new Dictionary<ChannelKind, PlanarImage>();
                     foreach (var k in needed)
                     {
-                        var (p, _) = PrepareLinear(k, analysis[k], s, req.Context);
+                        var (p, _) = PrepareLinear(k, analysis[k], s, context);
                         float wgt = s.Adjust(k).Weight;
                         if (wgt != 1) p.Affine(wgt, 0);
                         aLinear[k] = p;
@@ -223,19 +266,13 @@ public static class Renderer
         PostProcess.Apply(s.Post, combined);
 
         // 6. RGB stars.
-        if (s.Stars.Enabled && req.Planes.TryGetValue(ChannelKind.Red, out var rr) && req.Planes.TryGetValue(ChannelKind.Green, out var gg) && req.Planes.TryGetValue(ChannelKind.Blue, out var bb))
+        if (s.Stars.Enabled && reqPlanes.TryGetValue(ChannelKind.Red, out var rr) && reqPlanes.TryGetValue(ChannelKind.Green, out var gg) && reqPlanes.TryGetValue(ChannelKind.Blue, out var bb))
         {
-            var stars = StarsImage(rr, gg, bb, s, req.Context);
+            var stars = StarsImage(rr, gg, bb, s, context);
             PostProcess.BlendStars(combined, stars, s.Stars);
         }
         combined.Clamp01();
-        // 7. Local contrast last (non point-wise; the strip renderer applies it on the whole image).
-        if (req.ApplyDetail)
-        {
-            Denoise.Apply(combined, s.Denoise);
-            PostProcess.Detail(combined, s.Detail, req.Scale);
-        }
-        return new RenderResult { Image = combined, PostStretch = postStretch, ChannelStretch = channelStretch, Millis = t0.Elapsed.TotalMilliseconds };
+        return new Developed { Image = combined, PostStretch = postStretch, ChannelStretch = channelStretch };
     }
 
     // Pieces

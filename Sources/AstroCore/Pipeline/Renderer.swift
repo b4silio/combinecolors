@@ -57,9 +57,17 @@ public struct RenderRequest {
     /// Rendered pixels per full-resolution pixel (1 at full size, 0.5 at pyramid level 1, …);
     /// pixel-based radii such as the sharpening radius are scaled by it.
     public var scale: Float = 1
+    /// The whole picture at a coarse pyramid level (every channel of `planes`) when `planes` is a crop
+    /// of it: the detail stage takes its star cap and large-radius blurs from there, so a zoomed-in
+    /// preview agrees with the whole picture and the export. `overviewRect` is the region covered by
+    /// `planes`, in overview pixels.
+    public var overview: [ChannelKind: PlanarImage]? = nil
+    public var overviewRect: CGRect? = nil
 
-    public init(planes: [ChannelKind: PlanarImage], analysisPlanes: [ChannelKind: PlanarImage]? = nil, settings: CombineSettings, context: RenderContext, fixedPostStretch: [ResolvedStretch]? = nil, applyDetail: Bool = true, scale: Float = 1) {
+    public init(planes: [ChannelKind: PlanarImage], analysisPlanes: [ChannelKind: PlanarImage]? = nil, settings: CombineSettings, context: RenderContext, fixedPostStretch: [ResolvedStretch]? = nil, applyDetail: Bool = true, scale: Float = 1,
+                overview: [ChannelKind: PlanarImage]? = nil, overviewRect: CGRect? = nil) {
         self.planes = planes; self.analysisPlanes = analysisPlanes; self.settings = settings; self.context = context; self.fixedPostStretch = fixedPostStretch; self.applyDetail = applyDetail; self.scale = scale
+        self.overview = overview; self.overviewRect = overviewRect
     }
 }
 
@@ -86,21 +94,49 @@ public enum Renderer {
         let missing = missingChannels(settings: s, available: available)
         guard missing.isEmpty else { throw RenderError.missingChannels(missing) }
         if s.mode == .monochrome && s.monochromeChannels(available: available).isEmpty { throw RenderError.noOutput }
-        guard let anyPlane = req.planes.values.first else { throw RenderError.noOutput }
+        guard !req.planes.isEmpty else { throw RenderError.noOutput }
+        let needed = s.allChannels(available: available).intersection(available)
+        let lumExpr: Expr? = try (s.luminanceApplies ? s.luminance.resolvedExpression(available: available) : nil).map { src in
+            do { return try PixelMath.parse(src) } catch let e as PixelMathError { throw RenderError.pixelMath(PixelMathError(message: "Luminance: " + e.message, position: e.position)) }
+        }
+        let main = try develop(planes: req.planes, settings: s, context: req.context, available: available, needed: needed, lumExpr: lumExpr,
+                               analysisPlanes: req.analysisPlanes, fixedPostStretch: req.fixedPostStretch)
+        let combined = main.image
+        // 7. Local contrast last (non point-wise; the strip renderer applies it on the whole image).
+        if req.applyDetail {
+            var overview: DetailOverview? = nil
+            if !s.detail.isNeutral, let ov = req.overview, let rect = req.overviewRect, needed.allSatisfy({ ov[$0] != nil }) {
+                // The whole picture developed the same way (same stretch), for the detail stage.
+                let o = try develop(planes: ov, settings: s, context: req.context, available: available, needed: needed, lumExpr: lumExpr,
+                                    analysisPlanes: nil, fixedPostStretch: main.postStretch)
+                overview = DetailOverview(image: o.image, rect: rect)
+            }
+            Denoise.apply(combined, settings: s.denoise)
+            PostProcess.detail(combined, settings: s.detail, scale: req.scale, overview: overview)
+        }
+        return RenderResult(image: combined, postStretch: main.postStretch, channelStretch: main.channelStretch, millis: Date().timeIntervalSince(t0) * 1000)
+    }
+
+    struct Developed {
+        var image: RGBImage
+        var postStretch: [ResolvedStretch]?
+        var channelStretch: [ChannelKind: ResolvedStretch]
+    }
+
+    /// Steps 1–6 — normalise, stretch, combine, luminance, colour, stars: everything up to the
+    /// non-point-wise detail stage — for one set of planes (the render itself, or its overview).
+    static func develop(planes reqPlanes: [ChannelKind: PlanarImage], settings s: CombineSettings, context: RenderContext, available: Set<ChannelKind>,
+                        needed: Set<ChannelKind>, lumExpr: Expr?, analysisPlanes: [ChannelKind: PlanarImage]?, fixedPostStretch: [ResolvedStretch]?) throws -> Developed {
+        guard let anyPlane = reqPlanes.values.first else { throw RenderError.noOutput }
         let w = anyPlane.width, h = anyPlane.height
 
         // 1. Normalised linear channels (+ gain, pedestal).
         var linear: [ChannelKind: PlanarImage] = [:]
         var linStats: [ChannelKind: ChannelStats] = [:]
-        let needed = s.allChannels(available: available).intersection(available)
-        let lumExpr: Expr? = try (s.luminanceApplies ? s.luminance.resolvedExpression(available: available) : nil).map { src in
-            do { return try PixelMath.parse(src) } catch let e as PixelMathError { throw RenderError.pixelMath(PixelMathError(message: "Luminance: " + e.message, position: e.position)) }
-        }
         for k in needed {
-            let (p, st) = prepareLinear(k, plane: req.planes[k]!, settings: s, context: req.context)
+            let (p, st) = prepareLinear(k, plane: reqPlanes[k]!, settings: s, context: context)
             linear[k] = p; linStats[k] = st
         }
-
         var channelStretch: [ChannelKind: ResolvedStretch] = [:]
         var combined: RGBImage
         var lumPlane: PlanarImage? = nil
@@ -155,15 +191,15 @@ public enum Renderer {
             //    samples, or — as a last resort — from this very render.
             //    Entries 0…2 are R, G, B; entry 3 (when present) is the luminance.
             var resolved: [ResolvedStretch] = []
-            if let fixed = req.fixedPostStretch, fixed.count >= 3, (lumLinear == nil || fixed.count >= 4) {
+            if let fixed = fixedPostStretch, fixed.count >= 3, (lumLinear == nil || fixed.count >= 4) {
                 resolved = fixed
             } else {
                 var source = combined
                 var lumSource = lumLinear
-                if let analysis = req.analysisPlanes, needed.allSatisfy({ analysis[$0] != nil }) {
+                if let analysis = analysisPlanes, needed.allSatisfy({ analysis[$0] != nil }) {
                     var aLinear: [ChannelKind: PlanarImage] = [:]
                     for k in needed {
-                        let (p, _) = prepareLinear(k, plane: analysis[k]!, settings: s, context: req.context)
+                        let (p, _) = prepareLinear(k, plane: analysis[k]!, settings: s, context: context)
                         let wgt = s.adjust(k).weight
                         if wgt != 1 { p.affine(scale: wgt, offset: 0) }
                         aLinear[k] = p
@@ -201,17 +237,12 @@ public enum Renderer {
         PostProcess.apply(s.post, to: combined)
 
         // 6. RGB stars.
-        if s.stars.enabled, let r = req.planes[.red], let g = req.planes[.green], let b = req.planes[.blue] {
-            let stars = starsImage(r: r, g: g, b: b, settings: s, context: req.context)
+        if s.stars.enabled, let r = reqPlanes[.red], let g = reqPlanes[.green], let b = reqPlanes[.blue] {
+            let stars = starsImage(r: r, g: g, b: b, settings: s, context: context)
             PostProcess.blendStars(combined, stars: stars, settings: s.stars)
         }
         combined.clamp01()
-        // 7. Local contrast last (non point-wise; the strip renderer applies it on the whole image).
-        if req.applyDetail {
-            Denoise.apply(combined, settings: s.denoise)
-            PostProcess.detail(combined, settings: s.detail, scale: req.scale)
-        }
-        return RenderResult(image: combined, postStretch: postStretch, channelStretch: channelStretch, millis: Date().timeIntervalSince(t0) * 1000)
+        return Developed(image: combined, postStretch: postStretch, channelStretch: channelStretch)
     }
 
     // MARK: - Pieces
