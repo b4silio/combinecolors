@@ -143,6 +143,7 @@ Requirements: macOS 14+, Xcode 16+ (tested with Xcode 26 / Swift 6.3).
 ```bash
 swift build -c release            # library, app binary, CLI
 swift test                        # unit + integration tests (~40 s)
+just                              # or use the justfile: just build / test / app / dmg / dotnet-test / publish-linux / release
 ./scripts/make_app.sh             # assembles build/CombineColors.app
 open build/CombineColors.app
 ```

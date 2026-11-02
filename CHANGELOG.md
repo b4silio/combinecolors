@@ -9,6 +9,7 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 
 - Linux: Avalonia UI app (windows/CombineColors.Avalonia) and CLI on the portable net9.0 build of AstroCore (built-in exact PNG codec + SkiaSharp for JPEG, CPU denoise); windows/scripts/publish-linux.sh; the Windows targets compile on macOS / Linux
 - Releases: `scripts/release.sh` also builds and attaches the self-contained `CombineColors-<version>-linux-x64.tar.gz` (untar, install libfontconfig1 and the X11 libraries, run `./CombineColors`)
+- `justfile` with the build, test, publish and release recipes (`just` lists them; `just release`, `just publish-linux`, `just bump minor "…"`)
 
 ## [1.3.0] – 2026-10-29
 
