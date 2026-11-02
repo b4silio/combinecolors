@@ -8,8 +8,9 @@ $version = (Get-Content (Join-Path $repo "VERSION") -Raw).Trim()
 $out = Join-Path $repo "build\CombineColors-$version-win-x64"
 if (Test-Path $out) { Remove-Item $out -Recurse -Force }
 New-Item -ItemType Directory -Force $out | Out-Null
+# The CLI also targets plain net9.0 (Linux build), so the framework must be named for publish.
 foreach ($proj in @("CombineColors\CombineColors.csproj", "CombineColorsCli\CombineColorsCli.csproj")) {
-    dotnet publish (Join-Path $root $proj) -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:DebugType=none -o $out
+    dotnet publish (Join-Path $root $proj) -f net9.0-windows -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:DebugType=none -o $out
     if ($LASTEXITCODE -ne 0) { throw "publish failed for $proj" }
 }
 Copy-Item (Join-Path $repo "README.md") (Join-Path $out "README.md")
