@@ -114,9 +114,31 @@ extension CombineSettings {
         monoChannels = c.optionalValue("monoChannels", d.monoChannels)
         normalization = c.value("normalization", d.normalization); stretch = c.value("stretch", d.stretch)
         stretchStage = c.value("stretchStage", d.stretchStage); luminance = c.value("luminance", d.luminance)
-        post = c.value("post", d.post); stars = c.value("stars", d.stars)
+        post = c.value("post", d.post); stars = c.value("stars", d.stars); grading = c.value("grading", d.grading)
         colorBands = c.value("colorBands", d.colorBands); detail = c.value("detail", d.detail)
         denoise = c.value("denoise", d.denoise)
+    }
+}
+
+extension ColorGradingSettings {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: AnyKey.self)
+        balance = c.value("balance", [:]); preserveLuminosity = c.value("preserveLuminosity", true)
+        selective = c.value("selective", [:]); relative = c.value("relative", true)
+    }
+}
+
+extension ToneBalance {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: AnyKey.self)
+        cyanRed = c.value("cyanRed", 0); magentaGreen = c.value("magentaGreen", 0); yellowBlue = c.value("yellowBlue", 0)
+    }
+}
+
+extension SelectiveAdjust {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: AnyKey.self)
+        cyan = c.value("cyan", 0); magenta = c.value("magenta", 0); yellow = c.value("yellow", 0); black = c.value("black", 0)
     }
 }
 

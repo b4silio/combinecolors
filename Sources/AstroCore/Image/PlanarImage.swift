@@ -227,6 +227,8 @@ public final class RGBImage {
 
     public func clamp01() { for p in planes { p.clamp(min: 0, max: 1) } }
 
+    public func copy() -> RGBImage { RGBImage(r: r.copy(), g: g.copy(), b: b.copy()) }
+
     public func downsampled2x() -> RGBImage {
         RGBImage(r: r.downsampled2x(), g: g.downsampled2x(), b: b.downsampled2x())
     }

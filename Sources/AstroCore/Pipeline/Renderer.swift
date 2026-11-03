@@ -245,10 +245,12 @@ public enum Renderer {
             PostProcess.injectLuminance(combined, lum: lum, amount: s.luminance.amount, method: s.luminance.method)
         }
 
-        // 5. Colour post-processing: selective colour bands, then the global controls.
+        // 5. Colour post-processing: selective colour bands, the global controls, then the
+        //    Photoshop-style grading (Color Balance, Selective Color on whites / neutrals / blacks).
         combined.clamp01()
         PostProcess.colorBands(combined, settings: s.colorBands)
         PostProcess.apply(s.post, to: combined)
+        PostProcess.grade(combined, settings: s.grading)
 
         // 6. RGB stars: from the stars layer, else from the R, G and B channels.
         if s.stars.enabled {

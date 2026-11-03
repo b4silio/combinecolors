@@ -206,6 +206,57 @@ public struct ColorBandsSettings: Codable, Equatable, Hashable {
     public var isNeutral: Bool { bands.values.allSatisfy(\.isNeutral) }
 }
 
+/// Tone ranges of the Photoshop-style Color Balance.
+public enum ToneRange: String, Codable, CaseIterable, Identifiable, CodingKeyRepresentable {
+    case shadows, midtones, highlights
+    public var id: String { rawValue }
+    public var displayName: String { rawValue.capitalized }
+}
+
+/// Color Balance of one tone range: three opponent axes, −1…1 (−100…100 in the interface).
+public struct ToneBalance: Codable, Equatable, Hashable {
+    public var cyanRed: Float = 0
+    public var magentaGreen: Float = 0
+    public var yellowBlue: Float = 0
+    public init() {}
+    public var isNeutral: Bool { cyanRed == 0 && magentaGreen == 0 && yellowBlue == 0 }
+}
+
+/// Achromatic ranges of the Photoshop-style Selective Color (the hue ranges are the colour bands).
+public enum SelectiveRange: String, Codable, CaseIterable, Identifiable, CodingKeyRepresentable {
+    case whites, neutrals, blacks
+    public var id: String { rawValue }
+    public var displayName: String { rawValue.capitalized }
+}
+
+/// Selective Color of one range: ink deltas, −1…1 (−100…100 in the interface).
+public struct SelectiveAdjust: Codable, Equatable, Hashable {
+    public var cyan: Float = 0
+    public var magenta: Float = 0
+    public var yellow: Float = 0
+    public var black: Float = 0
+    public init() {}
+    public var isNeutral: Bool { cyan == 0 && magenta == 0 && yellow == 0 && black == 0 }
+}
+
+/// Photoshop-style colour grading applied after the Colour controls and before denoising and
+/// Detail: Color Balance (shadows / midtones / highlights, optionally keeping the lightness) and
+/// Selective Color for whites, neutrals and blacks (relative to the ink present, or absolute).
+public struct ColorGradingSettings: Codable, Equatable, Hashable {
+    public var balance: [ToneRange: ToneBalance] = [:]
+    public var preserveLuminosity: Bool = true
+    public var selective: [SelectiveRange: SelectiveAdjust] = [:]
+    public var relative: Bool = true
+    public init() {}
+    public func balance(_ t: ToneRange) -> ToneBalance { balance[t] ?? ToneBalance() }
+    public mutating func setBalance(_ t: ToneRange, _ a: ToneBalance) { if a.isNeutral { balance.removeValue(forKey: t) } else { balance[t] = a } }
+    public func selective(_ r: SelectiveRange) -> SelectiveAdjust { selective[r] ?? SelectiveAdjust() }
+    public mutating func setSelective(_ r: SelectiveRange, _ a: SelectiveAdjust) { if a.isNeutral { selective.removeValue(forKey: r) } else { selective[r] = a } }
+    public var balanceIsNeutral: Bool { balance.values.allSatisfy(\.isNeutral) }
+    public var selectiveIsNeutral: Bool { selective.values.allSatisfy(\.isNeutral) }
+    public var isNeutral: Bool { balanceIsNeutral && selectiveIsNeutral }
+}
+
 /// Local-contrast operations (Camera Raw "Clarity" and "Dehaze").
 public struct DetailSettings: Codable, Equatable, Hashable {
     /// −1…1: finest local contrast, micro-structures (radius ≈ 0.2 % of the image width).
@@ -320,6 +371,7 @@ public struct CombineSettings: Codable, Equatable, Hashable {
     public var luminance = LuminanceSettings()
     public var colorBands = ColorBandsSettings()
     public var post = PostSettings()
+    public var grading = ColorGradingSettings()
     public var detail = DetailSettings()
     public var denoise = DenoiseSettings()
     public var stars = StarsBlendSettings()

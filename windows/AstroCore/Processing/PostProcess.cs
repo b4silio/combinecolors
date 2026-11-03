@@ -10,7 +10,7 @@ public sealed class DetailOverview
 }
 
 /// <summary>Colour post-processing on stretched [0,1] RGB data. Everything is point-wise.</summary>
-public static class PostProcess
+public static partial class PostProcess
 {
     public static void Apply(PostSettings s, RGBImage img)
     {

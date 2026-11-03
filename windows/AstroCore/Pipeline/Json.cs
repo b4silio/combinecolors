@@ -378,6 +378,44 @@ public sealed partial class ColorBandsSettings : IJsonSettings
     }
 }
 
+public sealed partial class ToneBalance : IJsonSettings
+{
+    public JsonObject ToJson() => new() { ["cyanRed"] = SettingsJson.V(CyanRed), ["magentaGreen"] = SettingsJson.V(MagentaGreen), ["yellowBlue"] = SettingsJson.V(YellowBlue) };
+    public static ToneBalance FromJson(JsonObject? c) => new() { CyanRed = SettingsJson.F(c, "cyanRed", 0), MagentaGreen = SettingsJson.F(c, "magentaGreen", 0), YellowBlue = SettingsJson.F(c, "yellowBlue", 0) };
+}
+
+public sealed partial class SelectiveAdjust : IJsonSettings
+{
+    public JsonObject ToJson() => new() { ["cyan"] = SettingsJson.V(Cyan), ["magenta"] = SettingsJson.V(Magenta), ["yellow"] = SettingsJson.V(Yellow), ["black"] = SettingsJson.V(Black) };
+    public static SelectiveAdjust FromJson(JsonObject? c) => new() { Cyan = SettingsJson.F(c, "cyan", 0), Magenta = SettingsJson.F(c, "magenta", 0), Yellow = SettingsJson.F(c, "yellow", 0), Black = SettingsJson.F(c, "black", 0) };
+}
+
+public sealed partial class ColorGradingSettings : IJsonSettings
+{
+    public JsonObject ToJson()
+    {
+        var b = new JsonObject();
+        foreach (var (k, v) in Balance) b[EnumRaw.Name(k)] = v.ToJson();
+        var sel = new JsonObject();
+        foreach (var (k, v) in Selective) sel[EnumRaw.Name(k)] = v.ToJson();
+        return new JsonObject { ["balance"] = b, ["preserveLuminosity"] = SettingsJson.V(PreserveLuminosity), ["selective"] = sel, ["relative"] = SettingsJson.V(Relative) };
+    }
+
+    public static ColorGradingSettings FromJson(JsonObject? c)
+    {
+        var s = new ColorGradingSettings { PreserveLuminosity = SettingsJson.B(c, "preserveLuminosity", true), Relative = SettingsJson.B(c, "relative", true) };
+        if (SettingsJson.Obj(c, "balance") is JsonObject b)
+            foreach (var kv in b)
+                if (EnumRaw.Parse<ToneRange>(kv.Key) is ToneRange t && kv.Value is JsonObject o) s.Balance[t] = ToneBalance.FromJson(o);
+        if (SettingsJson.Obj(c, "selective") is JsonObject sel)
+            foreach (var kv in sel)
+                if (EnumRaw.Parse<SelectiveRange>(kv.Key) is SelectiveRange r && kv.Value is JsonObject o) s.Selective[r] = SelectiveAdjust.FromJson(o);
+        return s;
+    }
+
+    public static ColorGradingSettings Parse(string json) => FromJson(SettingsJson.ParseObject(json));
+}
+
 public sealed partial class DetailSettings : IJsonSettings
 {
     public JsonObject ToJson() => new()
@@ -447,7 +485,7 @@ public sealed partial class CombineSettings : IJsonSettings
         {
             ["mode"] = SettingsJson.V(Mode), ["paletteID"] = SettingsJson.V(PaletteID), ["matrix"] = Matrix.ToJson(), ["pixelMath"] = PixelMath.ToJson(),
             ["channels"] = channels, ["normalization"] = Normalization.ToJson(), ["stretch"] = Stretch.ToJson(), ["stretchStage"] = SettingsJson.V(StretchStage),
-            ["luminance"] = Luminance.ToJson(), ["colorBands"] = ColorBands.ToJson(), ["post"] = Post.ToJson(), ["detail"] = Detail.ToJson(),
+            ["luminance"] = Luminance.ToJson(), ["colorBands"] = ColorBands.ToJson(), ["post"] = Post.ToJson(), ["grading"] = Grading.ToJson(), ["detail"] = Detail.ToJson(),
             ["denoise"] = Denoise.ToJson(), ["stars"] = Stars.ToJson(),
         };
         if (MonoChannels != null)
@@ -472,6 +510,7 @@ public sealed partial class CombineSettings : IJsonSettings
             StretchStage = SettingsJson.E(c, "stretchStage", d.StretchStage),
             Luminance = SettingsJson.Obj(c, "luminance") is JsonObject lo ? LuminanceSettings.FromJson(lo) : d.Luminance,
             Post = SettingsJson.Obj(c, "post") is JsonObject pso ? PostSettings.FromJson(pso) : d.Post,
+            Grading = SettingsJson.Obj(c, "grading") is JsonObject gro ? ColorGradingSettings.FromJson(gro) : d.Grading,
             Stars = SettingsJson.Obj(c, "stars") is JsonObject sto ? StarsBlendSettings.FromJson(sto) : d.Stars,
             ColorBands = SettingsJson.Obj(c, "colorBands") is JsonObject cbo ? ColorBandsSettings.FromJson(cbo) : d.ColorBands,
             Detail = SettingsJson.Obj(c, "detail") is JsonObject deo ? DetailSettings.FromJson(deo) : d.Detail,

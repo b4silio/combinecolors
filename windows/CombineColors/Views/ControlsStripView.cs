@@ -26,6 +26,8 @@ public sealed class ControlsStripView : Border
     readonly HashSet<ChannelKind> expandedChannels = new();
     string structure = "";
     ColorBandComponent bandComponent;
+    ToneRange balanceTone;
+    SelectiveRange selectiveRange;
     Point? dragStart; double dragOffset;
 
     enum ColorBandComponent { Hue, Saturation, Lightness }
@@ -37,6 +39,8 @@ public sealed class ControlsStripView : Border
         Background = (Brush)Application.Current.Resources["PanelBackground"];
         collapsed = model.Preferences.GetString("collapsedBlocks")?.Split(',', StringSplitOptions.RemoveEmptyEntries).ToHashSet() ?? new HashSet<string>();
         bandComponent = Enum.TryParse<ColorBandComponent>(model.Preferences.GetString("colorBandComponent") ?? "", true, out var bc) ? bc : ColorBandComponent.Saturation;
+        balanceTone = EnumRaw.Parse<ToneRange>(model.Preferences.GetString("balanceTone")) ?? ToneRange.Midtones;
+        selectiveRange = EnumRaw.Parse<SelectiveRange>(model.Preferences.GetString("selectiveRange")) ?? SelectiveRange.Neutrals;
         scroller = new ScrollViewer { HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = blocks, Background = Brushes.Transparent };
         scroller.PreviewMouseWheel += (_, e) => { if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0 || e.OriginalSource is not Slider) { } };
         scroller.PreviewMouseLeftButtonDown += OnDragStart;
@@ -44,7 +48,7 @@ public sealed class ControlsStripView : Border
         scroller.PreviewMouseLeftButtonUp += (_, _) => { dragStart = null; if (scroller.IsMouseCaptured) scroller.ReleaseMouseCapture(); };
         Child = scroller;
         Add("channels", "Channels", 250); Add("stretch", "Stretch", 262); Add("normalisation", "Normalisation", 290); Add("luminance", "Luminance", 250);
-        Add("bands", "Colour bands", 226); Add("colour", "Colour", 250); Add("denoise", "Denoise", 330); Add("detail", "Detail", 262); Add("stars", "RGB stars", 250);
+        Add("bands", "Colour bands", 226); Add("colour", "Colour", 250); Add("balance", "Balance", 262); Add("denoise", "Denoise", 330); Add("detail", "Detail", 262); Add("stars", "RGB stars", 250);
         model.Changed += OnChanged;
         Rebuild();
     }
@@ -106,7 +110,8 @@ public sealed class ControlsStripView : Border
             s.Normalization.Method.ToString(), s.Luminance.Enabled.ToString(), s.Luminance.Preset.ToString(), s.Luminance.ResolvedExpression(avail) ?? "-",
             s.Denoise.Method.ToString(), s.Stars.Enabled.ToString(), s.Stars.UseMask.ToString(), s.Mode.ToString(), s.PixelMath.HasLuminance.ToString(),
             model.Context?.Reference?.ToString() ?? "-", s.ColorBands.IsNeutral.ToString(), s.Detail.Equals(new DetailSettings()).ToString(), s.Denoise.Equals(new DenoiseSettings()).ToString(),
-            bandComponent.ToString(),
+            bandComponent.ToString(), balanceTone.ToString(), selectiveRange.ToString(), s.Grading.Relative.ToString(),
+            string.Join(",", ToneRanges.All.Select(t => s.Grading.GetBalance(t).IsNeutral)), string.Join(",", SelectiveRanges.All.Select(r => s.Grading.GetSelective(r).IsNeutral)),
         };
         parts.AddRange(avail.Select(k => k + ":" + s.Adjust(k).IsNeutral));
         if (model.Context is RenderContext ctx) parts.AddRange(ctx.Transforms.OrderBy(kv => kv.Key).Select(kv => kv.Key + "=" + kv.Value.Description + (ctx.NormalizedMaskedStats.TryGetValue(kv.Key, out var st) ? $" {st.Background:G4} {st.SignalStrength:G4}" : "")));
@@ -119,7 +124,7 @@ public sealed class ControlsStripView : Border
     {
         structure = Signature();
         Build("channels", ChannelsSection); Build("stretch", StretchSection); Build("normalisation", NormalizationSection); Build("luminance", LuminanceSection);
-        Build("bands", ColorBandsSection); Build("colour", ColourSection); Build("denoise", DenoiseSection); Build("detail", DetailSection); Build("stars", StarsSection);
+        Build("bands", ColorBandsSection); Build("colour", ColourSection); Build("balance", BalanceSection); Build("denoise", DenoiseSection); Build("detail", DetailSection); Build("stars", StarsSection);
         // Stays collapsed while no R, G and B channels are loaded (nothing to blend).
         blockById["stars"].Expanded = !collapsed.Contains("stars");
     }
@@ -352,6 +357,56 @@ public sealed class ControlsStripView : Border
         p.Children.Add(Ui.Row(
             Ui.SmallButton("Reset colour", () => model.UpdateSettings(x => x.Post = new PostSettings())),
             Ui.SmallButton("Classic SHO look", () => model.UpdateSettings(x => { x.Post.ScnrGreen = 0.8f; x.Post.Saturation = 1.3f; x.Post.HueShift = -10; }), "SCNR 0.8, saturation 1.3, hue −10°")));
+    }
+
+    // Balance (Color Balance + Selective Color)
+
+    /// <summary>A −100…100 slider over a −1…1 field of the selected tone range.</summary>
+    SliderRow Balance(string title, ToneRange tone, Func<ToneBalance, float> get, Action<ToneBalance, float> set, string help, double labelWidth)
+        => S(title, x => MathF.Round(get(x.Grading.GetBalance(tone)) * 100, MidpointRounding.AwayFromZero), (x, v) => { var a = x.Grading.GetBalance(tone).Clone(); set(a, v / 100); x.Grading.SetBalance(tone, a); }, -100, 100, 0, "0", help: help, labelWidth: labelWidth);
+
+    SliderRow Selective(string title, SelectiveRange range, Func<SelectiveAdjust, float> get, Action<SelectiveAdjust, float> set, string help, double labelWidth)
+        => S(title, x => MathF.Round(get(x.Grading.GetSelective(range)) * 100, MidpointRounding.AwayFromZero), (x, v) => { var a = x.Grading.GetSelective(range).Clone(); set(a, v / 100); x.Grading.SetSelective(range, a); }, -100, 100, 0, "0", help: help, labelWidth: labelWidth);
+
+    void BalanceSection(StackPanel p)
+    {
+        const double lw = 92;
+        var g = model.Settings.Grading;
+        var tone = balanceTone; var range = selectiveRange;
+        var head = new DockPanel();
+        var resetBalance = Ui.IconButton("↺", () => model.UpdateSettings(x => x.Grading.Balance.Clear()), "Reset the colour balance of every tone range");
+        resetBalance.IsEnabled = !g.BalanceIsNeutral; resetBalance.Margin = new Thickness(0);
+        DockPanel.SetDock(resetBalance, Dock.Right);
+        head.Children.Add(resetBalance);
+        head.Children.Add(new TextBlock { Text = "Colour balance", FontWeight = FontWeights.Bold, FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
+        p.Children.Add(head);
+        var toneSeg = Ui.Segmented(ToneRanges.All, t => t.DisplayName() + (g.GetBalance(t).IsNeutral ? "" : " •"), () => balanceTone, v => { balanceTone = v; model.Preferences.Set("balanceTone", EnumRaw.Name(v)); Rebuild(); }, out _, 10);
+        toneSeg.ToolTip = "Tone range the three sliders act on (• = adjusted); the ranges overlap smoothly by lightness, as in Photoshop";
+        p.Children.Add(toneSeg);
+        p.Children.Add(Balance("Cyan – Red", tone, a => a.CyanRed, (a, v) => a.CyanRed = v, $"Negative towards cyan, positive towards red, in the {tone.DisplayName().ToLowerInvariant()}", lw));
+        p.Children.Add(Balance("Magenta – Green", tone, a => a.MagentaGreen, (a, v) => a.MagentaGreen = v, "Negative towards magenta, positive towards green", lw));
+        p.Children.Add(Balance("Yellow – Blue", tone, a => a.YellowBlue, (a, v) => a.YellowBlue = v, "Negative towards yellow, positive towards blue", lw));
+        p.Children.Add(C("Preserve luminosity", x => x.Grading.PreserveLuminosity, (x, v) => x.Grading.PreserveLuminosity = v, "Keep each pixel's lightness: only hue and saturation move (Photoshop's default)"));
+        p.Children.Add(Ui.Separator());
+        var head2 = new DockPanel();
+        var resetSelective = Ui.IconButton("↺", () => model.UpdateSettings(x => x.Grading.Selective.Clear()), "Reset the selective colour of every range");
+        resetSelective.IsEnabled = !g.SelectiveIsNeutral; resetSelective.Margin = new Thickness(0);
+        DockPanel.SetDock(resetSelective, Dock.Right);
+        head2.Children.Add(resetSelective);
+        var methodSeg = Ui.Segmented(new[] { true, false }, b => b ? "Relative" : "Absolute", () => model.Settings.Grading.Relative, v => model.UpdateSettings(x => x.Grading.Relative = v), out _, 10);
+        methodSeg.Margin = new Thickness(0, 0, 4, 0);
+        methodSeg.ToolTip = "Relative changes the ink by a fraction of what is there (pure white cannot be touched); Absolute adds the amount outright";
+        DockPanel.SetDock(methodSeg, Dock.Right);
+        head2.Children.Add(methodSeg);
+        head2.Children.Add(new TextBlock { Text = "Selective colour", FontWeight = FontWeights.Bold, FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
+        p.Children.Add(head2);
+        var rangeSeg = Ui.Segmented(SelectiveRanges.All, r => r.DisplayName() + (g.GetSelective(r).IsNeutral ? "" : " •"), () => selectiveRange, v => { selectiveRange = v; model.Preferences.Set("selectiveRange", EnumRaw.Name(v)); Rebuild(); }, out _, 10);
+        rangeSeg.ToolTip = "Whites: the brightest nearly-grey pixels; Neutrals: greys around mid-tone; Blacks: the darkest. The hue ranges are the Colour bands block";
+        p.Children.Add(rangeSeg);
+        p.Children.Add(Selective("Cyan", range, a => a.Cyan, (a, v) => a.Cyan = v, $"More cyan ink (less red) in the {range.DisplayName().ToLowerInvariant()}; negative removes it", lw));
+        p.Children.Add(Selective("Magenta", range, a => a.Magenta, (a, v) => a.Magenta = v, "More magenta ink (less green); negative removes it", lw));
+        p.Children.Add(Selective("Yellow", range, a => a.Yellow, (a, v) => a.Yellow = v, "More yellow ink (less blue); negative removes it", lw));
+        p.Children.Add(Selective("Black", range, a => a.Black, (a, v) => a.Black = v, "Darkens (positive) or lightens (negative) the range", lw));
     }
 
     // Denoise

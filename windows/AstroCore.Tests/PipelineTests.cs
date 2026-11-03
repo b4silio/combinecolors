@@ -698,6 +698,67 @@ public class ColorBandsAndDetailTests
     }
 
     [Fact]
+    public void ColorBalanceWeightsTonesAndKeepsLightness()
+    {
+        // Mid grey, dark grey, light grey.
+        var img = new RGBImage(3, 1);
+        foreach (var p in img.Planes) new float[] { 0.5f, 0.08f, 0.95f }.CopyTo(p.Data, 0);
+        var g = new ColorGradingSettings();
+        g.SetBalance(ToneRange.Midtones, new ToneBalance { CyanRed = 1 });
+        PostProcess.Grade(img, g);
+        Assert.True(img.R[0, 0] > img.G[0, 0] + 0.1f, "midtone grey moves towards red");
+        A.Close(0.5f, PostProcess.RgbToHsl(img.R[0, 0], img.G[0, 0], img.B[0, 0]).l, 1e-3f, "lightness preserved");
+        A.Close(0.08f, img.R[1, 0], 1e-5f, "dark pixel outside the midtone mask untouched");
+        A.Close(0.95f, img.R[2, 0], 1e-5f, "light pixel untouched");
+        // Shadows reach the dark pixel; without preserving the lightness the red simply adds.
+        var g2 = new ColorGradingSettings { PreserveLuminosity = false };
+        g2.SetBalance(ToneRange.Shadows, new ToneBalance { CyanRed = 1 });
+        var img2 = new RGBImage(1, 1); foreach (var p in img2.Planes) p.Data[0] = 0.08f;
+        PostProcess.Grade(img2, g2);
+        A.Close(0.08f + 0.7f, img2.R[0, 0], 1e-3f, "full shadow weight × 0.7 scale");
+        A.Close(0.08f, img2.G[0, 0], 1e-5f);
+        Assert.True(new ColorGradingSettings().IsNeutral);
+    }
+
+    [Fact]
+    public void SelectiveColorRangesAndMethods()
+    {
+        // White, mid grey, pure red, near black.
+        var img = new RGBImage(4, 1);
+        new float[] { 1, 0.5f, 1, 0.05f }.CopyTo(img.R.Data, 0);
+        new float[] { 1, 0.5f, 0, 0.05f }.CopyTo(img.G.Data, 0);
+        new float[] { 1, 0.5f, 0, 0.05f }.CopyTo(img.B.Data, 0);
+        var g = new ColorGradingSettings();
+        g.SetSelective(SelectiveRange.Whites, new SelectiveAdjust { Cyan = 1 });
+        g.SetSelective(SelectiveRange.Neutrals, new SelectiveAdjust { Black = 0.5f });
+        g.SetSelective(SelectiveRange.Blacks, new SelectiveAdjust { Black = -1 });
+        var rel = img.Copy();
+        PostProcess.Grade(rel, g);
+        A.Close(1, rel.R[0, 0], 1e-6f, "relative: pure white holds no ink, so it cannot change");
+        A.Close(0.25f, rel.R[1, 0], 1e-4f, "neutral grey: black +50 % of the 0.5 ink present");
+        A.Close(0.25f, rel.G[1, 0], 1e-4f);
+        A.Close(1, rel.R[2, 0], 1e-6f, "saturated red is in no achromatic range");
+        A.Close(0, rel.G[2, 0], 1e-6f);
+        // Near black sits in the blacks (0.9) and a little in the neutrals (0.1): ink × (1 − 0.9 + 0.05).
+        A.Close(1 - 0.95f * 0.15f, rel.R[3, 0], 1e-4f, "blacks: ink removed by the range weight, neutrals add a little");
+        g.Relative = false;
+        var abs = img.Copy();
+        PostProcess.Grade(abs, g);
+        A.Close(0, abs.R[0, 0], 1e-6f, "absolute: cyan +100 on white removes all red");
+        A.Close(1, abs.G[0, 0], 1e-6f);
+        A.Close(0, abs.R[1, 0], 1e-4f, "absolute black +50 on mid grey");
+        A.Close(1 - (0.95f - 0.85f), abs.R[3, 0], 1e-4f, "absolute: ink − 0.9 + 0.05");
+        // Settings round trip through the tolerant decoder, with the key layout the macOS build writes.
+        var s = new CombineSettings { Grading = g };
+        Assert.Equal(s, CombineSettings.Parse(s.Json()));
+        Assert.Equal(new ColorGradingSettings(), ColorGradingSettings.Parse("{}"));
+        Assert.Equal("{\"balance\":{},\"preserveLuminosity\":true,\"relative\":false,\"selective\":{\"blacks\":{\"black\":-1,\"cyan\":0,\"magenta\":0,\"yellow\":0},\"neutrals\":{\"black\":0.5,\"cyan\":0,\"magenta\":0,\"yellow\":0},\"whites\":{\"black\":0,\"cyan\":1,\"magenta\":0,\"yellow\":0}}}", SettingsJson.Canonical(g));
+        var mid = new ColorGradingSettings(); mid.SetBalance(ToneRange.Midtones, new ToneBalance { CyanRed = 0.25f });
+        Assert.Equal("{\"balance\":{\"midtones\":{\"cyanRed\":0.25,\"magentaGreen\":0,\"yellowBlue\":0}},\"preserveLuminosity\":true,\"relative\":true,\"selective\":{}}", SettingsJson.Canonical(mid));
+        Assert.Equal(mid, ColorGradingSettings.Parse(SettingsJson.Canonical(mid)));
+    }
+
+    [Fact]
     public void SelectiveColourAffectsOnlyItsBand()
     {
         var img = new RGBImage(3, 1);

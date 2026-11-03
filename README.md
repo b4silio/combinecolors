@@ -63,7 +63,11 @@ export at full resolution.
   Without a Metal device non-local means falls back to the CPU and BM3D to
   the wavelets.
 * **Colour**: saturation, vibrance, SCNR green removal, hue rotation,
-  black/white point, gamma. **Detail**: local contrast at five scales — micro-structures (0.2 % of the
+  black/white point, gamma. **Balance** (Photoshop-style, applied after Colour and before
+  Denoise / Detail): *Color Balance* with cyan–red, magenta–green and yellow–blue sliders for the
+  shadows, midtones and highlights (overlapping lightness masks, *Preserve luminosity*), and
+  *Selective Color* for the whites, neutrals and blacks (cyan, magenta, yellow and black ink,
+  *Relative* or *Absolute*; the hue ranges are the Colour bands block). **Detail**: local contrast at five scales — micro-structures (0.2 % of the
   width), texture (0.6 %), clarity (6 %), dehaze (25 %, haze subtraction) and
   low frequency (50 %), as in Camera Raw with two extra scales for large frames; the blurs are
   taken from a star-clipped luminance so stars get no dark halos, and radii
@@ -284,7 +288,7 @@ release with the changelog section as notes.
    you never use with the eye button (Favourites / All switch shows them again).
    *Reset all* returns every setting to the palette defaults.
 4. **Tune** in the strip of blocks under the preview (Channels, Stretch,
-   Normalisation, Luminance, Colour bands, Colour, Detail, RGB stars, Crop):
+   Normalisation, Luminance, Colour bands, Colour, Balance, Denoise, Detail, RGB stars, Crop):
    click a block's vertical title to collapse or expand it, scroll sideways or
    drag on empty space to reach the others. Everything updates live; double-click a slider label to reset
    it; ⌘Z undoes. *Save preset* keeps a look in the row under the palettes to

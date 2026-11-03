@@ -445,6 +445,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
         s.Normalization.Method = NormalizationMethod.None;
         s.Luminance.Enabled = false;
         s.Post = new PostSettings();
+        s.Grading = new ColorGradingSettings();
         s.Detail = new DetailSettings();
         s.Denoise = new DenoiseSettings();
         s.ColorBands = new ColorBandsSettings();
@@ -1202,6 +1203,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
         {
             s.Stretch.Method = StretchMethod.None;
             s.Post = new PostSettings();
+            s.Grading = new ColorGradingSettings();
             s.ColorBands = new ColorBandsSettings();
             s.Detail = new DetailSettings();
             s.Luminance.Enabled = false;

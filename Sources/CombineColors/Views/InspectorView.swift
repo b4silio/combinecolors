@@ -38,6 +38,7 @@ struct ControlsStripView: View {
                 ControlBlock(title: "Luminance", width: 250, expanded: binding("luminance"), dragScroll: dragScroll, minHeight: contentHeight - 12) { luminanceSection }
                 ControlBlock(title: "Colour bands", width: 226, expanded: binding("bands"), dragScroll: dragScroll, minHeight: contentHeight - 12) { colorBandsSection }
                 ControlBlock(title: "Colour", width: 250, expanded: binding("colour"), dragScroll: dragScroll, minHeight: contentHeight - 12) { colourSection }
+                ControlBlock(title: "Balance", width: 262, expanded: binding("balance"), dragScroll: dragScroll, minHeight: contentHeight - 12) { balanceSection }
                 ControlBlock(title: "Denoise", width: 330, expanded: binding("denoise"), dragScroll: dragScroll, minHeight: contentHeight - 12) { denoiseSection }
                 ControlBlock(title: "Detail", width: 262, expanded: binding("detail"), dragScroll: dragScroll, minHeight: contentHeight - 12) { detailSection }
                 // Stays collapsed while no R, G and B channels are loaded (nothing to blend).
@@ -73,6 +74,66 @@ struct ControlsStripView: View {
         ForEach(ColorBand.allCases) { band in
             ColorBandRow(model: model, band: band, component: bandComponent)
         }
+    }
+
+    // MARK: Balance (Color Balance + Selective Color)
+
+    @AppStorage("balanceTone") private var balanceToneRaw = ToneRange.midtones.rawValue
+    @AppStorage("selectiveRange") private var selectiveRangeRaw = SelectiveRange.neutrals.rawValue
+
+    /// A −100…100 slider over a −1…1 field of the selected tone range.
+    private func balanceBinding(_ tone: ToneRange, _ kp: WritableKeyPath<ToneBalance, Float>) -> Binding<Float> {
+        Binding(get: { (model.settings.grading.balance(tone)[keyPath: kp] * 100).rounded() },
+                set: { var a = model.settings.grading.balance(tone); a[keyPath: kp] = $0 / 100; model.settings.grading.setBalance(tone, a) })
+    }
+
+    private func selectiveBinding(_ range: SelectiveRange, _ kp: WritableKeyPath<SelectiveAdjust, Float>) -> Binding<Float> {
+        Binding(get: { (model.settings.grading.selective(range)[keyPath: kp] * 100).rounded() },
+                set: { var a = model.settings.grading.selective(range); a[keyPath: kp] = $0 / 100; model.settings.grading.setSelective(range, a) })
+    }
+
+    @ViewBuilder var balanceSection: some View {
+        let g = $model.settings.grading
+        let tone = ToneRange(rawValue: balanceToneRaw) ?? .midtones
+        let range = SelectiveRange(rawValue: selectiveRangeRaw) ?? .neutrals
+        let lw: CGFloat = 92
+        HStack(spacing: 4) {
+            Text("Colour balance").font(.caption.bold())
+            Spacer()
+            Button { model.settings.grading.balance = [:] } label: { Image(systemName: "arrow.counterclockwise") }
+                .controlSize(.mini).buttonStyle(.borderless).help("Reset the colour balance of every tone range")
+                .disabled(model.settings.grading.balanceIsNeutral)
+        }
+        Picker("", selection: $balanceToneRaw) {
+            ForEach(ToneRange.allCases) { t in Text(t.displayName + (model.settings.grading.balance(t).isNeutral ? "" : " •")).tag(t.rawValue) }
+        }
+        .pickerStyle(.segmented).labelsHidden().controlSize(.mini)
+        .help("Tone range the three sliders act on (• = adjusted); the ranges overlap smoothly by lightness, as in Photoshop")
+        SliderRow(title: "Cyan – Red", value: balanceBinding(tone, \.cyanRed), range: -100...100, defaultValue: 0, format: "%.0f", help: "Negative towards cyan, positive towards red, in the \(tone.displayName.lowercased())", labelWidth: lw)
+        SliderRow(title: "Magenta – Green", value: balanceBinding(tone, \.magentaGreen), range: -100...100, defaultValue: 0, format: "%.0f", help: "Negative towards magenta, positive towards green", labelWidth: lw)
+        SliderRow(title: "Yellow – Blue", value: balanceBinding(tone, \.yellowBlue), range: -100...100, defaultValue: 0, format: "%.0f", help: "Negative towards yellow, positive towards blue", labelWidth: lw)
+        Toggle("Preserve luminosity", isOn: g.preserveLuminosity).toggleStyle(.checkbox).font(.caption)
+            .help("Keep each pixel's lightness: only hue and saturation move (Photoshop's default)")
+        Divider().padding(.vertical, 2)
+        HStack(spacing: 4) {
+            Text("Selective colour").font(.caption.bold())
+            Spacer()
+            Picker("", selection: g.relative) { Text("Relative").tag(true); Text("Absolute").tag(false) }
+                .pickerStyle(.segmented).labelsHidden().controlSize(.mini).fixedSize()
+                .help("Relative changes the ink by a fraction of what is there (pure white cannot be touched); Absolute adds the amount outright")
+            Button { model.settings.grading.selective = [:] } label: { Image(systemName: "arrow.counterclockwise") }
+                .controlSize(.mini).buttonStyle(.borderless).help("Reset the selective colour of every range")
+                .disabled(model.settings.grading.selectiveIsNeutral)
+        }
+        Picker("", selection: $selectiveRangeRaw) {
+            ForEach(SelectiveRange.allCases) { r in Text(r.displayName + (model.settings.grading.selective(r).isNeutral ? "" : " •")).tag(r.rawValue) }
+        }
+        .pickerStyle(.segmented).labelsHidden().controlSize(.mini)
+        .help("Whites: the brightest nearly-grey pixels; Neutrals: greys around mid-tone; Blacks: the darkest. The hue ranges are the Colour bands block")
+        SliderRow(title: "Cyan", value: selectiveBinding(range, \.cyan), range: -100...100, defaultValue: 0, format: "%.0f", help: "More cyan ink (less red) in the \(range.displayName.lowercased()); negative removes it", labelWidth: lw)
+        SliderRow(title: "Magenta", value: selectiveBinding(range, \.magenta), range: -100...100, defaultValue: 0, format: "%.0f", help: "More magenta ink (less green); negative removes it", labelWidth: lw)
+        SliderRow(title: "Yellow", value: selectiveBinding(range, \.yellow), range: -100...100, defaultValue: 0, format: "%.0f", help: "More yellow ink (less blue); negative removes it", labelWidth: lw)
+        SliderRow(title: "Black", value: selectiveBinding(range, \.black), range: -100...100, defaultValue: 0, format: "%.0f", help: "Darkens (positive) or lightens (negative) the range", labelWidth: lw)
     }
 
     // MARK: Denoise

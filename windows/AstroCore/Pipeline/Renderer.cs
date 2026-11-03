@@ -273,10 +273,12 @@ public static class Renderer
             PostProcess.InjectLuminance(combined, lumPlane, s.Luminance.Amount, s.Luminance.Method);
         }
 
-        // 5. Colour post-processing: selective colour bands, then the global controls.
+        // 5. Colour post-processing: selective colour bands, the global controls, then the
+        //    Photoshop-style grading (Color Balance, Selective Color on whites / neutrals / blacks).
         combined.Clamp01();
         PostProcess.ColorBands(combined, s.ColorBands);
         PostProcess.Apply(s.Post, combined);
+        PostProcess.Grade(combined, s.Grading);
 
         // 6. RGB stars: from the stars layer, else from the R, G and B channels.
         if (s.Stars.Enabled)

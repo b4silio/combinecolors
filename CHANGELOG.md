@@ -5,8 +5,9 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 (`scripts/bump.sh`). The version lives in `VERSION` and is stamped into the app at build time;
 `scripts/release.sh` tags it and publishes the DMG as a GitHub release.
 
-## [1.8.1] – 2026-11-03
+## [1.9.0] – 2026-11-03
 
+- Balance block (between Colour and Denoise): Photoshop-style Color Balance (cyan–red, magenta–green, yellow–blue for shadows, midtones and highlights, Preserve luminosity) and Selective Color for the whites, neutrals and blacks (cyan, magenta, yellow, black; Relative or Absolute); Mac, Windows, Linux and the CLI
 - Reopening a recent set or a project whose R, G and B came from one colour file gives the three channels their own planes again (they all got the first plane) and saves the set's state; Mac, Windows and Linux
 - Detail and RGB stars blocks are one scrolled column again (the two-column layout left the sliders a few pixels wide); Sharpen sits under the Detail scales; Mac, Windows and Linux
 - Linux: the interface scales itself on HiDPI / 4K screens that announce no scale (physical size from the X server, 1.5–3× in quarter steps); `--scale <f>` or `COMBINECOLORS_SCALE` force a value

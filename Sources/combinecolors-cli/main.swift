@@ -15,6 +15,10 @@ import AstroCore
 //      --scnr <0..1>          green removal amount
 //      --sat <factor>         saturation
 //      --hue <deg>            hue shift
+//      --balance-shadows <cr,mg,yb>   Photoshop-style colour balance of the shadows (−100..100 each: cyan–red, magenta–green, yellow–blue);
+//      --balance-midtones / --balance-highlights alike;  --no-preserve-luminosity  lets the lightness change
+//      --selective-whites <c,m,y,k>   selective colour of the whites (−100..100: cyan, magenta, yellow, black);
+//      --selective-neutrals / --selective-blacks alike;  --selective-absolute  absolute instead of relative ink changes
 //      --texture <-1..1>      fine local contrast;  --clarity <-0.5..2>  mid-scale;  --dehaze <-1..1>  large-scale
 //      --micro <-1..1>        micro-structure contrast (0.2 % radius);  --lowfreq <-0.5..2>  largest structures (50 %)
 //      --sharpen <0..2>       unsharp mask amount;  --sharpen-radius <px>  its radius in full-resolution pixels (default 1.5)
@@ -250,6 +254,15 @@ case "render":
     settings.detail.micro = micro; settings.detail.lowFrequency = lowFrequency
     settings.detail.sharpen = sharpen; settings.detail.sharpenRadius = sharpenRadius; settings.detail.sharpenMasking = sharpenMasking
     settings.denoise.amount = denoise; settings.denoise.method = denoiseMethod; settings.denoise.color = denoiseColor
+    func triple(_ name: String) -> [Float]? { option(name).map { $0.split(separator: ",").map { Float($0.trimmingCharacters(in: .whitespaces)) ?? 0 } } }
+    for (t, name) in [(ToneRange.shadows, "--balance-shadows"), (.midtones, "--balance-midtones"), (.highlights, "--balance-highlights")] {
+        if let v = triple(name), v.count == 3 { var a = ToneBalance(); a.cyanRed = v[0] / 100; a.magentaGreen = v[1] / 100; a.yellowBlue = v[2] / 100; settings.grading.setBalance(t, a) }
+    }
+    if flag("--no-preserve-luminosity") { settings.grading.preserveLuminosity = false }
+    for (r, name) in [(SelectiveRange.whites, "--selective-whites"), (.neutrals, "--selective-neutrals"), (.blacks, "--selective-blacks")] {
+        if let v = triple(name), v.count == 4 { var a = SelectiveAdjust(); a.cyan = v[0] / 100; a.magenta = v[1] / 100; a.yellow = v[2] / 100; a.black = v[3] / 100; settings.grading.setSelective(r, a) }
+    }
+    if flag("--selective-absolute") { settings.grading.relative = false }
     if let l = lum { applyLum(l, &settings) }
     settings.stars.enabled = stars
     if let b = starsBlend { settings.stars.mode = b }

@@ -269,6 +269,85 @@ public sealed partial class ColorBandsSettings : IEquatable<ColorBandsSettings>
     public override int GetHashCode() => SettingsJson.JsonHash(this);
 }
 
+/// <summary>Tone ranges of the Photoshop-style Color Balance.</summary>
+public enum ToneRange { Shadows, Midtones, Highlights }
+
+public static class ToneRanges
+{
+    public static readonly ToneRange[] All = [ToneRange.Shadows, ToneRange.Midtones, ToneRange.Highlights];
+    public static string DisplayName(this ToneRange t) => t.ToString();
+}
+
+/// <summary>Color Balance of one tone range: three opponent axes, −1…1 (−100…100 in the interface).</summary>
+public sealed partial class ToneBalance : IEquatable<ToneBalance>
+{
+    public float CyanRed = 0;
+    public float MagentaGreen = 0;
+    public float YellowBlue = 0;
+    public bool IsNeutral => CyanRed == 0 && MagentaGreen == 0 && YellowBlue == 0;
+
+    public ToneBalance Clone() => (ToneBalance)MemberwiseClone();
+    public bool Equals(ToneBalance? o) => o != null && CyanRed == o.CyanRed && MagentaGreen == o.MagentaGreen && YellowBlue == o.YellowBlue;
+    public override bool Equals(object? obj) => Equals(obj as ToneBalance);
+    public override int GetHashCode() => HashCode.Combine(CyanRed, MagentaGreen, YellowBlue);
+}
+
+/// <summary>Achromatic ranges of the Photoshop-style Selective Color (the hue ranges are the colour bands).</summary>
+public enum SelectiveRange { Whites, Neutrals, Blacks }
+
+public static class SelectiveRanges
+{
+    public static readonly SelectiveRange[] All = [SelectiveRange.Whites, SelectiveRange.Neutrals, SelectiveRange.Blacks];
+    public static string DisplayName(this SelectiveRange r) => r.ToString();
+}
+
+/// <summary>Selective Color of one range: ink deltas, −1…1 (−100…100 in the interface).</summary>
+public sealed partial class SelectiveAdjust : IEquatable<SelectiveAdjust>
+{
+    public float Cyan = 0;
+    public float Magenta = 0;
+    public float Yellow = 0;
+    public float Black = 0;
+    public bool IsNeutral => Cyan == 0 && Magenta == 0 && Yellow == 0 && Black == 0;
+
+    public SelectiveAdjust Clone() => (SelectiveAdjust)MemberwiseClone();
+    public bool Equals(SelectiveAdjust? o) => o != null && Cyan == o.Cyan && Magenta == o.Magenta && Yellow == o.Yellow && Black == o.Black;
+    public override bool Equals(object? obj) => Equals(obj as SelectiveAdjust);
+    public override int GetHashCode() => HashCode.Combine(Cyan, Magenta, Yellow, Black);
+}
+
+/// <summary>
+/// Photoshop-style colour grading applied after the Colour controls and before denoising and
+/// Detail: Color Balance (shadows / midtones / highlights, optionally keeping the lightness) and
+/// Selective Color for whites, neutrals and blacks (relative to the ink present, or absolute).
+/// </summary>
+public sealed partial class ColorGradingSettings : IEquatable<ColorGradingSettings>
+{
+    public Dictionary<ToneRange, ToneBalance> Balance = new();
+    public bool PreserveLuminosity = true;
+    public Dictionary<SelectiveRange, SelectiveAdjust> Selective = new();
+    public bool Relative = true;
+
+    public ToneBalance GetBalance(ToneRange t) => Balance.TryGetValue(t, out var a) ? a : new ToneBalance();
+    public void SetBalance(ToneRange t, ToneBalance a) { if (a.IsNeutral) Balance.Remove(t); else Balance[t] = a; }
+    public SelectiveAdjust GetSelective(SelectiveRange r) => Selective.TryGetValue(r, out var a) ? a : new SelectiveAdjust();
+    public void SetSelective(SelectiveRange r, SelectiveAdjust a) { if (a.IsNeutral) Selective.Remove(r); else Selective[r] = a; }
+    public bool BalanceIsNeutral => Balance.Values.All(v => v.IsNeutral);
+    public bool SelectiveIsNeutral => Selective.Values.All(v => v.IsNeutral);
+    public bool IsNeutral => BalanceIsNeutral && SelectiveIsNeutral;
+
+    public ColorGradingSettings Clone()
+    {
+        var c = new ColorGradingSettings { PreserveLuminosity = PreserveLuminosity, Relative = Relative };
+        foreach (var (k, v) in Balance) c.Balance[k] = v.Clone();
+        foreach (var (k, v) in Selective) c.Selective[k] = v.Clone();
+        return c;
+    }
+    public bool Equals(ColorGradingSettings? o) => o != null && SettingsJson.SameJson(this, o);
+    public override bool Equals(object? obj) => Equals(obj as ColorGradingSettings);
+    public override int GetHashCode() => SettingsJson.JsonHash(this);
+}
+
 /// <summary>Local-contrast operations (Camera Raw "Clarity" and "Dehaze").</summary>
 public sealed partial class DetailSettings : IEquatable<DetailSettings>
 {
@@ -439,6 +518,7 @@ public sealed partial class CombineSettings : IEquatable<CombineSettings>
     public LuminanceSettings Luminance = new();
     public ColorBandsSettings ColorBands = new();
     public PostSettings Post = new();
+    public ColorGradingSettings Grading = new();
     public DetailSettings Detail = new();
     public DenoiseSettings Denoise = new();
     public StarsBlendSettings Stars = new();
@@ -511,7 +591,7 @@ public sealed partial class CombineSettings : IEquatable<CombineSettings>
             Mode = Mode, PaletteID = PaletteID, Matrix = Matrix.Clone(), PixelMath = PixelMath.Clone(),
             MonoChannels = MonoChannels == null ? null : new HashSet<ChannelKind>(MonoChannels),
             Normalization = Normalization.Clone(), Stretch = Stretch.Clone(), StretchStage = StretchStage, Luminance = Luminance.Clone(),
-            ColorBands = ColorBands.Clone(), Post = Post.Clone(), Detail = Detail.Clone(), Denoise = Denoise.Clone(), Stars = Stars.Clone(),
+            ColorBands = ColorBands.Clone(), Post = Post.Clone(), Grading = Grading.Clone(), Detail = Detail.Clone(), Denoise = Denoise.Clone(), Stars = Stars.Clone(),
         };
         foreach (var (k, v) in Channels) c.Channels[k] = v.Clone();
         return c;

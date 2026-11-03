@@ -17,6 +17,10 @@ using AstroCore;
 //      --scnr <0..1>          green removal amount
 //      --sat <factor>         saturation
 //      --hue <deg>            hue shift
+//      --balance-shadows <cr,mg,yb>   Photoshop-style colour balance of the shadows (−100..100 each: cyan–red, magenta–green, yellow–blue);
+//      --balance-midtones / --balance-highlights alike;  --no-preserve-luminosity  lets the lightness change
+//      --selective-whites <c,m,y,k>   selective colour of the whites (−100..100: cyan, magenta, yellow, black);
+//      --selective-neutrals / --selective-blacks alike;  --selective-absolute  absolute instead of relative ink changes
 //      --texture <-1..1>      fine local contrast;  --clarity <-0.5..2>  mid-scale;  --dehaze <-1..1>  large-scale
 //      --micro <-1..1>        micro-structure contrast (0.2 % radius);  --lowfreq <-0.5..2>  largest structures (50 %)
 //      --sharpen <0..2>       unsharp mask amount;  --sharpen-radius <px>  its radius in full-resolution pixels (default 1.5)
@@ -123,6 +127,11 @@ switch (command)
         var starsBlend = EnumRaw.Parse<StarsBlendMode>(Option("--stars-blend") ?? "");
         float starsBrightness = F(Option("--stars-brightness"), 0), starsContrast = F(Option("--stars-contrast"), 0);
         bool starsWhite = Flag("--stars-white");
+        Func<string, float[]?> triple = name => Option(name)?.Split(',').Select(t => F(t.Trim(), 0)).ToArray();
+        var balanceArgs = new[] { (ToneRange.Shadows, triple("--balance-shadows")), (ToneRange.Midtones, triple("--balance-midtones")), (ToneRange.Highlights, triple("--balance-highlights")) };
+        bool noPreserveLuminosity = Flag("--no-preserve-luminosity");
+        var selectiveArgs = new[] { (SelectiveRange.Whites, triple("--selective-whites")), (SelectiveRange.Neutrals, triple("--selective-neutrals")), (SelectiveRange.Blacks, triple("--selective-blacks")) };
+        bool selectiveAbsolute = Flag("--selective-absolute");
         var formatArg = Option("--format") ?? "png8";
         var projectArg = Option("--project");
         var cropArg = Option("--crop");
@@ -286,6 +295,10 @@ switch (command)
         settings.Detail.Micro = micro; settings.Detail.LowFrequency = lowFrequency;
         settings.Detail.Sharpen = sharpen; settings.Detail.SharpenRadius = sharpenRadius; settings.Detail.SharpenMasking = sharpenMasking;
         settings.Denoise.Amount = denoise; settings.Denoise.Method = denoiseMethod; settings.Denoise.Color = denoiseColor;
+        foreach (var (t, v) in balanceArgs) if (v is { Length: 3 }) settings.Grading.SetBalance(t, new ToneBalance { CyanRed = v[0] / 100, MagentaGreen = v[1] / 100, YellowBlue = v[2] / 100 });
+        if (noPreserveLuminosity) settings.Grading.PreserveLuminosity = false;
+        foreach (var (r, v) in selectiveArgs) if (v is { Length: 4 }) settings.Grading.SetSelective(r, new SelectiveAdjust { Cyan = v[0] / 100, Magenta = v[1] / 100, Yellow = v[2] / 100, Black = v[3] / 100 });
+        if (selectiveAbsolute) settings.Grading.Relative = false;
         if (lum != null) ApplyLum(lum, settings);
         settings.Stars.Enabled = stars;
         if (starsBlend is StarsBlendMode sbm) settings.Stars.Mode = sbm;

@@ -481,6 +481,59 @@ final class ColorBandsAndDetailTests: XCTestCase {
         XCTAssertEqual(PostProcess.bandWeight(hue: 120, index: 0, centers: centers), 0)
     }
 
+    func testColorBalanceWeightsTonesAndKeepsLightness() {
+        // Mid grey, dark grey, light grey.
+        let img = RGBImage(width: 3, height: 1)
+        for p in img.planes { p.pointer.update(from: [0.5, 0.08, 0.95], count: 3) }
+        var g = ColorGradingSettings()
+        var mid = ToneBalance(); mid.cyanRed = 1; g.setBalance(.midtones, mid)
+        PostProcess.grade(img, settings: g)
+        XCTAssertGreaterThan(img.r[0, 0], img.g[0, 0] + 0.1, "midtone grey moves towards red")
+        XCTAssertEqual(PostProcess.rgbToHSL(img.r[0, 0], img.g[0, 0], img.b[0, 0]).2, 0.5, accuracy: 1e-3, "lightness preserved")
+        XCTAssertEqual(img.r[1, 0], 0.08, accuracy: 1e-5, "dark pixel outside the midtone mask untouched")
+        XCTAssertEqual(img.r[2, 0], 0.95, accuracy: 1e-5, "light pixel untouched")
+        // Shadows reach the dark pixel; without preserving the lightness the red simply adds.
+        var g2 = ColorGradingSettings(); g2.preserveLuminosity = false
+        var sh = ToneBalance(); sh.cyanRed = 1; g2.setBalance(.shadows, sh)
+        let img2 = RGBImage(width: 1, height: 1); for p in img2.planes { p.pointer[0] = 0.08 }
+        PostProcess.grade(img2, settings: g2)
+        XCTAssertEqual(img2.r[0, 0], 0.08 + 0.7, accuracy: 1e-3, "full shadow weight × 0.7 scale")
+        XCTAssertEqual(img2.g[0, 0], 0.08, accuracy: 1e-5)
+        XCTAssertTrue(ColorGradingSettings().isNeutral)
+    }
+
+    func testSelectiveColorRangesAndMethods() {
+        // White, mid grey, pure red, near black.
+        let img = RGBImage(width: 4, height: 1)
+        img.r.pointer.update(from: [1, 0.5, 1, 0.05], count: 4)
+        img.g.pointer.update(from: [1, 0.5, 0, 0.05], count: 4)
+        img.b.pointer.update(from: [1, 0.5, 0, 0.05], count: 4)
+        var g = ColorGradingSettings()
+        var wh = SelectiveAdjust(); wh.cyan = 1; g.setSelective(.whites, wh)
+        var ne = SelectiveAdjust(); ne.black = 0.5; g.setSelective(.neutrals, ne)
+        var bl = SelectiveAdjust(); bl.black = -1; g.setSelective(.blacks, bl)
+        let rel = img.copy()
+        PostProcess.grade(rel, settings: g)
+        XCTAssertEqual(rel.r[0, 0], 1, accuracy: 1e-6, "relative: pure white holds no ink, so it cannot change")
+        XCTAssertEqual(rel.r[1, 0], 0.25, accuracy: 1e-4, "neutral grey: black +50 % of the 0.5 ink present")
+        XCTAssertEqual(rel.g[1, 0], 0.25, accuracy: 1e-4)
+        XCTAssertEqual(rel.r[2, 0], 1, accuracy: 1e-6, "saturated red is in no achromatic range")
+        XCTAssertEqual(rel.g[2, 0], 0, accuracy: 1e-6)
+        // Near black sits in the blacks (0.9) and a little in the neutrals (0.1): ink × (1 − 0.9 + 0.05).
+        XCTAssertEqual(rel.r[3, 0], 1 - 0.95 * 0.15, accuracy: 1e-4, "blacks: ink removed by the range weight, neutrals add a little")
+        g.relative = false
+        let abs = img.copy()
+        PostProcess.grade(abs, settings: g)
+        XCTAssertEqual(abs.r[0, 0], 0, accuracy: 1e-6, "absolute: cyan +100 on white removes all red")
+        XCTAssertEqual(abs.g[0, 0], 1, accuracy: 1e-6)
+        XCTAssertEqual(abs.r[1, 0], 0, accuracy: 1e-4, "absolute black +50 on mid grey")
+        XCTAssertEqual(abs.r[3, 0], 1 - (0.95 - 0.85), accuracy: 1e-4, "absolute: ink − 0.9 + 0.05")
+        // Settings round trip through the tolerant decoder.
+        var s = CombineSettings(); s.grading = g
+        XCTAssertEqual(try JSONDecoder().decode(CombineSettings.self, from: try JSONEncoder().encode(s)), s)
+        XCTAssertEqual(try JSONDecoder().decode(ColorGradingSettings.self, from: Data("{}".utf8)), ColorGradingSettings())
+    }
+
     func testSelectiveColourAffectsOnlyItsBand() {
         let img = RGBImage(width: 3, height: 1)
         img.r.pointer.update(from: [0.8, 0.2, 0.5], count: 3)   // red, blue, grey

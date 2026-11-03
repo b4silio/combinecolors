@@ -261,6 +261,7 @@ final class ProjectModel {
         s.normalization.method = .none
         s.luminance.enabled = false
         s.post = PostSettings()
+        s.grading = ColorGradingSettings()
         s.detail = DetailSettings()
         s.denoise = DenoiseSettings()
         s.colorBands = ColorBandsSettings()
@@ -1059,6 +1060,7 @@ final class ProjectModel {
         if linear {
             s.stretch.method = .none
             s.post = PostSettings()
+            s.grading = ColorGradingSettings()
             s.colorBands = ColorBandsSettings()
             s.detail = DetailSettings()
             s.luminance.enabled = false
