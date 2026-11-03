@@ -102,6 +102,12 @@ is the same `AstroCore`, built for plain `net9.0`:
   (`GpuDenoise.Portable.cs` is the stub that makes the callers take the CPU paths).
 * **Not yet on Linux**: copying the preview to the clipboard (Avalonia has no portable image
   clipboard), native menus (the menu bar lives inside the window), app icon packaging.
+* **HiDPI / 4K screens**: Avalonia scales the interface from `Xft.dpi` or the `AVALONIA_*` / `QT_*`
+  scale variables; without any of them a 4K monitor would get scale 1 and 11 px text. The app
+  therefore asks the X server for the screen's pixel and physical size before starting and sets
+  the scale itself (quarter steps from 1.5× up to 3×, physical sizes over 90 cm or outside 50–400 dpi are
+  treated as bogus and a ≥ 2000-px-tall screen gets 2×). Force a value with `--scale 1.5` or
+  `COMBINECOLORS_SCALE=1.5`; `GDK_SCALE` is honoured too. The choice is printed on stderr.
 * The interface follows the Windows app, so the keyboard shortcuts above apply (Ctrl). The same
   `--prefs <file>`, `--screenshot <png>` (plus `--screenshot-delay <s>`) developer switches exist;
   preferences live in `~/.local/share/CombineColors/preferences.json`.

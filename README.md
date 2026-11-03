@@ -221,7 +221,7 @@ A Windows port lives in `windows/` (C# / .NET 9, WPF): same processing, same pal
 controls, same project files. The same .NET code also builds a Linux app
 (`windows/CombineColors.Avalonia`, Avalonia UI) and a Linux CLI; the native SwiftUI app stays the
 macOS build. See [windows/README.md](windows/README.md) for building both and the Linux runtime
-requirements.
+requirements (on a 4K screen the Linux app picks its own UI scale; `--scale 1.5` overrides it).
 
 ## Building
 

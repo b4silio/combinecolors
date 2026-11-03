@@ -5,6 +5,10 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 (`scripts/bump.sh`). The version lives in `VERSION` and is stamped into the app at build time;
 `scripts/release.sh` tags it and publishes the DMG as a GitHub release.
 
+## [1.8.1] – 2026-11-03
+
+- Linux: the interface scales itself on HiDPI / 4K screens that announce no scale (physical size from the X server, 1.5–3× in quarter steps); `--scale <f>` or `COMBINECOLORS_SCALE` force a value
+
 ## [1.8.0] – 2026-11-03
 
 - Background-sample gradient removal (Samples shape, à la DBE / GraXpert): automatic sky grid with nebula rejection, thin-plate spline or kriging surface with leave-one-out robust reweighting and cross-validated smoothing, click / drag / delete samples; Mac, Windows, Linux and the CLI

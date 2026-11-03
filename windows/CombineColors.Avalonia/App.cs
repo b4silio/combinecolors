@@ -39,6 +39,7 @@ public sealed class App : Application
             // `--open-editor gradient:Ha[:background]` (or `dust:Ha`) opens that editor once the channel is loaded (screenshots).
             if (args[i] == "--open-editor" && i + 1 < args.Length) { openEditor = args[++i]; continue; }
             if (args[i] == "--editor-action" && i + 1 < args.Length) { editorAction = args[++i]; continue; }
+            if (args[i] == "--scale" && i + 1 < args.Length) { i++; continue; }   // consumed by LinuxScaling before the platform starts
             if (!args[i].StartsWith('-')) files.Add(args[i]);
         }
         Prefs = new Preferences(prefsPath);
