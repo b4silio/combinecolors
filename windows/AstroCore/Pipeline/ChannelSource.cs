@@ -5,6 +5,8 @@ namespace AstroCore;
 /// <summary>A loaded channel with its pyramid, statistics and star mask. Immutable once built.</summary>
 public sealed class ChannelSource
 {
+    /// <summary>Identity of this source for render caches (every source, derived ones included, has its own).</summary>
+    public Guid Id { get; } = Guid.NewGuid();
     public ChannelKind Kind { get; }
     public Pyramid Pyramid { get; }
     public ChannelStats Stats { get; }

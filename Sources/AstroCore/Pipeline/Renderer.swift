@@ -17,6 +17,8 @@ public enum RenderError: Error, LocalizedError {
 
 /// Normalisation state derived from the loaded channels and the normalisation settings.
 public struct RenderContext {
+    /// Identity of this context for render caches: every `make` yields a new one.
+    public let id = UUID()
     public var transforms: [ChannelKind: ChannelTransform] = [:]
     /// Whole-image statistics after normalisation.
     public var normalizedStats: [ChannelKind: ChannelStats] = [:]
@@ -84,6 +86,8 @@ public struct RenderResult {
     /// Per-channel stretch used in pre-combine mode.
     public let channelStretch: [ChannelKind: ResolvedStretch]
     public let millis: Double
+    /// Set by `RenderCache`: the first stage that ran for this render (what was reused is before it).
+    public var ranFrom: RenderCache.Stage? = nil
 }
 
 public enum Renderer {
@@ -95,33 +99,50 @@ public enum Renderer {
 
     public static func render(_ req: RenderRequest) throws -> RenderResult {
         let t0 = Date()
-        let s = req.settings
-        let available = Set(req.planes.keys)
-        let missing = missingChannels(settings: s, available: available)
-        guard missing.isEmpty else { throw RenderError.missingChannels(missing) }
-        if s.mode == .monochrome && s.monochromeChannels(available: available).isEmpty { throw RenderError.noOutput }
-        guard !req.planes.isEmpty else { throw RenderError.noOutput }
-        let needed = s.allChannels(available: available).intersection(available)
-        let lumExpr: Expr? = try (s.luminanceApplies ? s.luminance.resolvedExpression(available: available) : nil).map { src in
-            do { return try PixelMath.parse(src) } catch let e as PixelMathError { throw RenderError.pixelMath(PixelMathError(message: "Luminance: " + e.message, position: e.position)) }
-        }
-        let main = try develop(planes: req.planes, settings: s, context: req.context, available: available, needed: needed, lumExpr: lumExpr,
-                               analysisPlanes: req.analysisPlanes, fixedPostStretch: req.fixedPostStretch, stars: req.stars, correction: req.correction)
+        let plan = try Plan(req)
+        let main = try develop(plan, planes: req.planes, context: req.context, analysisPlanes: req.analysisPlanes, fixedPostStretch: req.fixedPostStretch,
+                               stars: req.stars, correction: req.correction)
         let combined = main.image
-        // 7. Local contrast last (non point-wise; the strip renderer applies it on the whole image).
+        // 7. Denoise and local contrast last (non point-wise; the strip renderer applies them on the whole image).
         if req.applyDetail {
-            var overview: DetailOverview? = nil
-            if !s.detail.isNeutral, let ov = req.overview, let rect = req.overviewRect, needed.allSatisfy({ ov[$0] != nil }) {
-                // The whole picture developed the same way (same stretch), for the detail stage.
-                let o = try develop(planes: ov, settings: s, context: req.context, available: available, needed: needed, lumExpr: lumExpr,
-                                    analysisPlanes: nil, fixedPostStretch: main.postStretch,
-                                    correction: req.correction.map { CorrectionInput(map: $0.map, strength: $0.strength, kind: $0.kind, rect: nil) })
-                overview = DetailOverview(image: o.image, rect: rect)
-            }
-            Denoise.apply(combined, settings: s.denoise)
-            PostProcess.detail(combined, settings: s.detail, scale: req.scale, overview: overview)
+            let overview = try detailOverview(plan, req: req, postStretch: main.postStretch)
+            Denoise.apply(combined, settings: plan.settings.denoise)
+            PostProcess.detail(combined, settings: plan.settings.detail, scale: req.scale, overview: overview)
         }
         return RenderResult(image: combined, postStretch: main.postStretch, channelStretch: main.channelStretch, millis: Date().timeIntervalSince(t0) * 1000)
+    }
+
+    /// What a render request resolves to before any pixel is touched: the channels it uses and the
+    /// parsed luminance expression. Throws for missing channels or a bad expression.
+    struct Plan {
+        let settings: CombineSettings
+        let available: Set<ChannelKind>
+        let needed: Set<ChannelKind>
+        let lumExpr: Expr?
+
+        init(_ req: RenderRequest) throws {
+            let s = req.settings
+            let available = Set(req.planes.keys)
+            let missing = missingChannels(settings: s, available: available)
+            guard missing.isEmpty else { throw RenderError.missingChannels(missing) }
+            if s.mode == .monochrome && s.monochromeChannels(available: available).isEmpty { throw RenderError.noOutput }
+            guard !req.planes.isEmpty else { throw RenderError.noOutput }
+            settings = s
+            self.available = available
+            needed = s.allChannels(available: available).intersection(available)
+            lumExpr = try (s.luminanceApplies ? s.luminance.resolvedExpression(available: available) : nil).map { src in
+                do { return try PixelMath.parse(src) } catch let e as PixelMathError { throw RenderError.pixelMath(PixelMathError(message: "Luminance: " + e.message, position: e.position)) }
+            }
+        }
+    }
+
+    /// The whole picture developed the same way (same stretch) for the detail stage of a cropped
+    /// render; nil when the detail stage is neutral or the request carries no overview.
+    static func detailOverview(_ plan: Plan, req: RenderRequest, postStretch: [ResolvedStretch]?) throws -> DetailOverview? {
+        guard !plan.settings.detail.isNeutral, let ov = req.overview, let rect = req.overviewRect, plan.needed.allSatisfy({ ov[$0] != nil }) else { return nil }
+        let o = try develop(plan, planes: ov, context: req.context, analysisPlanes: nil, fixedPostStretch: postStretch,
+                            correction: req.correction.map { CorrectionInput(map: $0.map, strength: $0.strength, kind: $0.kind, rect: nil) })
+        return DetailOverview(image: o.image, rect: rect)
     }
 
     struct Developed {
@@ -132,9 +153,18 @@ public enum Renderer {
 
     /// Steps 1–6 — normalise, stretch, combine, luminance, colour, stars: everything up to the
     /// non-point-wise detail stage — for one set of planes (the render itself, or its overview).
-    static func develop(planes reqPlanes: [ChannelKind: PlanarImage], settings s: CombineSettings, context: RenderContext, available: Set<ChannelKind>,
-                        needed: Set<ChannelKind>, lumExpr: Expr?, analysisPlanes: [ChannelKind: PlanarImage]?, fixedPostStretch: [ResolvedStretch]?,
-                        stars: StarsInput? = nil, correction: CorrectionInput? = nil) throws -> Developed {
+    static func develop(_ plan: Plan, planes reqPlanes: [ChannelKind: PlanarImage], context: RenderContext, analysisPlanes: [ChannelKind: PlanarImage]?,
+                        fixedPostStretch: [ResolvedStretch]?, stars: StarsInput? = nil, correction: CorrectionInput? = nil) throws -> Developed {
+        let d = try combineStage(plan, planes: reqPlanes, context: context, analysisPlanes: analysisPlanes, fixedPostStretch: fixedPostStretch, correction: correction)
+        colourStage(d.image, plan, planes: reqPlanes, context: context, stars: stars)
+        return d
+    }
+
+    /// Steps 1–4 — normalise, stretch, combine, luminance — the point-wise work that depends on the
+    /// channels, the stretch and the combination only. The image comes back unclamped.
+    static func combineStage(_ plan: Plan, planes reqPlanes: [ChannelKind: PlanarImage], context: RenderContext, analysisPlanes: [ChannelKind: PlanarImage]?,
+                             fixedPostStretch: [ResolvedStretch]?, correction: CorrectionInput? = nil) throws -> Developed {
+        let s = plan.settings, available = plan.available, needed = plan.needed, lumExpr = plan.lumExpr
         guard let anyPlane = reqPlanes.values.first else { throw RenderError.noOutput }
         let w = anyPlane.width, h = anyPlane.height
 
@@ -245,6 +275,13 @@ public enum Renderer {
             PostProcess.injectLuminance(combined, lum: lum, amount: s.luminance.amount, method: s.luminance.method)
         }
 
+        return Developed(image: combined, postStretch: postStretch, channelStretch: channelStretch)
+    }
+
+    /// Steps 5–6 on the combined image, in place: colour post-processing and the RGB stars.
+    static func colourStage(_ combined: RGBImage, _ plan: Plan, planes reqPlanes: [ChannelKind: PlanarImage], context: RenderContext, stars: StarsInput?) {
+        let s = plan.settings
+        let w = combined.width, h = combined.height
         // 5. Colour post-processing: selective colour bands, the global controls, then the
         //    Photoshop-style grading (Color Balance, Selective Color on whites / neutrals / blacks).
         combined.clamp01()
@@ -263,7 +300,6 @@ public enum Renderer {
             }
         }
         combined.clamp01()
-        return Developed(image: combined, postStretch: postStretch, channelStretch: channelStretch)
     }
 
     // MARK: - Pieces

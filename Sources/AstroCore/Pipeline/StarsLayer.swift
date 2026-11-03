@@ -4,6 +4,8 @@ import Foundation
 /// stars: a stars-only image from a star-removal tool, or any RGB frame whose stars are wanted on
 /// top of a narrowband combination. Oriented like the channels, same size.
 public final class StarsLayer {
+    /// Identity of this layer for render caches.
+    public let id = UUID()
     /// R, G, B planes (full resolution, oriented).
     public let planes: [PlanarImage]
     public let pyramids: [Pyramid]

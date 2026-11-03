@@ -2,6 +2,8 @@ import Foundation
 
 /// A loaded channel with its pyramid, statistics and star mask. Immutable once built.
 public final class ChannelSource {
+    /// Identity of this source for render caches (every source, derived ones included, has its own).
+    public let id = UUID()
     public let kind: ChannelKind
     public let pyramid: Pyramid
     public let stats: ChannelStats

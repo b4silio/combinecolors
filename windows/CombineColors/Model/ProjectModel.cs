@@ -253,6 +253,8 @@ public sealed class ProjectModel : INotifyPropertyChanged
     public bool IsRendering { get; private set; }
     public string? RenderError { get; private set; }
     public double LastRenderMillis { get; private set; }
+    /// <summary>Short note on what the last render reused ("from denoise": the stages before denoise came from the cache).</summary>
+    public string LastRenderNote { get; private set; } = "";
     public int LastRenderLevel { get; private set; }
     HoverInfo? hover;
     public HoverInfo? Hover { get => hover; private set { if (Equals(hover, value)) return; hover = value; Notify(Change.Hover); } }
@@ -354,6 +356,12 @@ public sealed class ProjectModel : INotifyPropertyChanged
             IsRendering = gen != renderGeneration;
             RenderError = null;
             LastRenderMillis = frame.Millis;
+            LastRenderNote = frame.RanFrom switch
+            {
+                null or RenderCache.Stage.Combine => "",
+                RenderCache.Stage.Nothing => "cached",
+                RenderCache.Stage st => "from " + st.ToString().ToLowerInvariant(),
+            };
             LastRenderLevel = frame.Level;
             Histogram = frame.Rgb.Planes.Select(p => Statistics.Histogram(p, 128, maxSamples: 300_000)).ToList();
             if (frame.PostStretch != null) postStretchCache[PostStretchKey(frame.Settings)] = frame.PostStretch;
@@ -823,6 +831,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
         if (sources.Count == 0)
         {
             Context = null; AnalysisSamples = new(); thumbnails.Clear();
+            renderer.ClearCache();
             StatusText = "Drop FITS or TIFF images to begin.";
             Notify(Change.Thumbnails); Notify(Change.Context);
             return;

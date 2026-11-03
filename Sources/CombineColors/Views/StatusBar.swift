@@ -21,8 +21,9 @@ struct StatusBar: View {
                 .truncationMode(.tail)
                 .layoutPriority(1)
             if model.frame != nil {
-                Text("L\(model.lastRenderLevel) · \(Int(model.lastRenderMillis)) ms" + (model.isRendering ? " ⟳" : ""))
-                    .foregroundStyle(.secondary).lineLimit(1).frame(width: 80, alignment: .trailing)
+                Text("L\(model.lastRenderLevel) · \(Int(model.lastRenderMillis)) ms" + (model.lastRenderNote.isEmpty ? "" : " · " + model.lastRenderNote) + (model.isRendering ? " ⟳" : ""))
+                    .foregroundStyle(.secondary).lineLimit(1).frame(width: 150, alignment: .trailing)
+                    .help("Render time of the shown preview. “from denoise” / “from detail” / “from colour”: the stages before came from the render cache; “cached”: nothing had to be recomputed.")
             }
             Text(String(format: "%.0f%%", model.viewport.scale * 100)).foregroundStyle(.secondary).frame(width: 44, alignment: .trailing)
         }

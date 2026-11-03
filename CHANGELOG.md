@@ -5,6 +5,10 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 (`scripts/bump.sh`). The version lives in `VERSION` and is stamped into the app at build time;
 `scripts/release.sh` tags it and publishes the DMG as a GitHub release.
 
+## [1.10.0] – 2026-11-03
+
+- Render cache: moving a Detail, Denoise or colour slider re-runs only the stages after it (Detail 57 → 17 ms, with BM3D on 277 → 17 ms at the preview size); the status bar says what was reused
+
 ## [1.9.0] – 2026-11-03
 
 - Manual corrections painted on one channel of a split colour file no longer come back on all three: the map is stored per channel (<image>.<channel>.ccmask.png; older maps are still read); Mac, Windows and Linux

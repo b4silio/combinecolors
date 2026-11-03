@@ -184,6 +184,8 @@ final class ProjectModel {
     private(set) var isRendering = false
     private(set) var renderError: String? = nil
     private(set) var lastRenderMillis: Double = 0
+    /// Short note on what the last render reused ("from denoise": the stages before denoise came from the cache).
+    private(set) var lastRenderNote: String = ""
     private(set) var lastRenderLevel: Int = 0
     var hover: HoverInfo? = nil
     var fitRequest = 0   // incremented to ask the preview to fit
@@ -333,6 +335,11 @@ final class ProjectModel {
             self.isRendering = gen != self.renderGeneration
             self.renderError = nil
             self.lastRenderMillis = frame.millis
+            switch frame.ranFrom {
+            case .combine?, nil: self.lastRenderNote = ""
+            case .nothing?: self.lastRenderNote = "cached"
+            case let st?: self.lastRenderNote = "from " + st.rawValue
+            }
             self.lastRenderLevel = frame.level
             self.histogramStorage = frame.rgb.planes.map { Statistics.histogram(image: $0, bins: 128, maxSamples: 300_000) }
             if let ps = frame.postStretch {
@@ -710,6 +717,7 @@ final class ProjectModel {
         recordRecentSet()
         if sources.isEmpty {
             context = nil; analysisSamples = [:]; thumbnails = [:]
+            renderer.clearCache()
             statusText = "Drop FITS or TIFF images to begin."
             return
         }

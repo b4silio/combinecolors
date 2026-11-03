@@ -55,7 +55,7 @@ public sealed class StatusBarView : Grid
         error.Text = model.RenderError ?? "";
         error.IsVisible = model.RenderError != null;
         readout.Text = Readout();
-        timing.Text = model.Frame != null ? $"L{model.LastRenderLevel} · {(int)model.LastRenderMillis} ms" + (model.IsRendering ? " ⟳" : "") : "";
+        timing.Text = model.Frame != null ? $"L{model.LastRenderLevel} · {(int)model.LastRenderMillis} ms" + (model.LastRenderNote.Length == 0 ? "" : " · " + model.LastRenderNote) + (model.IsRendering ? " ⟳" : "") : "";
     }
 
     /// <summary>Pixel read-out as one string (fixed format so the width barely changes).</summary>

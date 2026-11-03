@@ -15,6 +15,8 @@ public sealed class PreviewFrame
     /// <summary>Region covered by the frame, in full-resolution image pixels.</summary>
     public Rect Rect { get; init; }
     public double Millis { get; init; }
+    /// <summary>The first pipeline stage that ran (earlier ones came from the render cache); null when uncached.</summary>
+    public RenderCache.Stage? RanFrom { get; init; }
     public List<ResolvedStretch>? PostStretch { get; init; }
     public required Dictionary<ChannelKind, ResolvedStretch> ChannelStretch { get; init; }
     public required CombineSettings Settings { get; init; }
@@ -45,8 +47,19 @@ public sealed class RenderCoordinator
     readonly object gate = new();
     PreviewRequest? pending;
     bool busy;
+    /// <summary>Intermediates of the last render, reused when only later stages change (owned by the render thread).</summary>
+    readonly RenderCache cache = new();
     public Action<PreviewFrame, int>? OnFrame;
     public Action<Exception, int>? OnError;
+
+    /// <summary>Drops the cached intermediates (e.g. when a project closes); the next render starts from scratch.</summary>
+    public void ClearCache()
+    {
+        bool start;
+        lock (gate) { clearRequested = true; start = !busy; if (start) busy = true; }
+        if (start) Task.Run(Drain);
+    }
+    bool clearRequested;
 
     public void Submit(PreviewRequest req)
     {
@@ -65,22 +78,28 @@ public sealed class RenderCoordinator
         while (true)
         {
             PreviewRequest req;
+            bool clear;
             lock (gate)
             {
+                clear = clearRequested; clearRequested = false;
+                if (clear) cache.Clear();
                 if (pending == null) { busy = false; return; }
                 req = pending; pending = null;
             }
             try
             {
-                var frame = Render(req);
+                var frame = Render(req, cache);
                 OnFrame?.Invoke(frame, req.Generation);
             }
             catch (Exception e) { OnError?.Invoke(e, req.Generation); }
         }
     }
 
-    /// <summary>Chooses the pyramid level and crop for a viewport, renders it and converts it for display.</summary>
-    public static PreviewFrame Render(PreviewRequest req)
+    /// <summary>
+    /// Chooses the pyramid level and crop for a viewport, renders it and converts it for display.
+    /// With a <paramref name="cache"/>, stages whose inputs did not change since the last render are reused.
+    /// </summary>
+    public static PreviewFrame Render(PreviewRequest req, RenderCache? cache = null)
     {
         var any = req.Sources.Values.FirstOrDefault() ?? throw RenderException.NoOutput();
         var pyramid = any.Pyramid;
@@ -114,11 +133,17 @@ public sealed class RenderCoordinator
                                         overview: overview?.planes, overviewRect: overview?.rect);
         if (req.Settings.Stars.Enabled && req.Stars is StarsLayer st && st.Width == fullW && st.Height == fullH) request.Stars = st.Input(level, x0, y0, cw, ch);
         if (req.Correction is (CorrectionMap cmap, float cstr, ChannelKind ckind)) request.Correction = new CorrectionInput(cmap, cstr, ckind, new SampleRect(x0 * inv, y0 * inv, cw * inv, ch * inv));
-        var result = Renderer.Render(request);
+        RenderResult result;
+        if (cache != null)
+        {
+            var key = new RenderInputKey(req.Sources.ToDictionary(kv => kv.Key, kv => kv.Value.Id), request.Stars == null ? null : req.Stars?.Id, req.Context.Id, level, x0, y0, cw, ch);
+            result = cache.Render(request, key);
+        }
+        else result = Renderer.Render(request);
         var bmp = DisplayBitmaps.Make(result.Image);
         return new PreviewFrame
         {
-            Bitmap = bmp, Rgb = result.Image, Level = level, Rect = rect, Millis = result.Millis, PostStretch = result.PostStretch,
+            Bitmap = bmp, Rgb = result.Image, Level = level, Rect = rect, Millis = result.Millis, RanFrom = result.RanFrom, PostStretch = result.PostStretch,
             ChannelStretch = result.ChannelStretch, Settings = req.Settings,
         };
     }

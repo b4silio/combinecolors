@@ -24,6 +24,8 @@ public sealed class RenderException : Exception
 /// <summary>Normalisation state derived from the loaded channels and the normalisation settings.</summary>
 public sealed class RenderContext
 {
+    /// <summary>Identity of this context for render caches: every <see cref="Make"/> yields a new one.</summary>
+    public Guid Id { get; } = Guid.NewGuid();
     public Dictionary<ChannelKind, ChannelTransform> Transforms = new();
     /// <summary>Whole-image statistics after normalisation.</summary>
     public Dictionary<ChannelKind, ChannelStats> NormalizedStats = new();
@@ -99,6 +101,8 @@ public sealed class RenderResult
     /// <summary>Per-channel stretch used in pre-combine mode.</summary>
     public required Dictionary<ChannelKind, ResolvedStretch> ChannelStretch { get; init; }
     public double Millis { get; init; }
+    /// <summary>Set by <see cref="RenderCache"/>: the first stage that ran for this render (what was reused is before it).</summary>
+    public RenderCache.Stage? RanFrom { get; set; }
 }
 
 public static class Renderer
@@ -110,39 +114,62 @@ public static class Renderer
     public static RenderResult Render(RenderRequest req)
     {
         var t0 = Stopwatch.StartNew();
-        var s = req.Settings;
-        var available = req.Planes.Keys.ToHashSet();
-        var missing = MissingChannels(s, available);
-        if (missing.Count > 0) throw RenderException.MissingChannels(missing);
-        if (s.Mode == CombineMode.Monochrome && s.MonochromeChannels(available).Count == 0) throw RenderException.NoOutput();
-        if (req.Planes.Count == 0) throw RenderException.NoOutput();
-        var needed = s.AllChannels(available); needed.IntersectWith(available);
-        Expr? lumExpr = null;
-        if (s.LuminanceApplies && s.Luminance.ResolvedExpression(available) is string src)
-        {
-            try { lumExpr = PixelMath.Parse(src); }
-            catch (PixelMathException e) { throw RenderException.PixelMath(new PixelMathException("Luminance: " + e.Detail, e.Position)); }
-        }
-        var main = Develop(req.Planes, s, req.Context, available, needed, lumExpr, req.AnalysisPlanes, req.FixedPostStretch, req.Stars, req.Correction);
+        var plan = new Plan(req);
+        var main = Develop(plan, req.Planes, req.Context, req.AnalysisPlanes, req.FixedPostStretch, req.Stars, req.Correction);
         var combined = main.Image;
-        // 7. Local contrast last (non point-wise; the strip renderer applies it on the whole image).
+        // 7. Denoise and local contrast last (non point-wise; the strip renderer applies them on the whole image).
         if (req.ApplyDetail)
         {
-            DetailOverview? overview = null;
-            if (!s.Detail.IsNeutral && req.Overview is { } ov && req.OverviewRect is { } rect && needed.All(ov.ContainsKey))
-            {
-                // The whole picture developed the same way (same stretch), for the detail stage.
-                var o = Develop(ov, s, req.Context, available, needed, lumExpr, null, main.PostStretch, null,
-                                req.Correction == null ? null : new CorrectionInput(req.Correction.Map, req.Correction.Strength, req.Correction.Kind, null));
-                overview = new DetailOverview(o.Image, rect);
-            }
-            Denoise.Apply(combined, s.Denoise);
-            PostProcess.Detail(combined, s.Detail, req.Scale, overview);
+            var overview = DetailOverview(plan, req, main.PostStretch);
+            Denoise.Apply(combined, plan.Settings.Denoise);
+            PostProcess.Detail(combined, plan.Settings.Detail, req.Scale, overview);
         }
         return new RenderResult { Image = combined, PostStretch = main.PostStretch, ChannelStretch = main.ChannelStretch, Millis = t0.Elapsed.TotalMilliseconds };
     }
 
-    sealed class Developed
+    /// <summary>
+    /// What a render request resolves to before any pixel is touched: the channels it uses and the
+    /// parsed luminance expression. Throws for missing channels or a bad expression.
+    /// </summary>
+    internal sealed class Plan
+    {
+        public readonly CombineSettings Settings;
+        public readonly HashSet<ChannelKind> Available;
+        public readonly HashSet<ChannelKind> Needed;
+        public readonly Expr? LumExpr;
+
+        public Plan(RenderRequest req)
+        {
+            var s = req.Settings;
+            var available = req.Planes.Keys.ToHashSet();
+            var missing = MissingChannels(s, available);
+            if (missing.Count > 0) throw RenderException.MissingChannels(missing);
+            if (s.Mode == CombineMode.Monochrome && s.MonochromeChannels(available).Count == 0) throw RenderException.NoOutput();
+            if (req.Planes.Count == 0) throw RenderException.NoOutput();
+            Settings = s;
+            Available = available;
+            Needed = s.AllChannels(available); Needed.IntersectWith(available);
+            if (s.LuminanceApplies && s.Luminance.ResolvedExpression(available) is string src)
+            {
+                try { LumExpr = PixelMath.Parse(src); }
+                catch (PixelMathException e) { throw RenderException.PixelMath(new PixelMathException("Luminance: " + e.Detail, e.Position)); }
+            }
+        }
+    }
+
+    /// <summary>
+    /// The whole picture developed the same way (same stretch) for the detail stage of a cropped
+    /// render; null when the detail stage is neutral or the request carries no overview.
+    /// </summary>
+    internal static DetailOverview? DetailOverview(Plan plan, RenderRequest req, List<ResolvedStretch>? postStretch)
+    {
+        if (plan.Settings.Detail.IsNeutral || req.Overview is not { } ov || req.OverviewRect is not { } rect || !plan.Needed.All(ov.ContainsKey)) return null;
+        var o = Develop(plan, ov, req.Context, null, postStretch, null,
+                        req.Correction == null ? null : new CorrectionInput(req.Correction.Map, req.Correction.Strength, req.Correction.Kind, null));
+        return new DetailOverview(o.Image, rect);
+    }
+
+    internal sealed class Developed
     {
         public required RGBImage Image;
         public List<ResolvedStretch>? PostStretch;
@@ -153,10 +180,22 @@ public static class Renderer
     /// Steps 1–6 — normalise, stretch, combine, luminance, colour, stars: everything up to the
     /// non-point-wise detail stage — for one set of planes (the render itself, or its overview).
     /// </summary>
-    static Developed Develop(Dictionary<ChannelKind, PlanarImage> reqPlanes, CombineSettings s, RenderContext context, HashSet<ChannelKind> available,
-                             HashSet<ChannelKind> needed, Expr? lumExpr, Dictionary<ChannelKind, PlanarImage>? analysisPlanes, List<ResolvedStretch>? fixedPostStretch,
-                             StarsInput? stars = null, CorrectionInput? correction = null)
+    internal static Developed Develop(Plan plan, Dictionary<ChannelKind, PlanarImage> reqPlanes, RenderContext context, Dictionary<ChannelKind, PlanarImage>? analysisPlanes,
+                                      List<ResolvedStretch>? fixedPostStretch, StarsInput? stars = null, CorrectionInput? correction = null)
     {
+        var d = CombineStage(plan, reqPlanes, context, analysisPlanes, fixedPostStretch, correction);
+        ColourStage(d.Image, plan, reqPlanes, context, stars);
+        return d;
+    }
+
+    /// <summary>
+    /// Steps 1–4 — normalise, stretch, combine, luminance — the point-wise work that depends on the
+    /// channels, the stretch and the combination only. The image comes back unclamped.
+    /// </summary>
+    internal static Developed CombineStage(Plan plan, Dictionary<ChannelKind, PlanarImage> reqPlanes, RenderContext context, Dictionary<ChannelKind, PlanarImage>? analysisPlanes,
+                                           List<ResolvedStretch>? fixedPostStretch, CorrectionInput? correction = null)
+    {
+        CombineSettings s = plan.Settings; var available = plan.Available; var needed = plan.Needed; var lumExpr = plan.LumExpr;
         var anyPlane = reqPlanes.Values.FirstOrDefault() ?? throw RenderException.NoOutput();
         int w = anyPlane.Width, h = anyPlane.Height;
 
@@ -273,6 +312,14 @@ public static class Renderer
             PostProcess.InjectLuminance(combined, lumPlane, s.Luminance.Amount, s.Luminance.Method);
         }
 
+        return new Developed { Image = combined, PostStretch = postStretch, ChannelStretch = channelStretch };
+    }
+
+    /// <summary>Steps 5–6 on the combined image, in place: colour post-processing and the RGB stars.</summary>
+    internal static void ColourStage(RGBImage combined, Plan plan, Dictionary<ChannelKind, PlanarImage> reqPlanes, RenderContext context, StarsInput? stars)
+    {
+        var s = plan.Settings;
+        int w = combined.Width, h = combined.Height;
         // 5. Colour post-processing: selective colour bands, the global controls, then the
         //    Photoshop-style grading (Color Balance, Selective Color on whites / neutrals / blacks).
         combined.Clamp01();
@@ -295,7 +342,6 @@ public static class Renderer
             }
         }
         combined.Clamp01();
-        return new Developed { Image = combined, PostStretch = postStretch, ChannelStretch = channelStretch };
     }
 
     // Pieces

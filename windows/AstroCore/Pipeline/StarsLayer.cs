@@ -7,6 +7,8 @@ namespace AstroCore;
 /// </summary>
 public sealed class StarsLayer
 {
+    /// <summary>Identity of this layer for render caches.</summary>
+    public Guid Id { get; } = Guid.NewGuid();
     /// <summary>R, G, B planes (full resolution, oriented).</summary>
     public IReadOnlyList<PlanarImage> Planes { get; }
     public IReadOnlyList<Pyramid> Pyramids { get; }

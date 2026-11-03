@@ -11,6 +11,8 @@ struct PreviewFrame {
     /// Region covered by the frame, in full-resolution image pixels.
     let rect: CGRect
     let millis: Double
+    /// The first pipeline stage that ran (earlier ones came from the render cache); nil when uncached.
+    let ranFrom: RenderCache.Stage?
     let postStretch: [ResolvedStretch]?
     let channelStretch: [ChannelKind: ResolvedStretch]
     let settings: CombineSettings
@@ -40,8 +42,13 @@ final class RenderCoordinator {
     private let lock = NSLock()
     private var pending: PreviewRequest?
     private var busy = false
+    /// Intermediates of the last render, reused when only later stages change (owned by the render queue).
+    private let cache = RenderCache()
     var onFrame: ((PreviewFrame, Int) -> Void)?
     var onError: ((Error, Int) -> Void)?
+
+    /// Drops the cached intermediates (e.g. when a project closes); the next render starts from scratch.
+    func clearCache() { queue.async { self.cache.clear() } }
 
     func submit(_ req: PreviewRequest) {
         lock.lock()
@@ -59,7 +66,7 @@ final class RenderCoordinator {
             pending = nil
             lock.unlock()
             do {
-                let frame = try RenderCoordinator.render(req)
+                let frame = try RenderCoordinator.render(req, cache: cache)
                 DispatchQueue.main.async { self.onFrame?(frame, req.generation) }
             } catch {
                 DispatchQueue.main.async { self.onError?(error, req.generation) }
@@ -68,7 +75,8 @@ final class RenderCoordinator {
     }
 
     /// Chooses the pyramid level and crop for a viewport, renders it and converts it for display.
-    static func render(_ req: PreviewRequest) throws -> PreviewFrame {
+    /// With a `cache`, stages whose inputs did not change since the last render are reused.
+    static func render(_ req: PreviewRequest, cache: RenderCache? = nil) throws -> PreviewFrame {
         guard let any = req.sources.values.first else { throw RenderError.noOutput }
         let pyramid = any.pyramid
         let fullW = any.width, fullH = any.height
@@ -103,9 +111,16 @@ final class RenderCoordinator {
                                     overview: overview?.planes, overviewRect: overview?.rect)
         if req.settings.stars.enabled, let st = req.stars, st.width == fullW, st.height == fullH { request.stars = st.input(level: level, x: x0, y: y0, width: cw, height: ch) }
         if let c = req.correction { request.correction = CorrectionInput(map: c.map, strength: c.strength, kind: c.kind, rect: rect) }
-        let result = try Renderer.render(request)
+        let result: RenderResult
+        if let cache {
+            let key = RenderInputKey(sources: req.sources.mapValues(\.id), stars: request.stars == nil ? nil : req.stars?.id, context: req.context.id,
+                                     level: level, x: x0, y: y0, width: cw, height: ch)
+            result = try cache.render(request, inputs: key)
+        } else {
+            result = try Renderer.render(request)
+        }
         guard let cg = RasterWriter.makeDisplayImage(rgb: result.image) else { throw RenderError.noOutput }
-        return PreviewFrame(cgImage: cg, rgb: result.image, level: level, rect: rect, millis: result.millis, postStretch: result.postStretch, channelStretch: result.channelStretch, settings: req.settings)
+        return PreviewFrame(cgImage: cg, rgb: result.image, level: level, rect: rect, millis: result.millis, ranFrom: result.ranFrom, postStretch: result.postStretch, channelStretch: result.channelStretch, settings: req.settings)
     }
 }
 
