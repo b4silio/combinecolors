@@ -39,9 +39,9 @@ struct ControlsStripView: View {
                 ControlBlock(title: "Colour bands", width: 226, expanded: binding("bands"), dragScroll: dragScroll, minHeight: contentHeight - 12) { colorBandsSection }
                 ControlBlock(title: "Colour", width: 250, expanded: binding("colour"), dragScroll: dragScroll, minHeight: contentHeight - 12) { colourSection }
                 ControlBlock(title: "Denoise", width: 330, expanded: binding("denoise"), dragScroll: dragScroll, minHeight: contentHeight - 12) { denoiseSection }
-                ControlBlock(title: "Detail", width: 500, expanded: binding("detail"), dragScroll: dragScroll, minHeight: contentHeight - 12) { detailSection }
+                ControlBlock(title: "Detail", width: 262, expanded: binding("detail"), dragScroll: dragScroll, minHeight: contentHeight - 12) { detailSection }
                 // Stays collapsed while no R, G and B channels are loaded (nothing to blend).
-                ControlBlock(title: "RGB stars", width: 300, expanded: binding("stars"), dragScroll: dragScroll, minHeight: contentHeight - 12) { starsSection }
+                ControlBlock(title: "RGB stars", width: 250, expanded: binding("stars"), dragScroll: dragScroll, minHeight: contentHeight - 12) { starsSection }
             }
             .padding(.horizontal, 6)
             .padding(.top, 6)
@@ -107,26 +107,20 @@ struct ControlsStripView: View {
     @ViewBuilder var detailSection: some View {
         let d = $model.settings.detail
         let lw: CGFloat = 84
-        // Two columns: local contrast by scale (fine → coarse) on the left, sharpening on the right.
-        HStack(alignment: .top, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                SliderRow(title: "Micro", value: d.micro, range: -1...1, defaultValue: 0, help: "Micro-structure local contrast, the finest scale (radius ≈ 0.2 % of the width); stars are excluded from the blur to avoid dark halos.", note: "0.2%", labelWidth: lw)
-                SliderRow(title: "Texture", value: d.texture, range: -1...1, defaultValue: 0, help: "Fine-detail local contrast (radius ≈ 0.6 % of the width); stars are excluded from the blur to avoid dark halos.", note: "0.6%", labelWidth: lw)
-                SliderRow(title: "Clarity", value: d.clarity, range: -0.5...2, defaultValue: 0, help: "Mid-tone local contrast at a broader scale (radius ≈ 6 % of the width).", note: "6%", labelWidth: lw)
-                SliderRow(title: "Dehaze", value: d.dehaze, range: -1...1, defaultValue: 0, help: "Subtracts the large-scale haze component (radius ≈ 25 % of the width); negative adds haze.", note: "25%", labelWidth: lw)
-                SliderRow(title: "Low freq.", value: d.lowFrequency, range: -0.5...2, defaultValue: 0, help: "Local contrast of the largest structures (radius ≈ 50 % of the width): separates big nebula regions from the sky without touching fine detail.", note: "50%", labelWidth: lw)
-            }
-            Divider()
-            VStack(alignment: .leading, spacing: 2) {
-                SliderRow(title: "Sharpen", value: d.sharpen, range: 0...2, defaultValue: 0, help: "Unsharp mask on the luminance (stars excluded from the blur). The radius is in full-resolution pixels, so judge it at 1:1 with HQ on; a fitted preview shows little of it.", labelWidth: lw)
-                SliderRow(title: "Radius", value: d.sharpenRadius, range: 0.5...5, defaultValue: 1.5, format: "%.1f", help: "Sharpening radius in full-resolution pixels.", note: "px", labelWidth: lw)
-                SliderRow(title: "Masking", value: d.sharpenMasking, range: 0...1, defaultValue: 0, help: "Protects flat, noisy areas: only detail above this fraction of the noise level is sharpened (like Camera Raw's Masking).", labelWidth: lw)
-                HStack {
-                    Spacer()
-                    Button("Reset") { model.settings.detail = DetailSettings() }.controlSize(.small)
-                        .disabled(model.settings.detail == DetailSettings())
-                }
-            }
+        // One column, scrolled: local contrast by scale (fine → coarse), then the sharpening.
+        SliderRow(title: "Micro", value: d.micro, range: -1...1, defaultValue: 0, help: "Micro-structure local contrast, the finest scale (radius ≈ 0.2 % of the width); stars are excluded from the blur to avoid dark halos.", note: "0.2%", labelWidth: lw)
+        SliderRow(title: "Texture", value: d.texture, range: -1...1, defaultValue: 0, help: "Fine-detail local contrast (radius ≈ 0.6 % of the width); stars are excluded from the blur to avoid dark halos.", note: "0.6%", labelWidth: lw)
+        SliderRow(title: "Clarity", value: d.clarity, range: -0.5...2, defaultValue: 0, help: "Mid-tone local contrast at a broader scale (radius ≈ 6 % of the width).", note: "6%", labelWidth: lw)
+        SliderRow(title: "Dehaze", value: d.dehaze, range: -1...1, defaultValue: 0, help: "Subtracts the large-scale haze component (radius ≈ 25 % of the width); negative adds haze.", note: "25%", labelWidth: lw)
+        SliderRow(title: "Low freq.", value: d.lowFrequency, range: -0.5...2, defaultValue: 0, help: "Local contrast of the largest structures (radius ≈ 50 % of the width): separates big nebula regions from the sky without touching fine detail.", note: "50%", labelWidth: lw)
+        Divider().padding(.vertical, 2)
+        SliderRow(title: "Sharpen", value: d.sharpen, range: 0...2, defaultValue: 0, help: "Unsharp mask on the luminance (stars excluded from the blur). The radius is in full-resolution pixels, so judge it at 1:1 with HQ on; a fitted preview shows little of it.", labelWidth: lw)
+        SliderRow(title: "Radius", value: d.sharpenRadius, range: 0.5...5, defaultValue: 1.5, format: "%.1f", help: "Sharpening radius in full-resolution pixels.", note: "px", labelWidth: lw)
+        SliderRow(title: "Masking", value: d.sharpenMasking, range: 0...1, defaultValue: 0, help: "Protects flat, noisy areas: only detail above this fraction of the noise level is sharpened (like Camera Raw's Masking).", labelWidth: lw)
+        HStack {
+            Spacer()
+            Button("Reset") { model.settings.detail = DetailSettings() }.controlSize(.small)
+                .disabled(model.settings.detail == DetailSettings())
         }
     }
 
@@ -282,26 +276,21 @@ struct ControlsStripView: View {
         Toggle("Blend RGB stars into the result", isOn: s.enabled).disabled(!model.hasStars)
         if !model.hasStars { Text("Load a stars layer, or R, G and B channels, to enable.").font(.caption2).foregroundStyle(.secondary) }
         if model.settings.stars.enabled {
-            HStack(alignment: .top, spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    SliderRow(title: "Amount", value: s.amount, range: 0...1, defaultValue: 1, labelWidth: lw)
-                    SliderRow(title: "Brightness", value: s.brightness, range: -2...2, defaultValue: 0, format: "%.2f", help: "Gain of the star layer in stops, after its stretch", note: "EV", labelWidth: lw)
-                    SliderRow(title: "Contrast", value: s.contrast, range: -1...1, defaultValue: 0, format: "%.2f", help: "Spreads the star layer around the mid-tone: positive darkens faint halos and keeps the cores, negative softens", labelWidth: lw)
-                    SliderRow(title: "Star sat.", value: s.saturation, range: 0...3, defaultValue: 1.3, labelWidth: lw)
-                    Toggle("Brightest stars to white", isOn: s.normalize).toggleStyle(.checkbox).font(.caption)
-                        .help("Scale the layer so its brightest stars reach white — the brightest values of the result (whole-image peak, so preview and export agree)")
-                }
-                Divider()
-                VStack(alignment: .leading, spacing: 2) {
-                    MenuPicker(title: "Blend", selection: s.mode, options: StarsBlendMode.allCases) { $0.displayName }
-                        .help("Screen: adds without clipping, soft on bright nebulae (default).\nLighten: the brighter of the two.\nAdd: sum, clipped.")
-                    MenuPicker(title: "Star data", selection: s.stretch, options: StarsStretchMode.allCases) { $0.displayName }
-                    Toggle("Mask by luminance", isOn: s.useMask).toggleStyle(.checkbox).font(.caption).help("Off for star-only images from StarNet/StarXTerminator.")
-                    if model.settings.stars.useMask {
-                        SliderRow(title: "Threshold", value: s.threshold, range: 0...1, defaultValue: 0.15, labelWidth: lw)
-                        SliderRow(title: "Softness", value: s.softness, range: 0.01...1, defaultValue: 0.25, labelWidth: lw)
-                    }
-                }
+            // One column, scrolled: the layer's look, then the blend.
+            SliderRow(title: "Amount", value: s.amount, range: 0...1, defaultValue: 1, labelWidth: lw)
+            SliderRow(title: "Brightness", value: s.brightness, range: -2...2, defaultValue: 0, format: "%.2f", help: "Gain of the star layer in stops, after its stretch", note: "EV", labelWidth: lw)
+            SliderRow(title: "Contrast", value: s.contrast, range: -1...1, defaultValue: 0, format: "%.2f", help: "Spreads the star layer around the mid-tone: positive darkens faint halos and keeps the cores, negative softens", labelWidth: lw)
+            SliderRow(title: "Star sat.", value: s.saturation, range: 0...3, defaultValue: 1.3, labelWidth: lw)
+            Toggle("Brightest stars to white", isOn: s.normalize).toggleStyle(.checkbox).font(.caption)
+                .help("Scale the layer so its brightest stars reach white — the brightest values of the result (whole-image peak, so preview and export agree)")
+            Divider().padding(.vertical, 2)
+            MenuPicker(title: "Blend", selection: s.mode, options: StarsBlendMode.allCases) { $0.displayName }
+                .help("Screen: adds without clipping, soft on bright nebulae (default).\nLighten: the brighter of the two.\nAdd: sum, clipped.")
+            MenuPicker(title: "Star data", selection: s.stretch, options: StarsStretchMode.allCases) { $0.displayName }
+            Toggle("Mask by luminance", isOn: s.useMask).toggleStyle(.checkbox).font(.caption).help("Off for star-only images from StarNet/StarXTerminator.")
+            if model.settings.stars.useMask {
+                SliderRow(title: "Threshold", value: s.threshold, range: 0...1, defaultValue: 0.15, labelWidth: lw)
+                SliderRow(title: "Softness", value: s.softness, range: 0.01...1, defaultValue: 0.25, labelWidth: lw)
             }
         }
     }

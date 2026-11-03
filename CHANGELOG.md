@@ -7,6 +7,7 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 
 ## [1.8.1] – 2026-11-03
 
+- Detail and RGB stars blocks are one scrolled column again (the two-column layout left the sliders a few pixels wide); Sharpen sits under the Detail scales; Mac, Windows and Linux
 - Linux: the interface scales itself on HiDPI / 4K screens that announce no scale (physical size from the X server, 1.5–3× in quarter steps); `--scale <f>` or `COMBINECOLORS_SCALE` force a value
 
 ## [1.8.0] – 2026-11-03
