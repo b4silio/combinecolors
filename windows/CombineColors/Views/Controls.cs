@@ -284,7 +284,7 @@ public sealed class ControlBlock : Border
 
 public static class Ui
 {
-    public static Border Separator() => new() { Height = 1, Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)), Margin = new Thickness(0, 4, 0, 4) };
+    public static Border Separator() => new() { Height = 1, Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)), Margin = new Thickness(0, 10, 0, 10) };
     public static TextBlock Caption(string text, double size = 10, bool wrap = true) => new() { Text = text, FontSize = size, Foreground = Brushes.Gray, TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap, Margin = new Thickness(0, 2, 0, 2) };
 
     public static Button SmallButton(string text, Action onClick, string? help = null)

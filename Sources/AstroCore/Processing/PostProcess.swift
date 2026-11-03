@@ -433,16 +433,23 @@ public enum PostProcess {
         } else {
             mask = PlanarImage(width: img.width, height: img.height, fill: 1)
         }
+        // With "brightest stars to white" the amount is a tone curve on the layer that keeps its
+        // peak: v·(amount + (1 − amount)·v) fades the faint stars by the amount while the cores
+        // stay at 1, so lowering the stars does not turn the big ones grey. Otherwise it mixes.
+        let keepWhite = s.normalize && s.amount < 1
+        let amount = keepWhite ? 1 : s.amount
         for (p, q) in zip(img.planes, st.planes) {
             let a = p.pointer, b = q.pointer, m = mask.pointer
             for i in 0..<n {
+                var v = b[i]
+                if keepWhite { v = v * (s.amount + (1 - s.amount) * v) }
                 let blended: Float
                 switch s.mode {
-                case .screen: blended = 1 - (1 - a[i]) * (1 - b[i])
-                case .lighten: blended = max(a[i], b[i])
-                case .add: blended = a[i] + b[i]
+                case .screen: blended = 1 - (1 - a[i]) * (1 - v)
+                case .lighten: blended = max(a[i], v)
+                case .add: blended = a[i] + v
                 }
-                a[i] += s.amount * m[i] * (blended - a[i])
+                a[i] += amount * m[i] * (blended - a[i])
             }
         }
         img.clamp01()

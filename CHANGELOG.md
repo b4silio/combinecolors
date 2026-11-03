@@ -7,6 +7,8 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 
 ## [1.9.0] – 2026-11-03
 
+- Manual corrections painted on one channel of a split colour file no longer come back on all three: the map is stored per channel (<image>.<channel>.ccmask.png; older maps are still read); Mac, Windows and Linux
+- RGB stars: with Brightest stars to white on, lowering Amount fades the faint stars but keeps the cores white (they used to turn grey)
 - Balance block (between Colour and Denoise): Photoshop-style Color Balance (cyan–red, magenta–green, yellow–blue for shadows, midtones and highlights, Preserve luminosity) and Selective Color for the whites, neutrals and blacks (cyan, magenta, yellow, black; Relative or Absolute); Mac, Windows, Linux and the CLI
 - Reopening a recent set or a project whose R, G and B came from one colour file gives the three channels their own planes again (they all got the first plane) and saves the set's state; Mac, Windows and Linux
 - Detail and RGB stars blocks are one scrolled column again (the two-column layout left the sliders a few pixels wide); Sharpen sits under the Detail scales; Mac, Windows and Linux

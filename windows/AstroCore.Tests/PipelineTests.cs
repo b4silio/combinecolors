@@ -309,6 +309,23 @@ public class PostProcessTests
     }
 
     [Fact]
+    public void StarsAmountKeepsThePeakWhiteWhenNormalised()
+    {
+        var stars = new RGBImage(2, 1);
+        foreach (var p in stars.Planes) { p.Data[0] = 1; p.Data[1] = 0.2f; }
+        var s = new StarsBlendSettings { Enabled = true, UseMask = false, Amount = 0.3f, Normalize = true };
+        var img = new RGBImage(2, 1);
+        PostProcess.BlendStars(img, stars, s);
+        A.Close(1, img.R.Data[0], 1e-6f);
+        A.Close(0.2f * (0.3f + 0.7f * 0.2f), img.R.Data[1], 1e-6f);
+        s.Normalize = false;
+        var plain = new RGBImage(2, 1);
+        PostProcess.BlendStars(plain, stars, s);
+        A.Close(0.3f, plain.R.Data[0], 1e-6f);
+        A.Close(0.06f, plain.R.Data[1], 1e-6f);
+    }
+
+    [Fact]
     public void ApplyKeepsRange()
     {
         var img = Sample();

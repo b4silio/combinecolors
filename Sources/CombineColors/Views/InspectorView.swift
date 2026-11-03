@@ -107,20 +107,19 @@ struct ControlsStripView: View {
         Picker("", selection: $balanceToneRaw) {
             ForEach(ToneRange.allCases) { t in Text(t.displayName + (model.settings.grading.balance(t).isNeutral ? "" : " •")).tag(t.rawValue) }
         }
-        .pickerStyle(.segmented).labelsHidden().controlSize(.mini)
+        .pickerStyle(.segmented).labelsHidden().controlSize(.mini).fixedSize()
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.vertical, 3)
         .help("Tone range the three sliders act on (• = adjusted); the ranges overlap smoothly by lightness, as in Photoshop")
         SliderRow(title: "Cyan – Red", value: balanceBinding(tone, \.cyanRed), range: -100...100, defaultValue: 0, format: "%.0f", help: "Negative towards cyan, positive towards red, in the \(tone.displayName.lowercased())", labelWidth: lw)
         SliderRow(title: "Magenta – Green", value: balanceBinding(tone, \.magentaGreen), range: -100...100, defaultValue: 0, format: "%.0f", help: "Negative towards magenta, positive towards green", labelWidth: lw)
         SliderRow(title: "Yellow – Blue", value: balanceBinding(tone, \.yellowBlue), range: -100...100, defaultValue: 0, format: "%.0f", help: "Negative towards yellow, positive towards blue", labelWidth: lw)
         Toggle("Preserve luminosity", isOn: g.preserveLuminosity).toggleStyle(.checkbox).font(.caption)
             .help("Keep each pixel's lightness: only hue and saturation move (Photoshop's default)")
-        Divider().padding(.vertical, 2)
+        Divider().padding(.vertical, 8)
         HStack(spacing: 4) {
             Text("Selective colour").font(.caption.bold())
             Spacer()
-            Picker("", selection: g.relative) { Text("Relative").tag(true); Text("Absolute").tag(false) }
-                .pickerStyle(.segmented).labelsHidden().controlSize(.mini).fixedSize()
-                .help("Relative changes the ink by a fraction of what is there (pure white cannot be touched); Absolute adds the amount outright")
             Button { model.settings.grading.selective = [:] } label: { Image(systemName: "arrow.counterclockwise") }
                 .controlSize(.mini).buttonStyle(.borderless).help("Reset the selective colour of every range")
                 .disabled(model.settings.grading.selectiveIsNeutral)
@@ -128,12 +127,22 @@ struct ControlsStripView: View {
         Picker("", selection: $selectiveRangeRaw) {
             ForEach(SelectiveRange.allCases) { r in Text(r.displayName + (model.settings.grading.selective(r).isNeutral ? "" : " •")).tag(r.rawValue) }
         }
-        .pickerStyle(.segmented).labelsHidden().controlSize(.mini)
+        .pickerStyle(.segmented).labelsHidden().controlSize(.mini).fixedSize()
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.vertical, 3)
         .help("Whites: the brightest nearly-grey pixels; Neutrals: greys around mid-tone; Blacks: the darkest. The hue ranges are the Colour bands block")
         SliderRow(title: "Cyan", value: selectiveBinding(range, \.cyan), range: -100...100, defaultValue: 0, format: "%.0f", help: "More cyan ink (less red) in the \(range.displayName.lowercased()); negative removes it", labelWidth: lw)
         SliderRow(title: "Magenta", value: selectiveBinding(range, \.magenta), range: -100...100, defaultValue: 0, format: "%.0f", help: "More magenta ink (less green); negative removes it", labelWidth: lw)
         SliderRow(title: "Yellow", value: selectiveBinding(range, \.yellow), range: -100...100, defaultValue: 0, format: "%.0f", help: "More yellow ink (less blue); negative removes it", labelWidth: lw)
         SliderRow(title: "Black", value: selectiveBinding(range, \.black), range: -100...100, defaultValue: 0, format: "%.0f", help: "Darkens (positive) or lightens (negative) the range", labelWidth: lw)
+        HStack {
+            Text("Method").font(.caption)
+            Spacer()
+            Picker("", selection: g.relative) { Text("Relative").tag(true); Text("Absolute").tag(false) }
+                .pickerStyle(.segmented).labelsHidden().controlSize(.mini).fixedSize()
+                .help("Relative changes the ink by a fraction of what is there (pure white cannot be touched); Absolute adds the amount outright")
+        }
+        .padding(.top, 3)
     }
 
     // MARK: Denoise
@@ -174,7 +183,7 @@ struct ControlsStripView: View {
         SliderRow(title: "Clarity", value: d.clarity, range: -0.5...2, defaultValue: 0, help: "Mid-tone local contrast at a broader scale (radius ≈ 6 % of the width).", note: "6%", labelWidth: lw)
         SliderRow(title: "Dehaze", value: d.dehaze, range: -1...1, defaultValue: 0, help: "Subtracts the large-scale haze component (radius ≈ 25 % of the width); negative adds haze.", note: "25%", labelWidth: lw)
         SliderRow(title: "Low freq.", value: d.lowFrequency, range: -0.5...2, defaultValue: 0, help: "Local contrast of the largest structures (radius ≈ 50 % of the width): separates big nebula regions from the sky without touching fine detail.", note: "50%", labelWidth: lw)
-        Divider().padding(.vertical, 2)
+        Divider().padding(.vertical, 8)
         SliderRow(title: "Sharpen", value: d.sharpen, range: 0...2, defaultValue: 0, help: "Unsharp mask on the luminance (stars excluded from the blur). The radius is in full-resolution pixels, so judge it at 1:1 with HQ on; a fitted preview shows little of it.", labelWidth: lw)
         SliderRow(title: "Radius", value: d.sharpenRadius, range: 0.5...5, defaultValue: 1.5, format: "%.1f", help: "Sharpening radius in full-resolution pixels.", note: "px", labelWidth: lw)
         SliderRow(title: "Masking", value: d.sharpenMasking, range: 0...1, defaultValue: 0, help: "Protects flat, noisy areas: only detail above this fraction of the noise level is sharpened (like Camera Raw's Masking).", labelWidth: lw)
@@ -343,8 +352,8 @@ struct ControlsStripView: View {
             SliderRow(title: "Contrast", value: s.contrast, range: -1...1, defaultValue: 0, format: "%.2f", help: "Spreads the star layer around the mid-tone: positive darkens faint halos and keeps the cores, negative softens", labelWidth: lw)
             SliderRow(title: "Star sat.", value: s.saturation, range: 0...3, defaultValue: 1.3, labelWidth: lw)
             Toggle("Brightest stars to white", isOn: s.normalize).toggleStyle(.checkbox).font(.caption)
-                .help("Scale the layer so its brightest stars reach white — the brightest values of the result (whole-image peak, so preview and export agree)")
-            Divider().padding(.vertical, 2)
+                .help("Scale the layer so its brightest stars reach white — the brightest values of the result (whole-image peak, so preview and export agree). With a lowered Amount the cores still stay white: the amount then fades the faint stars instead of greying everything")
+            Divider().padding(.vertical, 8)
             MenuPicker(title: "Blend", selection: s.mode, options: StarsBlendMode.allCases) { $0.displayName }
                 .help("Screen: adds without clipping, soft on bright nebulae (default).\nLighten: the brighter of the two.\nAdd: sum, clipped.")
             MenuPicker(title: "Star data", selection: s.stretch, options: StarsStretchMode.allCases) { $0.displayName }

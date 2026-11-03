@@ -382,6 +382,7 @@ public sealed class ControlsStripView : Border
         p.Children.Add(head);
         var toneSeg = Ui.Segmented(ToneRanges.All, t => t.DisplayName() + (g.GetBalance(t).IsNeutral ? "" : " •"), () => balanceTone, v => { balanceTone = v; model.Preferences.Set("balanceTone", EnumRaw.Name(v)); Rebuild(); }, out _, 10);
         toneSeg.ToolTip = "Tone range the three sliders act on (• = adjusted); the ranges overlap smoothly by lightness, as in Photoshop";
+        toneSeg.HorizontalAlignment = HorizontalAlignment.Center; toneSeg.Margin = new Thickness(0, 4, 0, 4);
         p.Children.Add(toneSeg);
         p.Children.Add(Balance("Cyan – Red", tone, a => a.CyanRed, (a, v) => a.CyanRed = v, $"Negative towards cyan, positive towards red, in the {tone.DisplayName().ToLowerInvariant()}", lw));
         p.Children.Add(Balance("Magenta – Green", tone, a => a.MagentaGreen, (a, v) => a.MagentaGreen = v, "Negative towards magenta, positive towards green", lw));
@@ -393,20 +394,23 @@ public sealed class ControlsStripView : Border
         resetSelective.IsEnabled = !g.SelectiveIsNeutral; resetSelective.Margin = new Thickness(0);
         DockPanel.SetDock(resetSelective, Dock.Right);
         head2.Children.Add(resetSelective);
-        var methodSeg = Ui.Segmented(new[] { true, false }, b => b ? "Relative" : "Absolute", () => model.Settings.Grading.Relative, v => model.UpdateSettings(x => x.Grading.Relative = v), out _, 10);
-        methodSeg.Margin = new Thickness(0, 0, 4, 0);
-        methodSeg.ToolTip = "Relative changes the ink by a fraction of what is there (pure white cannot be touched); Absolute adds the amount outright";
-        DockPanel.SetDock(methodSeg, Dock.Right);
-        head2.Children.Add(methodSeg);
         head2.Children.Add(new TextBlock { Text = "Selective colour", FontWeight = FontWeights.Bold, FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
         p.Children.Add(head2);
         var rangeSeg = Ui.Segmented(SelectiveRanges.All, r => r.DisplayName() + (g.GetSelective(r).IsNeutral ? "" : " •"), () => selectiveRange, v => { selectiveRange = v; model.Preferences.Set("selectiveRange", EnumRaw.Name(v)); Rebuild(); }, out _, 10);
         rangeSeg.ToolTip = "Whites: the brightest nearly-grey pixels; Neutrals: greys around mid-tone; Blacks: the darkest. The hue ranges are the Colour bands block";
+        rangeSeg.HorizontalAlignment = HorizontalAlignment.Center; rangeSeg.Margin = new Thickness(0, 4, 0, 4);
         p.Children.Add(rangeSeg);
         p.Children.Add(Selective("Cyan", range, a => a.Cyan, (a, v) => a.Cyan = v, $"More cyan ink (less red) in the {range.DisplayName().ToLowerInvariant()}; negative removes it", lw));
         p.Children.Add(Selective("Magenta", range, a => a.Magenta, (a, v) => a.Magenta = v, "More magenta ink (less green); negative removes it", lw));
         p.Children.Add(Selective("Yellow", range, a => a.Yellow, (a, v) => a.Yellow = v, "More yellow ink (less blue); negative removes it", lw));
         p.Children.Add(Selective("Black", range, a => a.Black, (a, v) => a.Black = v, "Darkens (positive) or lightens (negative) the range", lw));
+        var methodRow = new DockPanel { Margin = new Thickness(0, 4, 0, 0) };
+        var methodSeg = Ui.Segmented(new[] { true, false }, b => b ? "Relative" : "Absolute", () => model.Settings.Grading.Relative, v => model.UpdateSettings(x => x.Grading.Relative = v), out _, 10);
+        methodSeg.ToolTip = "Relative changes the ink by a fraction of what is there (pure white cannot be touched); Absolute adds the amount outright";
+        DockPanel.SetDock(methodSeg, Dock.Right);
+        methodRow.Children.Add(methodSeg);
+        methodRow.Children.Add(new TextBlock { Text = "Method", FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
+        p.Children.Add(methodRow);
     }
 
     // Denoise
@@ -489,7 +493,7 @@ public sealed class ControlsStripView : Border
             left.Children.Add(S("Brightness", x => x.Stars.Brightness, (x, v) => x.Stars.Brightness = v, -2, 2, 0, help: "Gain of the star layer in stops, after its stretch", note: "EV", labelWidth: lw));
             left.Children.Add(S("Contrast", x => x.Stars.Contrast, (x, v) => x.Stars.Contrast = v, -1, 1, 0, help: "Spreads the star layer around the mid-tone: positive darkens faint halos and keeps the cores, negative softens", labelWidth: lw));
             left.Children.Add(S("Star sat.", x => x.Stars.Saturation, (x, v) => x.Stars.Saturation = v, 0, 3, 1.3f, labelWidth: lw));
-            left.Children.Add(C("Brightest stars to white", x => x.Stars.Normalize, (x, v) => x.Stars.Normalize = v, "Scale the layer so its brightest stars reach white — the brightest values of the result (whole-image peak, so preview and export agree)"));
+            left.Children.Add(C("Brightest stars to white", x => x.Stars.Normalize, (x, v) => x.Stars.Normalize = v, "Scale the layer so its brightest stars reach white — the brightest values of the result (whole-image peak, so preview and export agree). With a lowered Amount the cores still stay white: the amount then fades the faint stars instead of greying everything"));
             left.Children.Add(Ui.Separator());
             var right = p;
             right.Children.Add(M("Blend", x => x.Stars.Mode, (x, v) => x.Stars.Mode = v, StarsBlendModes.All, m => m.DisplayName(), "Screen: adds without clipping, soft on bright nebulae (default).\nLighten: the brighter of the two.\nAdd: sum, clipped."));

@@ -497,19 +497,26 @@ public static partial class PostProcess
         else mask = new PlanarImage(img.Width, img.Height, 1);
         var imgPlanes = img.Planes; var stPlanes = st.Planes;
         var md = mask.Data;
+        // With "brightest stars to white" the amount is a tone curve on the layer that keeps its
+        // peak: v·(amount + (1 − amount)·v) fades the faint stars by the amount while the cores
+        // stay at 1, so lowering the stars does not turn the big ones grey. Otherwise it mixes.
+        bool keepWhite = s.Normalize && s.Amount < 1;
+        float curve = s.Amount;
         for (int c = 0; c < 3; c++)
         {
             var a = imgPlanes[c].Data; var b = stPlanes[c].Data;
-            var mode = s.Mode; float amount = s.Amount;
+            var mode = s.Mode; float amount = keepWhite ? 1 : s.Amount;
             Par.Rows(img.Height, w * 4, (y0, y1) =>
             {
                 for (int i = y0 * w; i < y1 * w; i++)
                 {
+                    float v = b[i];
+                    if (keepWhite) v = v * (curve + (1 - curve) * v);
                     float blended = mode switch
                     {
-                        StarsBlendMode.Screen => 1 - (1 - a[i]) * (1 - b[i]),
-                        StarsBlendMode.Lighten => MathF.Max(a[i], b[i]),
-                        _ => a[i] + b[i],
+                        StarsBlendMode.Screen => 1 - (1 - a[i]) * (1 - v),
+                        StarsBlendMode.Lighten => MathF.Max(a[i], v),
+                        _ => a[i] + v,
                     };
                     a[i] += amount * md[i] * (blended - a[i]);
                 }

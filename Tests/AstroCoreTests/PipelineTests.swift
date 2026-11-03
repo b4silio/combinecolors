@@ -253,6 +253,23 @@ final class PostProcessTests: XCTestCase {
         XCTAssertEqual(img.r.pointer[1], 0, accuracy: 1e-6)
     }
 
+    /// "Brightest stars to white" + a lowered amount: faint stars fade by the amount, the peak stays white.
+    func testStarsAmountKeepsThePeakWhiteWhenNormalised() {
+        let base = RGBImage(width: 2, height: 1)
+        let stars = RGBImage(width: 2, height: 1)
+        for p in stars.planes { p.pointer[0] = 1; p.pointer[1] = 0.2 }
+        var s = StarsBlendSettings(); s.enabled = true; s.useMask = false; s.amount = 0.3; s.normalize = true
+        let img = base.copy()
+        PostProcess.blendStars(img, stars: stars, settings: s)
+        XCTAssertEqual(img.r.pointer[0], 1, accuracy: 1e-6, "the core stays white")
+        XCTAssertEqual(img.r.pointer[1], 0.2 * (0.3 + 0.7 * 0.2), accuracy: 1e-6, "faint star faded by the curve")
+        s.normalize = false
+        let plain = base.copy()
+        PostProcess.blendStars(plain, stars: stars, settings: s)
+        XCTAssertEqual(plain.r.pointer[0], 0.3, accuracy: 1e-6, "without the option the amount mixes and greys the core")
+        XCTAssertEqual(plain.r.pointer[1], 0.06, accuracy: 1e-6)
+    }
+
     func testApplyKeepsRange() {
         let img = sample()
         var s = PostSettings(); s.gamma = 0.7; s.blackPoint = 0.1; s.whitePoint = 0.9; s.vibrance = 0.5; s.saturation = 1.5; s.hueShift = -30
