@@ -1685,7 +1685,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
         get => Corrections.BrushRadius * LongSide;
         set { Corrections.BrushRadius = Math.Min(Math.Max(value / LongSide, 0.003), 0.2); Notify(Change.Corrections); }
     }
-    public double CorrectionBrushFlow { get => Corrections.BrushFlow; set { Corrections.BrushFlow = Math.Min(Math.Max(value, 0.01), 1); Notify(Change.Corrections); } }
+    public double CorrectionBrushFlow { get => Corrections.BrushFlow; set { Corrections.BrushFlow = Math.Min(Math.Max(value, 0.005), 1); Notify(Change.Corrections); } }
     public double CorrectionBrushFeather { get => Corrections.BrushFeather; set { Corrections.BrushFeather = Math.Min(Math.Max(value, 0), 1); Notify(Change.Corrections); } }
     public bool CorrectionDarken { get => Corrections.Darken; set { Corrections.Darken = value; Notify(Change.Corrections); } }
     public bool CanUndoCorrection => correctionUndo.Count > 0;

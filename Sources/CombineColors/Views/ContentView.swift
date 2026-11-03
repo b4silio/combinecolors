@@ -227,7 +227,8 @@ struct ContentView: View {
         let kind = model.correctionEditing ?? .luminance
         let loaded = ChannelKind.allCases.filter { model.sources[$0] != nil }
         let radius = Binding<Float>(get: { Float(model.correctionBrushRadius) }, set: { model.correctionBrushRadius = Double($0) })
-        let flow = Binding<Float>(get: { Float(model.correctionBrushFlow) }, set: { model.correctionBrushFlow = Double($0) })
+        // Flow is shown as a percentage (0.5…10 %) of the full map range per dab.
+        let flow = Binding<Float>(get: { Float(model.correctionBrushFlow * 100) }, set: { model.correctionBrushFlow = Double($0) / 100 })
         let feather = Binding<Float>(get: { Float(model.correctionBrushFeather) }, set: { model.correctionBrushFeather = Double($0) })
         let strength = Binding<Float>(get: { Float(model.correctionStrength) }, set: { model.correctionStrength = Double($0) })
         let darken = Binding<Bool>(get: { model.correctionDarken }, set: { model.correctionDarken = $0 })
@@ -255,13 +256,13 @@ struct ContentView: View {
                 SliderRow(title: "Radius", value: radius, range: 4...maxRadius, defaultValue: maxRadius / 5, format: "%.0f", logarithmic: true,
                           help: "Brush radius in image pixels (right-drag on the preview: left shrinks, right grows; up to 20 % of the image)", note: "px", labelWidth: 58)
                     .frame(width: 170)
-                SliderRow(title: "Flow", value: flow, range: 0.01...0.2, defaultValue: 0.05, format: "%.2f",
-                          help: "Amount added by every dab: low for gentle, build-up strokes", labelWidth: 40)
+                SliderRow(title: "Flow", value: flow, range: 0.5...10, defaultValue: 2, format: "%.1f",
+                          help: "Amount added by every dab, as a percentage of the full map range: low for gentle, build-up strokes", note: "%", labelWidth: 52)
                     .frame(width: 150)
                 SliderRow(title: "Feather", value: feather, range: 0...1, defaultValue: 0.7, format: "%.2f",
                           help: "Fraction of the radius over which a dab fades out (0 = hard edge)", labelWidth: 48)
                     .frame(width: 150)
-                SliderRow(title: "Strength", value: strength, range: 0...1.5, defaultValue: 1, format: "%.2f",
+                SliderRow(title: "Strength", value: strength, range: 0...1.5, defaultValue: 0.5, format: "%.2f",
                           help: "Exposure range of the map in stops: a fully painted area is darkened or brightened by this many stops", note: "EV", labelWidth: 66)
                     .frame(width: 170)
             }

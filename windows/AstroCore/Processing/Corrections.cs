@@ -252,12 +252,12 @@ public sealed partial class CorrectionSettings : IEquatable<CorrectionSettings>
     /// <summary>Brush radius as a fraction of the image's long side (0.005…0.2).</summary>
     public double BrushRadius = 0.04;
     /// <summary>Amount added per dab (0.01…1).</summary>
-    public double BrushFlow = 0.05;
+    public double BrushFlow = 0.02;
     /// <summary>Fraction of the radius over which the dab fades (0 hard … 1 soft).</summary>
     public double BrushFeather = 0.7;
     public bool Darken = true;
 
-    public const double DefaultStrength = 1.0;
+    public const double DefaultStrength = 0.5;
     public double StrengthFor(ChannelKind kind) => Strength.TryGetValue(kind, out var s) ? s : DefaultStrength;
 
     public CorrectionSettings Clone() => new() { Strength = new Dictionary<ChannelKind, double>(Strength), BrushRadius = BrushRadius, BrushFlow = BrushFlow, BrushFeather = BrushFeather, Darken = Darken };

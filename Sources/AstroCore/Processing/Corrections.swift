@@ -222,14 +222,14 @@ public struct CorrectionSettings: Codable, Equatable {
     public var strength: [ChannelKind: Double] = [:]
     /// Brush radius as a fraction of the image's long side (0.005…0.2).
     public var brushRadius: Double = 0.04
-    /// Amount added per dab (0.02…1).
-    public var brushFlow: Double = 0.05
+    /// Amount added per dab (0.005…1; shown as a percentage).
+    public var brushFlow: Double = 0.02
     /// Fraction of the radius over which the dab fades (0 hard … 1 soft).
     public var brushFeather: Double = 0.7
     public var darken: Bool = true
 
     public init() {}
 
-    public static let defaultStrength = 1.0
+    public static let defaultStrength = 0.5
     public func strength(for kind: ChannelKind) -> Double { strength[kind] ?? CorrectionSettings.defaultStrength }
 }

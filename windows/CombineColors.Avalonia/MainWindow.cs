@@ -562,11 +562,11 @@ public sealed class MainWindow : Window
         var row2 = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 4, 0, 0) };
         row2.Children.Add(new SliderRow("Radius", () => (float)model.CorrectionBrushRadius, v => model.CorrectionBrushRadius = v, 4, (float)maxRadius, (float)(maxRadius / 5), "0", true,
             "Brush radius in image pixels (right-drag on the preview: left shrinks, right grows; up to 20 % of the image)", "px", 58) { Width = 170 });
-        row2.Children.Add(new SliderRow("Flow", () => (float)model.CorrectionBrushFlow, v => model.CorrectionBrushFlow = v, 0.01f, 0.2f, 0.05f, "0.00", false,
-            "Amount added by every dab: low for gentle, build-up strokes", null, 40) { Width = 150, Margin = new Thickness(6, 0, 0, 0) });
+        row2.Children.Add(new SliderRow("Flow", () => (float)(model.CorrectionBrushFlow * 100), v => model.CorrectionBrushFlow = v / 100, 0.5f, 10, 2, "0.0", false,
+            "Amount added by every dab, as a percentage of the full map range: low for gentle, build-up strokes", "%", 52) { Width = 150, Margin = new Thickness(6, 0, 0, 0) });
         row2.Children.Add(new SliderRow("Feather", () => (float)model.CorrectionBrushFeather, v => model.CorrectionBrushFeather = v, 0, 1, 0.7f, "0.00", false,
             "Fraction of the radius over which a dab fades out (0 = hard edge)", null, 48) { Width = 150, Margin = new Thickness(6, 0, 0, 0) });
-        row2.Children.Add(new SliderRow("Strength", () => (float)model.CorrectionStrength, v => model.CorrectionStrength = v, 0, 1.5f, 1, "0.0", false,
+        row2.Children.Add(new SliderRow("Strength", () => (float)model.CorrectionStrength, v => model.CorrectionStrength = v, 0, 1.5f, 0.5f, "0.00", false,
             "Exposure range of the map in stops: a fully painted area is darkened or brightened by this many stops", "EV", 66) { Width = 170, Margin = new Thickness(6, 0, 0, 0) });
         panel.Children.Add(row2);
 

@@ -74,7 +74,7 @@ final class CorrectionsTests: XCTestCase {
         CorrectionMap.remove(for: ro, kind: .ha)
         // Settings decode with defaults.
         let old = try JSONDecoder().decode(CorrectionSettings.self, from: Data("{}".utf8))
-        XCTAssertEqual(old.brushRadius, 0.04); XCTAssertEqual(old.strength(for: .ha), 1)
+        XCTAssertEqual(old.brushRadius, 0.04); XCTAssertEqual(old.brushFlow, 0.02); XCTAssertEqual(old.strength(for: .ha), 0.5)
     }
 
     func testLiveCorrectionInTheRendererMatchesTheCommittedOne() throws {

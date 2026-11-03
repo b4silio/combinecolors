@@ -82,7 +82,7 @@ public class CorrectionsTests
         CorrectionMap.Remove(ro, ChannelKind.Ha);
         // Settings decode with defaults.
         var old = CorrectionSettings.FromJson(System.Text.Json.Nodes.JsonNode.Parse("{}")!.AsObject());
-        Assert.Equal(0.04, old.BrushRadius); Assert.Equal(1, old.StrengthFor(ChannelKind.Ha));
+        Assert.Equal(0.04, old.BrushRadius); Assert.Equal(0.02, old.BrushFlow); Assert.Equal(0.5, old.StrengthFor(ChannelKind.Ha));
     }
 
     [Fact]

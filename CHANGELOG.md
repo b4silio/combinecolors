@@ -5,6 +5,10 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 (`scripts/bump.sh`). The version lives in `VERSION` and is stamped into the app at build time;
 `scripts/release.sh` tags it and publishes the DMG as a GitHub release.
 
+## [1.12.1] – 2026-11-03
+
+- Manual corrections: flow shown as a percentage (0.5–10 %, default 2 %) and the default strength is 0.5 EV
+
 ## [1.12.0] – 2026-11-03
 
 - Stars are blended after denoise and detail by default (switchable in the RGB stars block): untouched by them, and a star slider re-blends only

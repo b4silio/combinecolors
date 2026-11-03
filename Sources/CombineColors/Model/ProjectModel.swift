@@ -1516,7 +1516,7 @@ extension ProjectModel {
         get { corrections.brushRadius * Double(imageSize.map { max($0.width, $0.height) } ?? 1000) }
         set { let long = Double(imageSize.map { max($0.width, $0.height) } ?? 1000); corrections.brushRadius = min(max(newValue / long, 0.003), 0.2) }
     }
-    var correctionBrushFlow: Double { get { corrections.brushFlow } set { corrections.brushFlow = min(max(newValue, 0.01), 1) } }
+    var correctionBrushFlow: Double { get { corrections.brushFlow } set { corrections.brushFlow = min(max(newValue, 0.005), 1) } }
     var correctionBrushFeather: Double { get { corrections.brushFeather } set { corrections.brushFeather = min(max(newValue, 0), 1) } }
     var correctionDarken: Bool { get { corrections.darken } set { corrections.darken = newValue } }
     var canUndoCorrection: Bool { !correctionUndo.isEmpty }
