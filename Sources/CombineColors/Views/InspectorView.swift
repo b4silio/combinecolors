@@ -41,7 +41,7 @@ struct ControlsStripView: View {
                 ControlBlock(title: "Denoise", width: 330, expanded: binding("denoise"), dragScroll: dragScroll, minHeight: contentHeight - 12) { denoiseSection }
                 ControlBlock(title: "Detail", width: 500, expanded: binding("detail"), dragScroll: dragScroll, minHeight: contentHeight - 12) { detailSection }
                 // Stays collapsed while no R, G and B channels are loaded (nothing to blend).
-                ControlBlock(title: "RGB stars", width: 262, expanded: hasRGB ? binding("stars") : .constant(false), dragScroll: dragScroll, minHeight: contentHeight - 12) { starsSection }
+                ControlBlock(title: "RGB stars", width: 300, expanded: binding("stars"), dragScroll: dragScroll, minHeight: contentHeight - 12) { starsSection }
             }
             .padding(.horizontal, 6)
             .padding(.top, 6)
@@ -263,18 +263,46 @@ struct ControlsStripView: View {
 
     @ViewBuilder var starsSection: some View {
         let s = $model.settings.stars
-        Toggle("Blend RGB stars into the result", isOn: s.enabled).disabled(!hasRGB)
-        if !hasRGB { Text("Load R, G and B channels (or a colour stars image) to enable.").font(.caption2).foregroundStyle(.secondary) }
-        if model.settings.stars.enabled {
-            SliderRow(title: "Amount", value: s.amount, range: 0...1, defaultValue: 1)
-            MenuPicker(title: "Star data", selection: s.stretch, options: StarsStretchMode.allCases) { $0.displayName }
-            Toggle("Mask stars by luminance", isOn: s.useMask).help("Off for star-only images from StarNet/StarXTerminator.")
-            if model.settings.stars.useMask {
-                SliderRow(title: "Threshold", value: s.threshold, range: 0...1, defaultValue: 0.15)
-                SliderRow(title: "Softness", value: s.softness, range: 0.01...1, defaultValue: 0.25)
+        let lw: CGFloat = 70
+        HStack(spacing: 6) {
+            if let layer = model.starsLayer {
+                Image(systemName: "sparkles").foregroundStyle(.secondary)
+                Text(layer.fileName).font(.caption).lineLimit(1).truncationMode(.middle)
+                    .help("Stars layer: \(layer.fileName) (\(layer.formatDescription)), kept as an RGB image and blended on top")
+                Spacer(minLength: 0)
+                Button { model.removeStarsLayer() } label: { Image(systemName: "xmark.circle") }.buttonStyle(.borderless).controlSize(.small).help("Remove the stars layer")
+            } else {
+                Button("Load RGB stars…") {
+                    Panels.openImages { urls in if let u = urls.first { Task { @MainActor in model.loadStarsLayer(from: u) } } }
+                }.controlSize(.small)
+                    .help("An RGB image kept whole (not split into channels) and blended as stars: a stars-only image, or any RGB frame. Dropping a colour file offers the same choice.")
+                if hasRGB { Text("or the R, G, B channels").font(.caption2).foregroundStyle(.secondary) }
             }
-            SliderRow(title: "Star sat.", value: s.saturation, range: 0...3, defaultValue: 1.3)
-            MenuPicker(title: "Blend", selection: s.mode, options: StarsBlendMode.allCases) { $0.displayName }
+        }
+        Toggle("Blend RGB stars into the result", isOn: s.enabled).disabled(!model.hasStars)
+        if !model.hasStars { Text("Load a stars layer, or R, G and B channels, to enable.").font(.caption2).foregroundStyle(.secondary) }
+        if model.settings.stars.enabled {
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    SliderRow(title: "Amount", value: s.amount, range: 0...1, defaultValue: 1, labelWidth: lw)
+                    SliderRow(title: "Brightness", value: s.brightness, range: -2...2, defaultValue: 0, format: "%.2f", help: "Gain of the star layer in stops, after its stretch", note: "EV", labelWidth: lw)
+                    SliderRow(title: "Contrast", value: s.contrast, range: -1...1, defaultValue: 0, format: "%.2f", help: "Spreads the star layer around the mid-tone: positive darkens faint halos and keeps the cores, negative softens", labelWidth: lw)
+                    SliderRow(title: "Star sat.", value: s.saturation, range: 0...3, defaultValue: 1.3, labelWidth: lw)
+                    Toggle("Brightest stars to white", isOn: s.normalize).toggleStyle(.checkbox).font(.caption)
+                        .help("Scale the layer so its brightest stars reach white — the brightest values of the result (whole-image peak, so preview and export agree)")
+                }
+                Divider()
+                VStack(alignment: .leading, spacing: 2) {
+                    MenuPicker(title: "Blend", selection: s.mode, options: StarsBlendMode.allCases) { $0.displayName }
+                        .help("Screen: adds without clipping, soft on bright nebulae (default).\nLighten: the brighter of the two.\nAdd: sum, clipped.")
+                    MenuPicker(title: "Star data", selection: s.stretch, options: StarsStretchMode.allCases) { $0.displayName }
+                    Toggle("Mask by luminance", isOn: s.useMask).toggleStyle(.checkbox).font(.caption).help("Off for star-only images from StarNet/StarXTerminator.")
+                    if model.settings.stars.useMask {
+                        SliderRow(title: "Threshold", value: s.threshold, range: 0...1, defaultValue: 0.15, labelWidth: lw)
+                        SliderRow(title: "Softness", value: s.softness, range: 0.01...1, defaultValue: 0.25, labelWidth: lw)
+                    }
+                }
+            }
         }
     }
 

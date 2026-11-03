@@ -217,7 +217,7 @@ public enum StarsBlendMode { Screen, Lighten, Add }
 public static class StarsBlendModes
 {
     public static readonly StarsBlendMode[] All = [StarsBlendMode.Screen, StarsBlendMode.Lighten, StarsBlendMode.Add];
-    public static string DisplayName(this StarsBlendMode m) => m.ToString();
+    public static string DisplayName(this StarsBlendMode m) => m switch { StarsBlendMode.Screen => "Screen", StarsBlendMode.Lighten => "Lighten (max)", _ => "Add" };
 }
 
 /// <summary>Camera-Raw style "selective colour": per hue band hue/saturation/lightness.</summary>
@@ -371,11 +371,18 @@ public sealed partial class StarsBlendSettings : IEquatable<StarsBlendSettings>
     /// <summary>Use the whole RGB image (no mask) — for star-only images from star removal tools.</summary>
     public bool UseMask = true;
     public float Saturation = 1.3f;
+    /// <summary>Gain of the star layer in stops (−2…2), applied after the stretch.</summary>
+    public float Brightness = 0;
+    /// <summary>Contrast of the star layer (−1…1): the values are spread (or squeezed) around the mid-tone by 2^contrast.</summary>
+    public float Contrast = 0;
+    /// <summary>Scale the layer so its brightest stars reach white (the brightest values of the result).</summary>
+    public bool Normalize = false;
 
     public StarsBlendSettings Clone() => (StarsBlendSettings)MemberwiseClone();
-    public bool Equals(StarsBlendSettings? o) => o != null && Enabled == o.Enabled && Stretch == o.Stretch && Amount == o.Amount && Threshold == o.Threshold && Softness == o.Softness && Mode == o.Mode && UseMask == o.UseMask && Saturation == o.Saturation;
+    public bool Equals(StarsBlendSettings? o) => o != null && Enabled == o.Enabled && Stretch == o.Stretch && Amount == o.Amount && Threshold == o.Threshold && Softness == o.Softness && Mode == o.Mode && UseMask == o.UseMask && Saturation == o.Saturation
+        && Brightness == o.Brightness && Contrast == o.Contrast && Normalize == o.Normalize;
     public override bool Equals(object? obj) => Equals(obj as StarsBlendSettings);
-    public override int GetHashCode() => HashCode.Combine(Enabled, Stretch, Amount, Threshold, Softness, Mode, UseMask, Saturation);
+    public override int GetHashCode() => HashCode.Combine(HashCode.Combine(Enabled, Stretch, Amount, Threshold, Softness, Mode, UseMask, Saturation), Brightness, Contrast, Normalize);
 }
 
 /// <summary>Linear mixing matrix: for every channel, its weights into R, G, B.</summary>
@@ -533,4 +540,61 @@ public sealed partial class CombineSettings : IEquatable<CombineSettings>
     public bool Equals(CombineSettings? o) => o != null && SettingsJson.SameJson(this, o);
     public override bool Equals(object? obj) => Equals(obj as CombineSettings);
     public override int GetHashCode() => SettingsJson.JsonHash(this);
+}
+
+// Formula read-out
+
+public sealed partial class CombineSettings
+{
+    /// <summary>
+    /// The combination as PixelMath-style expressions, one line per output ("R: 0.5*Ha + 0.5*SII"),
+    /// with the channel identifiers Pixel Math accepts (Ha, OIII, SII, Hb, L, R, G, B), for copying
+    /// into PixInsight's PixelMath (swap the identifiers for the image names there).
+    /// </summary>
+    public List<string> FormulaLines(IReadOnlySet<ChannelKind> available)
+    {
+        var lines = new List<string>();
+        switch (Mode)
+        {
+            case CombineMode.Monochrome:
+            {
+                var kinds = MonochromeChannels(available).OrderBy(k => k.RawValue(), StringComparer.Ordinal).Where(k => Adjust(k).Enabled).ToList();
+                var terms = kinds.Select(k => Adjust(k).Weight == 1 ? k.RawValue() : $"{FormatWeight(Adjust(k).Weight)}*{k.RawValue()}").ToList();
+                lines.Add("Mono: " + (terms.Count == 0 ? "0" : terms.Count == 1 ? terms[0] : "(" + string.Join(" + ", terms) + ")/" + terms.Count));
+                break;
+            }
+            case CombineMode.Matrix:
+            {
+                string[] names = ["R", "G", "B"];
+                for (int o = 0; o < 3; o++)
+                {
+                    var terms = new List<string>();
+                    foreach (var k in ChannelKinds.All)
+                    {
+                        float w = Matrix.Weight(k, o);
+                        if (w == 0) continue;
+                        terms.Add(w == 1 ? k.RawValue() : $"{FormatWeight(w)}*{k.RawValue()}");
+                    }
+                    lines.Add($"{names[o]}: " + (terms.Count == 0 ? "0" : string.Join(" + ", terms)));
+                }
+                break;
+            }
+            default:
+                lines.Add("R: " + PixelMath.Red);
+                lines.Add("G: " + PixelMath.Green);
+                lines.Add("B: " + PixelMath.Blue);
+                break;
+        }
+        if (Mode != CombineMode.Monochrome && LuminanceApplies && Luminance.ResolvedExpression(available) is string l)
+            lines.Add("L: " + l + (Luminance.Amount < 1 ? $"  ({(int)Math.Round(Luminance.Amount * 100)} %)" : ""));
+        return lines;
+    }
+
+    public static string FormatWeight(float w)
+    {
+        var t = w.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture);
+        while (t.EndsWith('0')) t = t[..^1];
+        if (t.EndsWith('.')) t = t[..^1];
+        return t;
+    }
 }

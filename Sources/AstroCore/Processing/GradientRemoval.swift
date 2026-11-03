@@ -10,9 +10,11 @@ public enum GradientShape: String, Codable, CaseIterable, Identifiable {
     case ellipse
     /// No guide: a plain 2-D polynomial of the chosen degree (the classic parametric model).
     case polynomial
+    /// Background samples (discs on sky) with a smoothing spline or kriging surface through them.
+    case samples
     public var id: String { rawValue }
     public var displayName: String {
-        switch self { case .line: return "Line"; case .ellipse: return "Ellipse"; case .polynomial: return "Polynomial" }
+        switch self { case .line: return "Line"; case .ellipse: return "Ellipse"; case .polynomial: return "Polynomial"; case .samples: return "Samples" }
     }
 }
 
@@ -63,6 +65,7 @@ public struct GradientGesture: Codable, Equatable, Hashable {
         GradientGesture(shape: .ellipse, x: c.x, y: c.y, a: a, b: b, angle: angle)
     }
     public static func polynomial() -> GradientGesture { GradientGesture(shape: .polynomial) }
+    public static func samples() -> GradientGesture { GradientGesture(shape: .samples) }
 
     public var center: CGPoint { CGPoint(x: x, y: y) }
     public var end: CGPoint { CGPoint(x: x2, y: y2) }
@@ -160,15 +163,41 @@ public struct GradientSpec: Codable, Equatable, Hashable {
     /// Optimise the guide's geometry (line direction; ellipse centre, axis ratio and angle) from the
     /// data before estimating the profile — the drawing is a starting point, not a measurement.
     public var refine: Bool
+    /// Background samples (`samples` shape).
+    public var samples: [BackgroundSample]
+    /// Radius of the sample discs in full-resolution pixels (0 = automatic).
+    public var sampleRadius: Double
+    /// Surface through the samples.
+    public var surface: SampleSurface
+    /// Smoothing of the surface (0…1).
+    public var sampleSmoothing: Double
+    /// Pick the smoothing by cross-validation instead of `sampleSmoothing`.
+    public var autoSmoothing: Bool
+    /// Grid generator parameters (samples per row; tolerance in sample noises above the sky model).
+    /// A `samples` model without samples generates its grid with these when fitted.
+    public var gridPerRow: Int
+    public var gridTolerance: Double
 
     public init(gesture: GradientGesture, mode: GradientMode = .subtract, residual: GradientResidual = .plane, sectors: Int = 1,
-                smoothness: Double = 1.5, degree: Int = 4, refine: Bool = true) {
+                smoothness: Double = 1.5, degree: Int = 4, refine: Bool = true,
+                samples: [BackgroundSample] = [], sampleRadius: Double = 0, surface: SampleSurface = .spline, sampleSmoothing: Double = 0.5, autoSmoothing: Bool = true,
+                gridPerRow: Int = 14, gridTolerance: Double = 2.5) {
         self.gesture = gesture; self.mode = mode; self.residual = residual; self.sectors = sectors
         self.smoothness = smoothness; self.degree = degree; self.refine = refine
+        self.samples = samples; self.sampleRadius = sampleRadius; self.surface = surface; self.sampleSmoothing = sampleSmoothing; self.autoSmoothing = autoSmoothing
+        self.gridPerRow = gridPerRow; self.gridTolerance = gridTolerance
     }
 
     public func applying(_ op: Orientation.Op, imageWidth: Int, imageHeight: Int) -> GradientSpec {
-        var s = self; s.gesture = gesture.applying(op, imageWidth: imageWidth, imageHeight: imageHeight); return s
+        var s = self
+        s.gesture = gesture.applying(op, imageWidth: imageWidth, imageHeight: imageHeight)
+        s.samples = samples.map { $0.applying(op, imageWidth: imageWidth, imageHeight: imageHeight) }
+        return s
+    }
+
+    /// Sample radius actually used.
+    public func resolvedSampleRadius(width: Int, height: Int) -> Double {
+        sampleRadius > 0 ? sampleRadius : BackgroundSamples.defaultRadius(width: width, height: height)
     }
 }
 
@@ -188,6 +217,14 @@ public struct GradientSettings: Codable, Equatable {
     public var smoothness: Double = 1.5
     public var degree: Int = 4
     public var refine: Bool = true
+    public var surface: SampleSurface = .spline
+    public var sampleSmoothing: Double = 0.5
+    public var autoSmoothing: Bool = true
+    public var sampleRadius: Double = 0
+    /// Grid generator: samples per row and the tolerance (in sample noises above the sky model)
+    /// beyond which a grid point is not sky.
+    public var gridPerRow: Int = 14
+    public var gridTolerance: Double = 2.5
 
     public init() {}
 
@@ -195,7 +232,8 @@ public struct GradientSettings: Codable, Equatable {
     public func spec(for kind: ChannelKind) -> GradientSpec? { specs[kind] }
     /// A model with the parameters for new models around a drawn guide.
     public func newSpec(gesture: GradientGesture) -> GradientSpec {
-        GradientSpec(gesture: gesture, mode: mode, residual: residual, sectors: sectors, smoothness: smoothness, degree: degree, refine: refine)
+        GradientSpec(gesture: gesture, mode: mode, residual: residual, sectors: sectors, smoothness: smoothness, degree: degree, refine: refine,
+                     sampleRadius: sampleRadius, surface: surface, sampleSmoothing: sampleSmoothing, autoSmoothing: autoSmoothing, gridPerRow: gridPerRow, gridTolerance: gridTolerance)
     }
 
     /// Everything mapped through an orientation operation of the `imageWidth` × `imageHeight` image.
@@ -450,8 +488,12 @@ public enum GradientRemoval {
         public var residualSigma: Float
         public var width: Int
         public var height: Int
+        /// Surface through the background samples (`samples` shape) and what became of each sample.
+        public var surface: BackgroundSamples.Surface? = nil
+        public var sampleResults: [SampleResult] { surface?.results ?? [] }
 
         @inline(__always) func background(x: Float, y: Float) -> Float {
+            if let s = surface { return s.value(x: x, y: y) }
             var v: Float = 0
             if let p = profile {
                 let (u, phi) = GradientRemoval.coordinate(gesture, x: x, y: y)
@@ -491,7 +533,7 @@ public enum GradientRemoval {
             let dx = x - Float(g.x), dy = y - Float(g.y)
             let xr = (dx * ct + dy * st) / Float(max(g.a, 1)), yr = (-dx * st + dy * ct) / Float(max(g.b, 1))
             return ((xr * xr + yr * yr).squareRoot(), atan2(yr, xr))
-        case .polynomial:
+        case .polynomial, .samples:
             return (0, 0)
         }
     }
@@ -656,7 +698,7 @@ public enum GradientRemoval {
         guard s.count >= 50 else { return gesture }
         let scale = Double(max(full.width, full.height))
         switch gesture.shape {
-        case .polynomial:
+        case .polynomial, .samples:
             return gesture
         case .line:
             let l = max(gesture.lineLength, 1), th0 = atan2(gesture.y2 - gesture.y, gesture.x2 - gesture.x)
@@ -694,8 +736,9 @@ public enum GradientRemoval {
 
     /// Fits the model of `spec` to the samples (refining the guide when asked). Nil when the samples
     /// cannot support it (too few, degenerate guide).
-    public static func fit(samples s: Samples, spec: GradientSpec) -> Fit? {
+    public static func fit(samples s: Samples, spec: GradientSpec, protect: [GradientRegion] = []) -> Fit? {
         guard s.count >= 50 else { return nil }
+        if spec.gesture.shape == .samples { return fitSamples(samples: s, spec: spec, protect: protect) }
         var g = spec.gesture
         if g.shape == .line, g.lineLength < 1 { return nil }
         if g.shape == .ellipse { g.a = max(g.a, 1); g.b = max(g.b, 1) }
@@ -709,6 +752,24 @@ public enum GradientRemoval {
             let r = Double(s.v[i] - model[i]); sq += r * r
         }
         fit.residualSigma = Float((sq / Double(s.count)).squareRoot()) / s.noise
+        model.withUnsafeMutableBufferPointer { vDSP_vsort($0.baseAddress!, vDSP_Length($0.count), 1) }
+        fit.reference = spec.mode == .divide ? Statistics.percentile(sorted: model, q: 0.995) : Statistics.percentile(sorted: model, q: 0.5)
+        return fit
+    }
+
+    /// Surface through the background samples; the reference level is read off the surface like
+    /// the other models (median for subtract, brightest level for divide).
+    static func fitSamples(samples s: Samples, spec: GradientSpec, protect: [GradientRegion] = []) -> Fit? {
+        let radius = spec.resolvedSampleRadius(width: s.width, height: s.height)
+        var spec = spec
+        if spec.samples.isEmpty {
+            guard spec.gridPerRow > 0 else { return nil }   // cleared by hand: no model until samples are placed
+            spec.samples = BackgroundSamples.grid(samples: s, perRow: spec.gridPerRow, radius: radius, tolerance: spec.gridTolerance, protect: protect)
+        }
+        guard let surface = BackgroundSamples.fit(spec.samples, radius: radius, samples: s, surface: spec.surface, smoothing: spec.autoSmoothing ? nil : spec.sampleSmoothing) else { return nil }
+        var fit = Fit(gesture: spec.gesture, spec: spec, profile: nil, poly: [], polyDegree: 0, reference: 0, residualSigma: surface.residualSigma, width: s.width, height: s.height)
+        fit.surface = surface
+        var model = surface.plane.toArray()
         model.withUnsafeMutableBufferPointer { vDSP_vsort($0.baseAddress!, vDSP_Length($0.count), 1) }
         fit.reference = spec.mode == .divide ? Statistics.percentile(sorted: model, q: 0.995) : Statistics.percentile(sorted: model, q: 0.5)
         return fit
@@ -748,7 +809,7 @@ public enum GradientRemoval {
     /// Samples, fit and correction in one go (the same instance when nothing can be done).
     public static func correct(_ image: PlanarImage, spec: GradientSpec, protect: [GradientRegion] = []) -> (image: PlanarImage, fit: Fit)? {
         let s = samples(image: image, protect: protect)
-        guard let f = fit(samples: s, spec: spec) else { return nil }
+        guard let f = fit(samples: s, spec: spec, protect: protect) else { return nil }
         return (apply(image, fit: f), f)
     }
 

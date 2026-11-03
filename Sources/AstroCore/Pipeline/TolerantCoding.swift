@@ -94,6 +94,7 @@ extension StarsBlendSettings {
         enabled = c.value("enabled", d.enabled); stretch = c.value("stretch", d.stretch); amount = c.value("amount", d.amount)
         threshold = c.value("threshold", d.threshold); softness = c.value("softness", d.softness); mode = c.value("mode", d.mode)
         useMask = c.value("useMask", d.useMask); saturation = c.value("saturation", d.saturation)
+        brightness = c.value("brightness", d.brightness); contrast = c.value("contrast", d.contrast); normalize = c.value("normalize", d.normalize)
     }
 }
 
@@ -200,6 +201,16 @@ extension GradientSpec {
         gesture = c.value("gesture", d.gesture); mode = c.value("mode", d.mode); residual = c.value("residual", d.residual)
         sectors = c.value("sectors", d.sectors); smoothness = c.value("smoothness", d.smoothness); degree = c.value("degree", d.degree)
         refine = c.value("refine", d.refine)
+        samples = c.value("samples", d.samples); sampleRadius = c.value("sampleRadius", d.sampleRadius)
+        surface = c.value("surface", d.surface); sampleSmoothing = c.value("sampleSmoothing", d.sampleSmoothing); autoSmoothing = c.value("autoSmoothing", d.autoSmoothing)
+        gridPerRow = c.value("gridPerRow", d.gridPerRow); gridTolerance = c.value("gridTolerance", d.gridTolerance)
+    }
+}
+
+extension BackgroundSample {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: AnyKey.self)
+        id = c.value("id", UUID()); x = c.value("x", 0); y = c.value("y", 0)
     }
 }
 
@@ -211,6 +222,8 @@ extension GradientSettings {
         shape = c.value("shape", d.shape); mode = c.value("mode", d.mode); residual = c.value("residual", d.residual)
         sectors = c.value("sectors", d.sectors); smoothness = c.value("smoothness", d.smoothness); degree = c.value("degree", d.degree)
         refine = c.value("refine", d.refine)
+        surface = c.value("surface", d.surface); sampleSmoothing = c.value("sampleSmoothing", d.sampleSmoothing); autoSmoothing = c.value("autoSmoothing", d.autoSmoothing); sampleRadius = c.value("sampleRadius", d.sampleRadius)
+        gridPerRow = c.value("gridPerRow", d.gridPerRow); gridTolerance = c.value("gridTolerance", d.gridTolerance)
     }
 }
 
@@ -219,5 +232,14 @@ extension SettingsPreset {
         let c = try decoder.container(keyedBy: AnyKey.self)
         id = c.value("id", UUID()); name = c.value("name", "Preset"); settings = c.value("settings", CombineSettings())
         thumbnailPNG = c.optionalValue("thumbnailPNG", nil); date = c.value("date", Date())
+    }
+}
+
+extension CorrectionSettings {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: AnyKey.self)
+        let d = CorrectionSettings()
+        strength = c.value("strength", d.strength); brushRadius = c.value("brushRadius", d.brushRadius); brushFlow = c.value("brushFlow", d.brushFlow)
+        brushFeather = c.value("brushFeather", d.brushFeather); darken = c.value("darken", d.darken)
     }
 }

@@ -65,6 +65,20 @@ struct PaletteGridView: View {
                     }
                     let mode = model.settings.mode
                     Text(mode == .pixelMath ? "Combination: Pixel Math (editable)" : (mode == .monochrome ? "Combination: weighted average of all channels" : "Combination: matrix (editable)")).font(.caption2).foregroundStyle(.tertiary)
+                    // The formula, for copying into PixInsight's PixelMath.
+                    let formula = model.settings.formulaLines(available: model.availableKinds)
+                    if !model.sources.isEmpty, !formula.isEmpty {
+                        HStack(alignment: .top, spacing: 6) {
+                            Text(formula.joined(separator: "\n"))
+                                .font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+                                .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                            Button { model.copyFormulaToPasteboard() } label: { Image(systemName: "doc.on.doc") }
+                                .controlSize(.mini).buttonStyle(.borderless)
+                                .help("Copy the formula (PixelMath syntax: one expression per output; replace the channel names by your image names in PixInsight)")
+                        }
+                        .padding(.top, 2)
+                    }
                 }
                 .padding(8)
             }

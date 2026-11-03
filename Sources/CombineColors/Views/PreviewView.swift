@@ -34,6 +34,24 @@ final class ZoomPanNSView: NSView {
     var selectedGradientRegion: UUID? = nil { didSet { updateGradientOverlay() } }
     /// Clicks add protected regions instead of drawing.
     var gradientProtectMode = false
+    /// Corrections editor: paint with the brush; the map is drawn as a tint (red darkens, blue brightens).
+    var correctionEditing = false { didSet { updateCorrectionOverlay(); updateCursor(); if !correctionEditing { brushLayer.isHidden = true; radiusLabel.isHidden = true } } }
+    var correctionMap: CorrectionMap? = nil
+    var correctionVersion = 0 { didSet { if correctionVersion != oldValue { correctionTint = nil; updateCorrectionOverlay() } } }
+    var correctionShowMap = true { didSet { updateCorrectionOverlay() } }
+    /// Brush radius in image pixels, and its sense.
+    var brushRadius: CGFloat = 50 { didSet { updateBrushCursor() } }
+    var brushDarken = true { didSet { updateBrushCursor() } }
+    private var correctionTint: CGImage? = nil
+    private var brushPoint: CGPoint? = nil
+    var onStrokeBegin: (() -> Void)?
+    var onPaint: ((CGPoint, CGPoint, Bool) -> Void)?
+    var onBrushRadiusChange: ((CGFloat) -> Void)?
+    /// Background samples of the edited channel (`samples` shape), their radius and what the fit made of them.
+    var gradientSamples: [BackgroundSample] = [] { didSet { updateGradientOverlay() } }
+    var gradientSampleRadius: CGFloat = 20 { didSet { updateGradientOverlay() } }
+    var gradientSampleResults: [UUID: SampleResult] = [:] { didSet { updateGradientOverlay() } }
+    var selectedGradientSample: UUID? = nil { didSet { updateGradientOverlay() } }
     private var lastBounds: CGRect = .zero
 
     var onViewportChange: ((CGRect, Double) -> Void)?
@@ -49,6 +67,9 @@ final class ZoomPanNSView: NSView {
     var onGradientRegionAdd: ((CGPoint) -> Void)?
     var onGradientRegionSelect: ((UUID?) -> Void)?
     var onGradientDelete: (() -> Void)?
+    var onGradientSampleAdd: ((CGPoint) -> Void)?
+    var onGradientSamplesChange: (([BackgroundSample]) -> Void)?
+    var onGradientSampleSelect: ((UUID?) -> Void)?
 
     private let imageLayer = CALayer()
     private let dimLayers = (0..<4).map { _ in CALayer() }
@@ -60,6 +81,12 @@ final class ZoomPanNSView: NSView {
     private let gradientLayer = CAShapeLayer()
     private let gradientRefinedLayer = CAShapeLayer()
     private let gradientHandles = (0..<3).map { _ in CALayer() }
+    private let sampleLayer = CAShapeLayer()
+    private let correctionLayer = CALayer()
+    private let brushLayer = CAShapeLayer()
+    private let radiusLabel = CATextLayer()
+    private let sampleRejectedLayer = CAShapeLayer()
+    private let sampleSelectedLayer = CAShapeLayer()
     private let regionLayer = CAShapeLayer()
     private let regionSelectedLayer = CAShapeLayer()
     private let regionHandles = (0..<2).map { _ in CALayer() }
@@ -79,6 +106,10 @@ final class ZoomPanNSView: NSView {
         case gradientHandle(Int)
         case gradientMove(GradientGesture, CGPoint)
         case regionMove(UUID, GradientRegion, CGPoint)
+        case sampleMove(UUID, BackgroundSample, CGPoint)
+        /// Corrections editor: painting (last image point), or resizing the brush with the right button.
+        case paint(CGPoint)
+        case brushResize(start: CGPoint, radius: CGFloat)
         /// Axis 0 = a (horizontal), 1 = b (vertical).
         case regionResize(UUID, Int)
     }
@@ -147,10 +178,19 @@ final class ZoomPanNSView: NSView {
             h.borderWidth = 1
             h.cornerRadius = 5
         }
-        for l in [regionLayer, regionSelectedLayer, gradientRefinedLayer, gradientLayer] + regionHandles + gradientHandles { layer?.addSublayer(l) }
+        sampleLayer.fillColor = nil; sampleLayer.strokeColor = NSColor.systemGreen.withAlphaComponent(0.9).cgColor; sampleLayer.lineWidth = 1
+        sampleRejectedLayer.fillColor = nil; sampleRejectedLayer.strokeColor = NSColor.systemRed.withAlphaComponent(0.9).cgColor; sampleRejectedLayer.lineWidth = 1; sampleRejectedLayer.lineDashPattern = [3, 3]
+        sampleSelectedLayer.fillColor = NSColor.systemYellow.withAlphaComponent(0.15).cgColor; sampleSelectedLayer.strokeColor = NSColor.systemYellow.cgColor; sampleSelectedLayer.lineWidth = 1.5
+        correctionLayer.magnificationFilter = .linear; correctionLayer.minificationFilter = .linear; correctionLayer.isHidden = true
+        brushLayer.fillColor = nil; brushLayer.strokeColor = NSColor.white.withAlphaComponent(0.9).cgColor; brushLayer.lineWidth = 1; brushLayer.isHidden = true
+        radiusLabel.fontSize = 11; radiusLabel.foregroundColor = NSColor.white.cgColor; radiusLabel.alignmentMode = .center; radiusLabel.isHidden = true
+        radiusLabel.contentsScale = 2; radiusLabel.backgroundColor = NSColor.black.withAlphaComponent(0.5).cgColor; radiusLabel.cornerRadius = 3
+        layer?.addSublayer(correctionLayer)
+        for l in [sampleLayer, sampleRejectedLayer, sampleSelectedLayer, regionLayer, regionSelectedLayer, gradientRefinedLayer, gradientLayer] + regionHandles + gradientHandles { layer?.addSublayer(l) }
+        layer?.addSublayer(brushLayer); layer?.addSublayer(radiusLabel)
         layer?.actions = ["sublayers": NSNull()]
         imageLayer.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull(), "frame": NSNull()]
-        for l in dimLayers + handleLayers + gradientHandles + regionHandles + [cropBorder, dustLayer, dustSelectedLayer, dustHandle, gradientLayer, gradientRefinedLayer, regionLayer, regionSelectedLayer] { l.actions = ["bounds": NSNull(), "position": NSNull(), "frame": NSNull(), "path": NSNull(), "hidden": NSNull()] }
+        for l in dimLayers + handleLayers + gradientHandles + regionHandles + [cropBorder, dustLayer, dustSelectedLayer, dustHandle, gradientLayer, gradientRefinedLayer, regionLayer, regionSelectedLayer, sampleLayer, sampleRejectedLayer, sampleSelectedLayer, correctionLayer, brushLayer, radiusLabel] { l.actions = ["bounds": NSNull(), "position": NSNull(), "frame": NSNull(), "path": NSNull(), "hidden": NSNull()] }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -195,7 +235,79 @@ final class ZoomPanNSView: NSView {
         updateOverlay()
         updateDustOverlay()
         updateGradientOverlay()
+        updateCorrectionOverlay()
         notifyViewport()
+    }
+
+    // MARK: Corrections editor
+
+    /// Tint image of the map: red where it darkens, blue where it brightens, alpha by amount.
+    private func makeCorrectionTint(_ m: CorrectionMap) -> CGImage? {
+        let w = m.width, h = m.height
+        var bytes = [UInt8](repeating: 0, count: w * h * 4)
+        let p = m.plane.pointer
+        for i in 0..<(w * h) {
+            let v = p[i]
+            guard v != 0 else { continue }
+            let a = min(abs(v), 1) * 0.55
+            // Premultiplied RGBA.
+            let (r, g, b): (Float, Float, Float) = v < 0 ? (1, 0.25, 0.2) : (0.3, 0.6, 1)
+            bytes[i * 4] = UInt8(r * a * 255); bytes[i * 4 + 1] = UInt8(g * a * 255); bytes[i * 4 + 2] = UInt8(b * a * 255); bytes[i * 4 + 3] = UInt8(a * 255)
+        }
+        let cs = CGColorSpaceCreateDeviceRGB()
+        guard let provider = CGDataProvider(data: Data(bytes) as CFData) else { return nil }
+        return CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: w * 4, space: cs,
+                       bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue), provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+    }
+
+    private func updateCorrectionOverlay() {
+        guard correctionEditing, correctionShowMap, let m = correctionMap, imageSize != .zero else { correctionLayer.isHidden = true; return }
+        if correctionTint == nil { correctionTint = makeCorrectionTint(m) }
+        correctionLayer.contents = correctionTint
+        correctionLayer.frame = toAppKit(viewRect(CGRect(origin: .zero, size: imageSize)))
+        correctionLayer.isHidden = false
+    }
+
+    private func updateBrushCursor() {
+        guard correctionEditing, let p = brushPoint else { brushLayer.isHidden = true; return }
+        let r = max(brushRadius * zoom, 2)
+        brushLayer.path = CGPath(ellipseIn: toAppKit(CGRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r)), transform: nil)
+        brushLayer.strokeColor = (brushDarken ? NSColor.systemRed : NSColor.systemBlue).withAlphaComponent(0.9).cgColor
+        brushLayer.isHidden = false
+    }
+
+    private func showRadiusLabel(at p: CGPoint) {
+        radiusLabel.string = String(format: "r = %.0f px", brushRadius)
+        let size = CGSize(width: 90, height: 18)
+        radiusLabel.frame = toAppKit(CGRect(x: p.x - size.width / 2, y: p.y - brushRadius * zoom - 24, width: size.width, height: size.height))
+        radiusLabel.isHidden = false
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        guard correctionEditing else { super.rightMouseDown(with: event); return }
+        let p = topLeftPoint(event)
+        brushPoint = p
+        drag = .brushResize(start: p, radius: brushRadius)
+        updateBrushCursor()
+        showRadiusLabel(at: p)
+    }
+
+    override func rightMouseDragged(with event: NSEvent) {
+        guard case .brushResize(let start, let r0) = drag else { super.rightMouseDragged(with: event); return }
+        // Horizontal movement scales the radius (exponentially: the same travel doubles or halves it).
+        let p = topLeftPoint(event)
+        let long = max(imageSize.width, imageSize.height)
+        let r = min(max(r0 * exp((p.x - start.x) / 120), long * 0.003), long * 0.2)
+        brushRadius = r
+        brushPoint = start
+        onBrushRadiusChange?(r)
+        updateBrushCursor()
+        showRadiusLabel(at: start)
+    }
+
+    override func rightMouseUp(with event: NSEvent) {
+        if case .brushResize = drag { drag = .none; radiusLabel.isHidden = true; return }
+        super.rightMouseUp(with: event)
     }
 
     override func viewDidChangeBackingProperties() { super.viewDidChangeBackingProperties(); notifyViewport() }
@@ -301,7 +413,7 @@ final class ZoomPanNSView: NSView {
     private func updateCursor() { window?.invalidateCursorRects(for: self) }
 
     override func resetCursorRects() {
-        addCursorRect(bounds, cursor: cropEditing || dustEditing || gradientEditing ? .crosshair : .openHand)
+        addCursorRect(bounds, cursor: cropEditing || dustEditing || gradientEditing || correctionEditing ? .crosshair : .openHand)
     }
 
     // MARK: Gradient editor
@@ -318,7 +430,7 @@ final class ZoomPanNSView: NSView {
             return [viewPoint(c),
                     viewPoint(CGPoint(x: c.x + g.a * cos(g.angle), y: c.y + g.a * sin(g.angle))),
                     viewPoint(CGPoint(x: c.x - g.b * sin(g.angle), y: c.y + g.b * cos(g.angle)))]
-        case .polynomial: return []
+        case .polynomial, .samples: return []
         }
     }
 
@@ -344,7 +456,7 @@ final class ZoomPanNSView: NSView {
                 path.move(to: CGPoint(x: 0, y: -rb), transform: t); path.addLine(to: CGPoint(x: 0, y: rb), transform: t)
             }
             t = .identity
-        case .polynomial: break
+        case .polynomial, .samples: break
         }
         return path
     }
@@ -359,9 +471,32 @@ final class ZoomPanNSView: NSView {
         [viewPoint(CGPoint(x: r.x + r.a, y: r.y)), viewPoint(CGPoint(x: r.x, y: r.y + r.b))]
     }
 
+    private func sampleRect(_ s: BackgroundSample) -> CGRect {
+        let c = viewPoint(CGPoint(x: s.x, y: s.y)), r = max(gradientSampleRadius * zoom, 3)
+        return toAppKit(CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
+    }
+
+    /// The sample under a view point.
+    private func gradientSample(at p: CGPoint) -> BackgroundSample? {
+        let r = max(gradientSampleRadius * zoom, 6)
+        return gradientSamples.filter { let c = viewPoint(CGPoint(x: $0.x, y: $0.y)); return hypot(p.x - c.x, p.y - c.y) <= r }
+            .min { let a = viewPoint(CGPoint(x: $0.x, y: $0.y)), b = viewPoint(CGPoint(x: $1.x, y: $1.y)); return hypot(p.x - a.x, p.y - a.y) < hypot(p.x - b.x, p.y - b.y) }
+    }
+
     private func updateGradientOverlay() {
-        let all = [gradientLayer, gradientRefinedLayer, regionLayer, regionSelectedLayer] + gradientHandles + regionHandles
+        let all = [gradientLayer, gradientRefinedLayer, regionLayer, regionSelectedLayer, sampleLayer, sampleRejectedLayer, sampleSelectedLayer] + gradientHandles + regionHandles
         guard gradientEditing, imageSize != .zero else { all.forEach { $0.isHidden = true }; return }
+        // Background samples: kept (green), rejected by the fit (red, dashed), selected (yellow).
+        let kept = CGMutablePath(), rejected = CGMutablePath(), chosen = CGMutablePath()
+        for s in gradientSamples {
+            let rect = sampleRect(s)
+            if s.id == selectedGradientSample { chosen.addEllipse(in: rect) }
+            else if gradientSampleResults[s.id]?.isRejected == true { rejected.addEllipse(in: rect) }
+            else { kept.addEllipse(in: rect) }
+        }
+        sampleLayer.isHidden = false; sampleLayer.path = kept
+        sampleRejectedLayer.isHidden = false; sampleRejectedLayer.path = rejected
+        sampleSelectedLayer.isHidden = false; sampleSelectedLayer.path = chosen
         if let g = gradientGesture, g.shape != .polynomial {
             gradientLayer.isHidden = false
             gradientLayer.path = gradientPath(g, axes: true)
@@ -414,13 +549,18 @@ final class ZoomPanNSView: NSView {
         if let id = selectedGradientRegion, let r = gradientRegions.first(where: { $0.id == id }) {
             for (i, h) in regionHandlePoints(r).enumerated() where hypot(p.x - h.x, p.y - h.y) <= 8 { drag = .regionResize(id, i); return }
         }
+        if !gradientProtectMode, let s = gradientSample(at: p) {
+            if s.id != selectedGradientSample { onGradientSampleSelect?(s.id) }
+            drag = .sampleMove(s.id, s, imagePoint(p))
+            return
+        }
         if let r = gradientRegion(at: p) {
             if r.id != selectedGradientRegion { onGradientRegionSelect?(r.id) }
             drag = .regionMove(r.id, r, imagePoint(p))
             return
         }
         if let g = gradientGesture, g.shape == .line, distanceToGradientLine(p, g) <= 6 { drag = .gradientMove(g, imagePoint(p)); return }
-        if !gradientProtectMode, gradientShape != .polynomial, gradientGesture == nil || gradientGesture?.shape == .polynomial {
+        if !gradientProtectMode, gradientShape != .polynomial, gradientShape != .samples, gradientGesture == nil || gradientGesture?.shape == .polynomial {
             drag = .gradientCreate(imagePoint(p)); return
         }
         drag = .gradientPan(last: p, start: p, moved: false)
@@ -462,6 +602,13 @@ final class ZoomPanNSView: NSView {
             g.x += dx; g.y += dy; g.x2 += dx; g.y2 += dy
             gradientGesture = g
             onGradientGestureChange?(g)
+        case .sampleMove(let id, let start, let anchor):
+            guard let i = gradientSamples.firstIndex(where: { $0.id == id }) else { return }
+            var samples = gradientSamples
+            samples[i].x = min(max(start.x + ip.x - anchor.x, 0), imageSize.width)
+            samples[i].y = min(max(start.y + ip.y - anchor.y, 0), imageSize.height)
+            gradientSamples = samples
+            onGradientSamplesChange?(samples)
         case .regionMove(let id, let start, let anchor):
             guard let i = gradientRegions.firstIndex(where: { $0.id == id }) else { return }
             var regions = gradientRegions
@@ -576,6 +723,15 @@ final class ZoomPanNSView: NSView {
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         let p = topLeftPoint(event)
+        if correctionEditing {
+            let ip = imagePoint(p)
+            brushPoint = p
+            drag = .paint(ip)
+            onStrokeBegin?()
+            onPaint?(ip, ip, event.modifierFlags.contains(.option))
+            updateBrushCursor()
+            return
+        }
         if event.clickCount == 2 { onDoubleClick?(); return }
         if dustEditing { dustMouseDown(p); return }
         if gradientEditing { gradientMouseDown(p); return }
@@ -598,8 +754,14 @@ final class ZoomPanNSView: NSView {
         func clampPoint(_ q: CGPoint) -> CGPoint { CGPoint(x: min(max(q.x, 0), imageSize.width), y: min(max(q.y, 0), imageSize.height)) }
         switch drag {
         case .none: break
+        case .paint(let last):
+            brushPoint = p
+            onPaint?(last, ip, event.modifierFlags.contains(.option))
+            drag = .paint(ip)
+            updateBrushCursor()
+        case .brushResize: break
         case .dustPan, .dustMove, .dustResize: dustMouseDragged(p, ip)
-        case .gradientPan, .gradientCreate, .gradientHandle, .gradientMove, .regionMove, .regionResize: gradientMouseDragged(p, ip)
+        case .gradientPan, .gradientCreate, .gradientHandle, .gradientMove, .regionMove, .regionResize, .sampleMove: gradientMouseDragged(p, ip)
         case .pan(let last):
             origin.x += p.x - last.x; origin.y += p.y - last.y
             drag = .pan(p)
@@ -632,18 +794,22 @@ final class ZoomPanNSView: NSView {
         }
         if case .gradientPan(_, let start, let moved) = drag, !moved {
             let ip = imagePoint(start)
-            if gradientProtectMode, ip.x >= 0, ip.y >= 0, ip.x < imageSize.width, ip.y < imageSize.height { onGradientRegionAdd?(ip) }
-            else { onGradientRegionSelect?(nil) }
+            let inside = ip.x >= 0 && ip.y >= 0 && ip.x < imageSize.width && ip.y < imageSize.height
+            if gradientProtectMode, inside { onGradientRegionAdd?(ip) }
+            else if gradientShape == .samples, inside { onGradientSampleAdd?(ip) }
+            else { onGradientRegionSelect?(nil); onGradientSampleSelect?(nil) }
         }
         drag = .none
     }
 
     override func mouseMoved(with event: NSEvent) {
-        let ip = imagePoint(topLeftPoint(event))
+        let p = topLeftPoint(event)
+        let ip = imagePoint(p)
         onHover?(ip)
+        if correctionEditing { brushPoint = p; updateBrushCursor() }
     }
 
-    override func mouseExited(with event: NSEvent) { onHover?(nil) }
+    override func mouseExited(with event: NSEvent) { onHover?(nil); brushPoint = nil; brushLayer.isHidden = true }
 
     override func keyDown(with event: NSEvent) {
         switch event.charactersIgnoringModifiers {
@@ -677,7 +843,13 @@ struct PreviewView: NSViewRepresentable {
         v.onGradientRegionsChange = { r in Task { @MainActor in model.updateGradientRegions(r) } }
         v.onGradientRegionAdd = { p in Task { @MainActor in model.addGradientRegion(at: p) } }
         v.onGradientRegionSelect = { id in Task { @MainActor in model.selectedGradientRegion = id } }
-        v.onGradientDelete = { Task { @MainActor in model.removeSelectedGradientRegion() } }
+        v.onGradientDelete = { Task { @MainActor in model.deleteGradientSelection() } }
+        v.onGradientSampleAdd = { p in Task { @MainActor in model.addGradientSample(at: p) } }
+        v.onGradientSamplesChange = { s in Task { @MainActor in model.updateGradientSamples(s) } }
+        v.onGradientSampleSelect = { id in Task { @MainActor in model.selectedGradientSample = id } }
+        v.onStrokeBegin = { Task { @MainActor in model.beginCorrectionStroke() } }
+        v.onPaint = { a, b, inv in Task { @MainActor in model.paintCorrection(from: a, to: b, invert: inv) } }
+        v.onBrushRadiusChange = { r in Task { @MainActor in model.correctionBrushRadius = Double(r) } }
         v.onDoubleClick = { [weak v] in
             guard let v else { return }
             if abs(v.zoom * v.backing - 1) < 0.01 { v.perform(.fit) } else { v.perform(.actualSize) }
@@ -708,6 +880,21 @@ struct PreviewView: NSViewRepresentable {
         if v.gradientRegions != regions { v.gradientRegions = regions }
         if v.selectedGradientRegion != model.selectedGradientRegion { v.selectedGradientRegion = model.selectedGradientRegion }
         if v.gradientProtectMode != model.gradientProtectMode { v.gradientProtectMode = model.gradientProtectMode }
+        let samples = gradientEditing ? model.gradientSamples : []
+        if v.gradientSamples != samples { v.gradientSamples = samples }
+        let sampleRadius = CGFloat(model.gradientSampleRadius)
+        if v.gradientSampleRadius != sampleRadius { v.gradientSampleRadius = sampleRadius }
+        let results = Dictionary((model.gradientFit.flatMap { $0.kind == model.gradientEditing ? $0.sampleResults : nil } ?? []).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        if v.gradientSampleResults != results { v.gradientSampleResults = results }
+        if v.selectedGradientSample != model.selectedGradientSample { v.selectedGradientSample = model.selectedGradientSample }
+        let correcting = model.correctionEditing != nil
+        if v.correctionEditing != correcting { v.correctionEditing = correcting }
+        if v.correctionMap !== model.correctionDraft { v.correctionMap = model.correctionDraft }
+        if v.correctionVersion != model.correctionVersion { v.correctionVersion = model.correctionVersion }
+        if v.correctionShowMap != model.correctionShowMap { v.correctionShowMap = model.correctionShowMap }
+        let brush = CGFloat(model.correctionBrushRadius)
+        if abs(v.brushRadius - brush) > 0.01 { v.brushRadius = brush }
+        if v.brushDarken != model.correctionDarken { v.brushDarken = model.correctionDarken }
         if context.coordinator.fitRequest != model.fitRequest {
             context.coordinator.fitRequest = model.fitRequest
             DispatchQueue.main.async { v.perform(.fit) }

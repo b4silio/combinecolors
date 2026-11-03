@@ -156,9 +156,16 @@ public struct PostSettings: Codable, Equatable, Hashable {
 }
 
 public enum StarsBlendMode: String, Codable, CaseIterable, Identifiable {
-    case screen, lighten, add
+    /// 1 − (1 − a)(1 − b): adds the stars without clipping, softer on bright nebulae.
+    case screen
+    /// max(a, b): the brighter of the two.
+    case lighten
+    /// a + b (clipped).
+    case add
     public var id: String { rawValue }
-    public var displayName: String { rawValue.capitalized }
+    public var displayName: String {
+        switch self { case .screen: return "Screen"; case .lighten: return "Lighten (max)"; case .add: return "Add" }
+    }
 }
 
 /// Camera-Raw style "selective colour": per hue band hue/saturation/lightness.
@@ -288,6 +295,13 @@ public struct StarsBlendSettings: Codable, Equatable, Hashable {
     /// Use the whole RGB image (no mask) — for star-only images from star removal tools.
     public var useMask: Bool = true
     public var saturation: Float = 1.3
+    /// Gain of the star layer in stops (−2…2), applied after the stretch.
+    public var brightness: Float = 0
+    /// Contrast of the star layer (−1…1): the values are spread (or squeezed) around the mid-tone
+    /// by 2^contrast — positive darkens faint halos and keeps the cores.
+    public var contrast: Float = 0
+    /// Scale the layer so its brightest stars reach white (the brightest values of the result).
+    public var normalize: Bool = false
     public init() {}
 }
 
@@ -363,4 +377,46 @@ public struct CombineSettings: Codable, Equatable, Hashable {
 
     /// Settings that influence the normalisation context (used for cache keys).
     public var normalizationKey: NormalizationSettings { normalization }
+}
+
+// MARK: - Formula read-out
+
+extension CombineSettings {
+    /// The combination as PixelMath-style expressions, one line per output ("R: 0.5*Ha + 0.5*SII"),
+    /// with the channel identifiers Pixel Math accepts (`Ha`, `OIII`, `SII`, `Hb`, `L`, `R`, `G`, `B`),
+    /// for copying into PixInsight's PixelMath (swap the identifiers for the image names there).
+    public func formulaLines(available: Set<ChannelKind>) -> [String] {
+        var lines: [String] = []
+        switch mode {
+        case .monochrome:
+            let kinds = monochromeChannels(available: available).sorted { $0.rawValue < $1.rawValue }.filter { adjust($0).enabled }
+            let terms = kinds.map { adjust($0).weight == 1 ? $0.rawValue : "\(CombineSettings.formatWeight(adjust($0).weight))*\($0.rawValue)" }
+            lines.append("Mono: " + (terms.isEmpty ? "0" : (terms.count == 1 ? terms[0] : "(" + terms.joined(separator: " + ") + ")/" + "\(terms.count)")))
+        case .matrix:
+            for (o, name) in ["R", "G", "B"].enumerated() {
+                let terms = ChannelKind.allCases.compactMap { k -> String? in
+                    let w = matrix.weight(k, o)
+                    guard w != 0 else { return nil }
+                    return w == 1 ? k.rawValue : "\(CombineSettings.formatWeight(w))*\(k.rawValue)"
+                }
+                lines.append("\(name): " + (terms.isEmpty ? "0" : terms.joined(separator: " + ")))
+            }
+        case .pixelMath:
+            lines.append("R: " + pixelMath.red)
+            lines.append("G: " + pixelMath.green)
+            lines.append("B: " + pixelMath.blue)
+        }
+        if mode != .monochrome, luminanceApplies, let l = luminance.resolvedExpression(available: available) {
+            lines.append("L: " + l + (luminance.amount < 1 ? "  (\(Int((luminance.amount * 100).rounded())) %)" : ""))
+        }
+        return lines
+    }
+
+    static func formatWeight(_ w: Float) -> String {
+        let s = String(format: "%.3f", w)
+        var t = s
+        while t.hasSuffix("0") { t.removeLast() }
+        if t.hasSuffix(".") { t.removeLast() }
+        return t
+    }
 }

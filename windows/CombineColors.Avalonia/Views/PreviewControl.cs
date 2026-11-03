@@ -48,6 +48,27 @@ public sealed class PreviewControl : Control
     List<GradientRegion> gradientRegions = new(); public List<GradientRegion> GradientRegions { get => gradientRegions; set { gradientRegions = value; InvalidateVisual(); } }
     Guid? selectedGradientRegion; public Guid? SelectedGradientRegion { get => selectedGradientRegion; set { selectedGradientRegion = value; InvalidateVisual(); } }
     bool gradientProtectMode; public bool GradientProtectMode { get => gradientProtectMode; set => gradientProtectMode = value; }
+    /// <summary>Background samples of the edited channel (Samples shape), their radius and what the fit made of them.</summary>
+    List<BackgroundSample> gradientSamples = new(); public List<BackgroundSample> GradientSamples { get => gradientSamples; set { gradientSamples = value; InvalidateVisual(); } }
+    double gradientSampleRadius = 20; public double GradientSampleRadius { get => gradientSampleRadius; set { gradientSampleRadius = value; InvalidateVisual(); } }
+    Dictionary<Guid, SampleResult> gradientSampleResults = new(); public Dictionary<Guid, SampleResult> GradientSampleResults { get => gradientSampleResults; set { gradientSampleResults = value; InvalidateVisual(); } }
+    Guid? selectedGradientSample; public Guid? SelectedGradientSample { get => selectedGradientSample; set { selectedGradientSample = value; InvalidateVisual(); } }
+
+    /// <summary>Corrections editor: paint with the brush; the map is drawn as a tint (red darkens, blue brightens).</summary>
+    bool correctionEditing; public bool CorrectionEditing { get => correctionEditing; set { if (correctionEditing == value) return; correctionEditing = value; if (!value) { brushPoint = null; brushResizing = false; } UpdateCursor(); InvalidateVisual(); } }
+    CorrectionMap? correctionMap; public CorrectionMap? CorrectionMap { get => correctionMap; set { if (ReferenceEquals(correctionMap, value)) return; correctionMap = value; correctionTint = null; InvalidateVisual(); } }
+    int correctionVersion; public int CorrectionVersion { get => correctionVersion; set { if (correctionVersion == value) return; correctionVersion = value; correctionTint = null; InvalidateVisual(); } }
+    bool correctionShowMap = true; public bool CorrectionShowMap { get => correctionShowMap; set { correctionShowMap = value; InvalidateVisual(); } }
+    /// <summary>Brush radius in image pixels, and its sense.</summary>
+    double brushRadius = 50; public double BrushRadius { get => brushRadius; set { brushRadius = value; InvalidateVisual(); } }
+    bool brushDarken = true; public bool BrushDarken { get => brushDarken; set { brushDarken = value; InvalidateVisual(); } }
+    WriteableBitmap? correctionTint;
+    Point? brushPoint;
+    Point paintLast;
+    bool brushResizing; Point brushResizeStart; double brushResizeRadius;
+    public event Action? StrokeBegin;
+    public event Action<Point, Point, bool>? Paint;
+    public event Action<double>? BrushRadiusChanged;
 
     public event Action<Rect, double>? ViewportChanged;
     public event Action<Point?>? Hover;
@@ -62,8 +83,12 @@ public sealed class PreviewControl : Control
     public event Action<Point>? GradientRegionAdd;
     public event Action<Guid?>? GradientRegionSelect;
     public event Action? GradientDelete;
+    public event Action<Point>? GradientSampleAdd;
+    public event Action<List<BackgroundSample>>? GradientSamplesChanged;
+    public event Action<Guid?>? GradientSampleSelect;
 
-    enum DragKind { None, Pan, Move, Resize, Create, DustPan, DustMove, DustResize, GradientPan, GradientCreate, GradientHandle, GradientMove, RegionMove, RegionResize }
+    enum DragKind { None, Pan, Move, Resize, Create, DustPan, DustMove, DustResize, GradientPan, GradientCreate, GradientHandle, GradientMove, RegionMove, RegionResize, SampleMove, Paint }
+    Guid dragSample; BackgroundSample? dragSampleStart;
     DragKind drag = DragKind.None;
     Point dragLast, dragStart, dragAnchor;
     bool dragMoved;
@@ -190,7 +215,7 @@ public sealed class PreviewControl : Control
         RenderOptions.SetBitmapInterpolationMode(this, Zoom * Backing >= 2 ? BitmapInterpolationMode.None : BitmapInterpolationMode.MediumQuality);
     }
 
-    void UpdateCursor() => Cursor = new Cursor(cropEditing || dustEditing || gradientEditing ? StandardCursorType.Cross : StandardCursorType.Arrow);
+    void UpdateCursor() => Cursor = new Cursor(cropEditing || dustEditing || gradientEditing || correctionEditing ? StandardCursorType.Cross : StandardCursorType.Arrow);
 
     // Rendering
 
@@ -210,6 +235,56 @@ public sealed class PreviewControl : Control
         DrawCropOverlay(dc);
         DrawDustOverlay(dc);
         DrawGradientOverlay(dc);
+        DrawCorrectionOverlay(dc);
+    }
+
+    // ---- Corrections editor ----------------------------------------------------------------------
+
+    static readonly IPen BrushDarkPen = new Pen(new SolidColorBrush(Color.FromArgb(230, 255, 70, 60)), 1);
+    static readonly IPen BrushLightPen = new Pen(new SolidColorBrush(Color.FromArgb(230, 80, 150, 255)), 1);
+
+    /// <summary>Tint image of the map: red where it darkens, blue where it brightens, alpha by amount (premultiplied BGRA).</summary>
+    static WriteableBitmap MakeCorrectionTint(CorrectionMap m)
+    {
+        int w = m.Width, h = m.Height;
+        var bytes = new byte[w * h * 4];
+        var p = m.Plane.Data;
+        for (int i = 0; i < w * h; i++)
+        {
+            float v = p[i];
+            if (v == 0) continue;
+            float a = Math.Min(Math.Abs(v), 1) * 0.55f;
+            var (r, g, b) = v < 0 ? (1f, 0.25f, 0.2f) : (0.3f, 0.6f, 1f);
+            bytes[i * 4] = (byte)(b * a * 255); bytes[i * 4 + 1] = (byte)(g * a * 255); bytes[i * 4 + 2] = (byte)(r * a * 255); bytes[i * 4 + 3] = (byte)(a * 255);
+        }
+        var bmp = new WriteableBitmap(new PixelSize(w, h), new Vector(96, 96), Avalonia.Platform.PixelFormat.Bgra8888, Avalonia.Platform.AlphaFormat.Premul);
+        using (var fb = bmp.Lock())
+        {
+            for (int y = 0; y < h; y++) System.Runtime.InteropServices.Marshal.Copy(bytes, y * w * 4, fb.Address + y * fb.RowBytes, w * 4);
+        }
+        return bmp;
+    }
+
+    void DrawCorrectionOverlay(DrawingContext dc)
+    {
+        if (!correctionEditing) return;
+        if (correctionShowMap && correctionMap is CorrectionMap m)
+        {
+            correctionTint ??= MakeCorrectionTint(m);
+            dc.DrawImage(correctionTint, ViewRect(new Rect(0, 0, imageSize.Width, imageSize.Height)));
+        }
+        if (brushPoint is Point bp)
+        {
+            double r = Math.Max(brushRadius * Zoom, 2);
+            dc.DrawEllipse(null, brushDarken ? BrushDarkPen : BrushLightPen, bp, r, r);
+            if (brushResizing)
+            {
+                var text = new FormattedText($"r = {brushRadius:0} px", System.Globalization.CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Typeface.Default, 11, Brushes.White);
+                var at = new Point(bp.X - text.Width / 2, bp.Y - r - 22);
+                dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(128, 0, 0, 0)), null, new Rect(at.X - 4, at.Y - 2, text.Width + 8, text.Height + 4), 3, 3);
+                dc.DrawText(text, at);
+            }
+        }
     }
 
     void DrawCropOverlay(DrawingContext dc)
@@ -278,6 +353,10 @@ public sealed class PreviewControl : Control
     static readonly IPen RegionPen = new Pen(new SolidColorBrush(Color.FromArgb(204, 255, 59, 48)), 1, new DashStyle([4, 3], 0));
     static readonly IPen RegionSelectedPen = new Pen(new SolidColorBrush(Color.FromRgb(255, 59, 48)), 1.5);
     static readonly IBrush RegionFill = new SolidColorBrush(Color.FromArgb(24, 255, 59, 48));
+    static readonly IPen SamplePen = new Pen(new SolidColorBrush(Color.FromArgb(230, 52, 199, 89)), 1);
+    static readonly IPen SampleRejectedPen = new Pen(new SolidColorBrush(Color.FromArgb(230, 255, 59, 48)), 1, new DashStyle([3, 3], 0));
+    static readonly IPen SampleSelectedPen = new Pen(Brushes.Gold, 1.5);
+    static readonly IBrush SampleSelectedFill = new SolidColorBrush(Color.FromArgb(38, 255, 215, 0));
 
     void DrawRotatedEllipse(DrawingContext dc, IBrush? fill, IPen pen, Point c, double rx, double ry, double angle, bool axes)
     {
@@ -320,9 +399,25 @@ public sealed class PreviewControl : Control
         }
     }
 
+    /// <summary>The sample under a view point.</summary>
+    BackgroundSample? GradientSampleAt(Point p)
+    {
+        double r = Math.Max(gradientSampleRadius * Zoom, 6);
+        return gradientSamples.Where(s => Dist(p, ViewPoint(new Point(s.X, s.Y))) <= r).OrderBy(s => Dist(p, ViewPoint(new Point(s.X, s.Y)))).FirstOrDefault();
+    }
+
     void DrawGradientOverlay(DrawingContext dc)
     {
         if (!gradientEditing) return;
+        // Background samples: kept (green), rejected by the fit (red, dashed), selected (yellow).
+        double sr = Math.Max(gradientSampleRadius * Zoom, 3);
+        foreach (var s in gradientSamples)
+        {
+            var c = ViewPoint(new Point(s.X, s.Y));
+            if (s.Id == selectedGradientSample) dc.DrawEllipse(SampleSelectedFill, SampleSelectedPen, c, sr, sr);
+            else if (gradientSampleResults.TryGetValue(s.Id, out var res) && res.IsRejected) dc.DrawEllipse(null, SampleRejectedPen, c, sr, sr);
+            else dc.DrawEllipse(null, SamplePen, c, sr, sr);
+        }
         foreach (var r in gradientRegions)
         {
             var c = ViewPoint(new Point(r.X, r.Y));
@@ -369,6 +464,12 @@ public sealed class PreviewControl : Control
             var hs = RegionHandlePoints(sel);
             for (int i = 0; i < hs.Count; i++) if (Dist(p, hs[i]) <= 8) { drag = DragKind.RegionResize; dragRegion = id; dragAxis = i; return; }
         }
+        if (!gradientProtectMode && GradientSampleAt(p) is BackgroundSample bs)
+        {
+            if (bs.Id != selectedGradientSample) GradientSampleSelect?.Invoke(bs.Id);
+            drag = DragKind.SampleMove; dragSample = bs.Id; dragSampleStart = bs.Clone(); dragAnchor = ImagePoint(p);
+            return;
+        }
         if (GradientRegionAt(p) is GradientRegion r)
         {
             if (r.Id != selectedGradientRegion) GradientRegionSelect?.Invoke(r.Id);
@@ -379,7 +480,7 @@ public sealed class PreviewControl : Control
         {
             drag = DragKind.GradientMove; dragGestureStart = lg.Clone(); dragAnchor = ImagePoint(p); return;
         }
-        if (!gradientProtectMode && gradientShape != GradientShape.Polynomial && (gradientGesture == null || gradientGesture.Shape == GradientShape.Polynomial))
+        if (!gradientProtectMode && gradientShape != GradientShape.Polynomial && gradientShape != GradientShape.Samples && (gradientGesture == null || gradientGesture.Shape == GradientShape.Polynomial))
         {
             drag = DragKind.GradientCreate; dragStart = ImagePoint(p); return;
         }
@@ -427,6 +528,17 @@ public sealed class PreviewControl : Control
                 GradientGestureChanged?.Invoke(g);
                 return true;
             }
+            case DragKind.SampleMove:
+            {
+                int i = gradientSamples.FindIndex(s => s.Id == dragSample);
+                if (i < 0 || dragSampleStart == null) return true;
+                var samples = gradientSamples.Select(s => s.Clone()).ToList();
+                samples[i].X = Math.Min(Math.Max(dragSampleStart.X + ip.X - dragAnchor.X, 0), imageSize.Width);
+                samples[i].Y = Math.Min(Math.Max(dragSampleStart.Y + ip.Y - dragAnchor.Y, 0), imageSize.Height);
+                gradientSamples = samples; InvalidateVisual();
+                GradientSamplesChanged?.Invoke(samples);
+                return true;
+            }
             case DragKind.RegionMove:
             {
                 int i = gradientRegions.FindIndex(r => r.Id == dragRegion);
@@ -457,8 +569,10 @@ public sealed class PreviewControl : Control
         if (drag == DragKind.GradientPan && !dragMoved)
         {
             var ip = ImagePoint(dragStart);
-            if (gradientProtectMode && ip.X >= 0 && ip.Y >= 0 && ip.X < imageSize.Width && ip.Y < imageSize.Height) GradientRegionAdd?.Invoke(ip);
-            else GradientRegionSelect?.Invoke(null);
+            bool inside = ip.X >= 0 && ip.Y >= 0 && ip.X < imageSize.Width && ip.Y < imageSize.Height;
+            if (gradientProtectMode && inside) GradientRegionAdd?.Invoke(ip);
+            else if (gradientShape == GradientShape.Samples && inside) GradientSampleAdd?.Invoke(ip);
+            else { GradientRegionSelect?.Invoke(null); GradientSampleSelect?.Invoke(null); }
         }
     }
 
@@ -479,9 +593,25 @@ public sealed class PreviewControl : Control
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         var props = e.GetCurrentPoint(this).Properties;
+        if (correctionEditing && props.IsRightButtonPressed)
+        {
+            var rp = e.GetPosition(this);
+            brushPoint = rp; brushResizing = true; brushResizeStart = rp; brushResizeRadius = brushRadius;
+            e.Pointer.Capture(this); e.Handled = true; InvalidateVisual();
+            return;
+        }
         if (!props.IsLeftButtonPressed) { base.OnPointerPressed(e); return; }
         Focus();
         var p = e.GetPosition(this);
+        if (correctionEditing)
+        {
+            var ip = ImagePoint(p);
+            brushPoint = p; paintLast = ip; drag = DragKind.Paint;
+            StrokeBegin?.Invoke();
+            Paint?.Invoke(ip, ip, e.KeyModifiers.HasFlag(KeyModifiers.Alt));
+            e.Pointer.Capture(this); e.Handled = true; InvalidateVisual();
+            return;
+        }
         if (e.ClickCount == 2) { DoubleClick?.Invoke(); drag = DragKind.None; e.Handled = true; return; }
         if (dustEditing) { DustMouseDown(p); e.Pointer.Capture(this); e.Handled = true; return; }
         if (gradientEditing) { GradientMouseDown(p); e.Pointer.Capture(this); e.Handled = true; return; }
@@ -532,6 +662,28 @@ public sealed class PreviewControl : Control
         var ip = ImagePoint(p);
         Hover?.Invoke(ip);
         bool left = e.GetCurrentPoint(this).Properties.IsLeftButtonPressed;
+        if (correctionEditing)
+        {
+            if (brushResizing)
+            {
+                // Horizontal movement scales the radius (exponentially: the same travel doubles or halves it).
+                double lng = Math.Max(imageSize.Width, imageSize.Height);
+                brushRadius = Math.Min(Math.Max(brushResizeRadius * Math.Exp((p.X - brushResizeStart.X) / 120), lng * 0.003), lng * 0.2);
+                brushPoint = brushResizeStart;
+                BrushRadiusChanged?.Invoke(brushRadius);
+                InvalidateVisual();
+                return;
+            }
+            brushPoint = p;
+            if (drag == DragKind.Paint && left)
+            {
+                Paint?.Invoke(paintLast, ip, e.KeyModifiers.HasFlag(KeyModifiers.Alt));
+                paintLast = ip;
+            }
+            else if (drag == DragKind.Paint) { drag = DragKind.None; e.Pointer.Capture(null); }
+            InvalidateVisual();
+            return;
+        }
         if (!left && drag != DragKind.None) { drag = DragKind.None; e.Pointer.Capture(null); UpdateCursor(); }
         Point ClampPoint(Point q) => new(Math.Min(Math.Max(q.X, 0), imageSize.Width), Math.Min(Math.Max(q.Y, 0), imageSize.Height));
         if (GradientMouseMove(p, ip)) return;
@@ -595,6 +747,7 @@ public sealed class PreviewControl : Control
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
+        if (brushResizing && e.InitialPressMouseButton == MouseButton.Right) { brushResizing = false; e.Pointer.Capture(null); e.Handled = true; InvalidateVisual(); return; }
         if (e.InitialPressMouseButton != MouseButton.Left) { base.OnPointerReleased(e); return; }
         if (drag == DragKind.DustPan && !dragMoved)
         {
@@ -607,7 +760,7 @@ public sealed class PreviewControl : Control
         UpdateCursor();
     }
 
-    protected override void OnPointerExited(PointerEventArgs e) { base.OnPointerExited(e); Hover?.Invoke(null); }
+    protected override void OnPointerExited(PointerEventArgs e) { base.OnPointerExited(e); Hover?.Invoke(null); if (brushPoint != null && !brushResizing) { brushPoint = null; InvalidateVisual(); } }
 
     protected override void OnKeyDown(KeyEventArgs e)
     {

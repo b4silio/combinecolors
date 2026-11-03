@@ -99,7 +99,9 @@ public sealed class ColorFileWindow
     readonly StackPanel advanced = new() { Visibility = Visibility.Collapsed };
     readonly Button addButton;
     readonly Button saveButton;
-    bool dualBand;
+    string mode = "rgb";
+    bool dualBand => mode == "dualBand";
+    bool starsMode => mode == "stars";
     int previewGeneration;
     readonly List<IRefreshable> rows = new();
 
@@ -108,17 +110,19 @@ public sealed class ColorFileWindow
     ColorFileWindow(Window owner, ProjectModel model, PendingFile pending)
     {
         this.model = model; this.pending = pending;
-        dualBand = model.Preferences.GetString("colorFileMode") == "dualBand";
+        var pm = model.Preferences.GetString("colorFileMode"); mode = pm is "dualBand" or "stars" ? pm! : "rgb";
         w = DialogBase.Make(owner, "Colour image", 740);
         var f = pending.File;
         var panel = new StackPanel { Margin = new Thickness(16) };
         panel.Children.Add(new TextBlock { Text = $"{f.FileName} is a colour image", FontWeight = FontWeights.Bold, FontSize = 13 });
         panel.Children.Add(new TextBlock { Text = $"{f.Width} × {f.Height} · {f.FormatDescription}", FontSize = 11, Foreground = Brushes.Gray, Margin = new Thickness(0, 0, 0, 8) });
-        TextBlock rgbText = new(); StackPanel customRow = new(); TextBlock first1 = new(), second1 = new();
-        var seg = Ui.Segmented(new[] { false, true }, b => b ? "Dual-band" : "RGB", () => dualBand, v => { dualBand = v; model.Preferences.Set("colorFileMode", v ? "dualBand" : "rgb"); UpdateMode(); }, out _);
+        TextBlock rgbText = new(), starsText = new(); StackPanel customRow = new(); TextBlock first1 = new(), second1 = new();
+        var seg = Ui.Segmented(new[] { "rgb", "dualBand", "stars" }, m => m switch { "dualBand" => "Dual-band", "stars" => "Keep as RGB (stars)", _ => "Split RGB" }, () => mode, v => { mode = v; model.Preferences.Set("colorFileMode", v); UpdateMode(); }, out _);
         panel.Children.Add(seg);
-        rgbText = new TextBlock { Text = "The red, green and blue planes become the R, G and B channels (broadband colour or an RGB stars image).", FontSize = 11, Foreground = Brushes.Gray, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 8) };
+        rgbText = new TextBlock { Text = "The red, green and blue planes become the R, G and B channels (broadband colour).", FontSize = 11, Foreground = Brushes.Gray, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 8) };
         panel.Children.Add(rgbText);
+        starsText = new TextBlock { Text = "The image stays an RGB image and is blended on top of the result as stars (a stars-only image from a star-removal tool, or any RGB frame whose stars are wanted); the channel slots are untouched. Brightness, contrast, blend mode and the luminance mask are in the RGB stars block.", FontSize = 11, Foreground = Brushes.Gray, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 8) };
+        panel.Children.Add(starsText);
         dualPanel.Children.Add(new TextBlock { Text = "One-shot-colour images taken through a dual-band filter hold one emission line in the red channel and the other in green/blue. They are extracted into two monochrome channels.", FontSize = 11, Foreground = Brushes.Gray, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 8) });
         var columns = new DockPanel();
         var left = new StackPanel { Width = 340 };
@@ -161,12 +165,13 @@ public sealed class ColorFileWindow
         w.Content = panel;
         void UpdateMode()
         {
-            rgbText.Visibility = dualBand ? Visibility.Collapsed : Visibility.Visible;
+            rgbText.Visibility = mode == "rgb" ? Visibility.Visible : Visibility.Collapsed;
+            starsText.Visibility = starsMode ? Visibility.Visible : Visibility.Collapsed;
             dualPanel.Visibility = dualBand ? Visibility.Visible : Visibility.Collapsed;
             saveButton.Visibility = dualBand ? Visibility.Visible : Visibility.Collapsed;
             customRow.Visibility = settings.Preset == DualBandPreset.Custom ? Visibility.Visible : Visibility.Collapsed;
             var (a, b) = settings.OutputKinds;
-            addButton.Content = dualBand ? $"Add {a.ShortName()} + {b.ShortName()}" : "Use as RGB";
+            addButton.Content = dualBand ? $"Add {a.ShortName()} + {b.ShortName()}" : starsMode ? "Use as stars layer" : "Use as RGB";
             title1.Text = a.DisplayName(); title2.Text = b.DisplayName();
             first1.Text = $"{a.DisplayName()} from camera R/G/B"; second1.Text = $"{b.DisplayName()} from camera R/G/B";
             if (dualBand && preview1.Source == null) RefreshPreview();
@@ -213,7 +218,8 @@ public sealed class ColorFileWindow
 
     void Add()
     {
-        if (!dualBand) model.AssignColorFileAsRGB(pending);
+        if (starsMode) model.AssignColorFileAsStars(pending);
+        else if (!dualBand) model.AssignColorFileAsRGB(pending);
         else
         {
             var (a, b) = Split();

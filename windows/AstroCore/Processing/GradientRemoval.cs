@@ -9,12 +9,14 @@ public enum GradientShape
     Ellipse,
     /// <summary>No guide: a plain 2-D polynomial of the chosen degree (the classic parametric model).</summary>
     Polynomial,
+    /// <summary>Background samples (discs on sky) with a smoothing spline or kriging surface through them.</summary>
+    Samples,
 }
 
 public static class GradientShapes
 {
-    public static readonly GradientShape[] All = [GradientShape.Line, GradientShape.Ellipse, GradientShape.Polynomial];
-    public static string DisplayName(this GradientShape s) => s switch { GradientShape.Line => "Line", GradientShape.Ellipse => "Ellipse", _ => "Polynomial" };
+    public static readonly GradientShape[] All = [GradientShape.Line, GradientShape.Ellipse, GradientShape.Polynomial, GradientShape.Samples];
+    public static string DisplayName(this GradientShape s) => s switch { GradientShape.Line => "Line", GradientShape.Ellipse => "Ellipse", GradientShape.Polynomial => "Polynomial", _ => "Samples" };
 }
 
 /// <summary>How the estimated background is taken out.</summary>
@@ -58,6 +60,7 @@ public sealed partial class GradientGesture : IEquatable<GradientGesture>
     public static GradientGesture Line(double x0, double y0, double x1, double y1) => new(GradientShape.Line) { X = x0, Y = y0, X2 = x1, Y2 = y1 };
     public static GradientGesture Ellipse(double cx, double cy, double a, double b, double angle = 0) => new(GradientShape.Ellipse) { X = cx, Y = cy, A = a, B = b, Angle = angle };
     public static GradientGesture Polynomial() => new(GradientShape.Polynomial);
+    public static GradientGesture Samples() => new(GradientShape.Samples);
 
     public double LineLength => Math.Sqrt((X2 - X) * (X2 - X) + (Y2 - Y) * (Y2 - Y));
 
@@ -159,16 +162,39 @@ public sealed partial class GradientSpec : IEquatable<GradientSpec>
     public int Degree = 4;
     /// <summary>Optimise the guide's geometry from the data before estimating the profile.</summary>
     public bool Refine = true;
+    /// <summary>Background samples (Samples shape).</summary>
+    public List<BackgroundSample> Samples = new();
+    /// <summary>Radius of the sample discs in full-resolution pixels (0 = automatic).</summary>
+    public double SampleRadius = 0;
+    /// <summary>Surface through the samples.</summary>
+    public SampleSurface Surface = SampleSurface.Spline;
+    /// <summary>Smoothing of the surface (0…1).</summary>
+    public double SampleSmoothing = 0.5;
+    /// <summary>Pick the smoothing by cross-validation instead of SampleSmoothing.</summary>
+    public bool AutoSmoothing = true;
+    /// <summary>Grid generator parameters (samples per row; tolerance in sample noises above the sky model). A Samples model without samples generates its grid with these when fitted.</summary>
+    public int GridPerRow = 14;
+    public double GridTolerance = 2.5;
 
     public GradientSpec(GradientGesture gesture) { Gesture = gesture; }
 
-    public GradientSpec Clone() { var c = (GradientSpec)MemberwiseClone(); c.Gesture = Gesture.Clone(); return c; }
+    public GradientSpec Clone() { var c = (GradientSpec)MemberwiseClone(); c.Gesture = Gesture.Clone(); c.Samples = Samples.Select(s => s.Clone()).ToList(); return c; }
 
-    public GradientSpec Applying(OrientationOp op, int imageWidth, int imageHeight) { var s = Clone(); s.Gesture = Gesture.Applying(op, imageWidth, imageHeight); return s; }
+    public GradientSpec Applying(OrientationOp op, int imageWidth, int imageHeight)
+    {
+        var s = Clone();
+        s.Gesture = Gesture.Applying(op, imageWidth, imageHeight);
+        s.Samples = Samples.Select(p => p.Applying(op, imageWidth, imageHeight)).ToList();
+        return s;
+    }
 
-    public bool Equals(GradientSpec? o) => o != null && Gesture.Equals(o.Gesture) && Mode == o.Mode && Residual == o.Residual && Sectors == o.Sectors && Smoothness == o.Smoothness && Degree == o.Degree && Refine == o.Refine;
+    /// <summary>Sample radius actually used.</summary>
+    public double ResolvedSampleRadius(int width, int height) => SampleRadius > 0 ? SampleRadius : BackgroundSamples.DefaultRadius(width, height);
+
+    public bool Equals(GradientSpec? o) => o != null && Gesture.Equals(o.Gesture) && Mode == o.Mode && Residual == o.Residual && Sectors == o.Sectors && Smoothness == o.Smoothness && Degree == o.Degree && Refine == o.Refine
+        && Samples.SequenceEqual(o.Samples) && SampleRadius == o.SampleRadius && Surface == o.Surface && SampleSmoothing == o.SampleSmoothing && AutoSmoothing == o.AutoSmoothing && GridPerRow == o.GridPerRow && GridTolerance == o.GridTolerance;
     public override bool Equals(object? obj) => Equals(obj as GradientSpec);
-    public override int GetHashCode() => HashCode.Combine(Gesture, Mode, Residual, Sectors, Smoothness, Degree, Refine);
+    public override int GetHashCode() => HashCode.Combine(HashCode.Combine(Gesture, Mode, Residual, Sectors, Smoothness, Degree, Refine), Samples.Count, SampleRadius, Surface, SampleSmoothing, AutoSmoothing, GridPerRow, GridTolerance);
 }
 
 /// <summary>
@@ -188,15 +214,30 @@ public sealed partial class GradientSettings : IEquatable<GradientSettings>
     public double Smoothness = 1.5;
     public int Degree = 4;
     public bool Refine = true;
+    public SampleSurface Surface = SampleSurface.Spline;
+    public double SampleSmoothing = 0.5;
+    public bool AutoSmoothing = true;
+    public double SampleRadius = 0;
+    /// <summary>Grid generator: samples per row and the tolerance (in sample noises above the sky model).</summary>
+    public int GridPerRow = 14;
+    public double GridTolerance = 2.5;
 
     public bool IsEmpty => Specs.Count == 0;
     public GradientSpec? SpecFor(ChannelKind kind) => Specs.TryGetValue(kind, out var s) ? s : null;
     /// <summary>A model with the parameters for new models around a drawn guide.</summary>
-    public GradientSpec NewSpec(GradientGesture gesture) => new(gesture) { Mode = Mode, Residual = Residual, Sectors = Sectors, Smoothness = Smoothness, Degree = Degree, Refine = Refine };
+    public GradientSpec NewSpec(GradientGesture gesture) => new(gesture)
+    {
+        Mode = Mode, Residual = Residual, Sectors = Sectors, Smoothness = Smoothness, Degree = Degree, Refine = Refine,
+        SampleRadius = SampleRadius, Surface = Surface, SampleSmoothing = SampleSmoothing, AutoSmoothing = AutoSmoothing, GridPerRow = GridPerRow, GridTolerance = GridTolerance,
+    };
 
     public GradientSettings Clone()
     {
-        var c = new GradientSettings { Shape = Shape, Mode = Mode, Residual = Residual, Sectors = Sectors, Smoothness = Smoothness, Degree = Degree, Refine = Refine };
+        var c = new GradientSettings
+        {
+            Shape = Shape, Mode = Mode, Residual = Residual, Sectors = Sectors, Smoothness = Smoothness, Degree = Degree, Refine = Refine,
+            Surface = Surface, SampleSmoothing = SampleSmoothing, AutoSmoothing = AutoSmoothing, SampleRadius = SampleRadius, GridPerRow = GridPerRow, GridTolerance = GridTolerance,
+        };
         foreach (var (k, v) in Specs) c.Specs[k] = v.Clone();
         c.Protect = Protect.Select(r => r.Clone()).ToList();
         return c;
@@ -429,9 +470,13 @@ public static class GradientRemoval
         /// <summary>RMS of the sample residuals in units of the sample noise.</summary>
         public float ResidualSigma;
         public int Width, Height;
+        /// <summary>Surface through the background samples (Samples shape) and what became of each sample.</summary>
+        public BackgroundSamples.Surface? Surface;
+        public IReadOnlyList<SampleResult> SampleResults => Surface?.Results ?? (IReadOnlyList<SampleResult>)[];
 
         public float Background(float x, float y)
         {
+            if (Surface != null) return Surface.Value(x, y);
             float v = 0;
             if (Profile != null) { var (u, phi) = Coordinate(Gesture, x, y); v = Profile.Eval(u, phi); }
             if (Poly.Length > 0) v += Polynomial(Poly, PolyDegree, x / Width, y / Height);
@@ -475,7 +520,7 @@ public static class GradientRemoval
 
     static int PolynomialTerms(int degree) => (degree + 1) * (degree + 2) / 2;
 
-    static float Polynomial(float[] c, int degree, float nx, float ny)
+    internal static float Polynomial(float[] c, int degree, float nx, float ny)
     {
         float v = 0; int k = 0; float xi = 1;
         for (int i = 0; i <= degree; i++)
@@ -523,7 +568,7 @@ public static class GradientRemoval
     }
 
     /// <summary>Gaussian elimination with partial pivoting for a small dense system.</summary>
-    static float[]? Solve(double[] a, double[] b, int n)
+    internal static float[]? Solve(double[] a, double[] b, int n)
     {
         var m = (double[])a.Clone(); var v = (double[])b.Clone();
         for (int col = 0; col < n; col++)
@@ -697,9 +742,10 @@ public static class GradientRemoval
     }
 
     /// <summary>Fits the model of <paramref name="spec"/> to the samples (refining the guide when asked). Null when the samples cannot support it.</summary>
-    public static Fit? FitSamples(Samples s, GradientSpec spec)
+    public static Fit? FitSamples(Samples s, GradientSpec spec, IReadOnlyList<GradientRegion>? protect = null)
     {
         if (s.Count < 50) return null;
+        if (spec.Gesture.Shape == GradientShape.Samples) return FitBackgroundSamples(s, spec, protect);
         var g = spec.Gesture.Clone();
         if (g.Shape == GradientShape.Line && g.LineLength < 1) return null;
         if (g.Shape == GradientShape.Ellipse) { g.A = Math.Max(g.A, 1); g.B = Math.Max(g.B, 1); }
@@ -714,6 +760,26 @@ public static class GradientRemoval
         fit.ResidualSigma = (float)Math.Sqrt(sq / s.Count) / s.Noise;
         Array.Sort(model);
         fit.Reference = spec.Mode == GradientMode.Divide ? Statistics.Percentile(model, 0.995) : Statistics.Percentile(model, 0.5);
+        return fit;
+    }
+
+    /// <summary>Surface through the background samples; the reference level is read off the surface like the other models.</summary>
+    static Fit? FitBackgroundSamples(Samples s, GradientSpec spec, IReadOnlyList<GradientRegion>? protect)
+    {
+        double radius = spec.ResolvedSampleRadius(s.Width, s.Height);
+        var sp = spec;
+        if (sp.Samples.Count == 0)
+        {
+            if (sp.GridPerRow <= 0) return null;   // cleared by hand: no model until samples are placed
+            sp = spec.Clone();
+            sp.Samples = BackgroundSamples.Grid(s, sp.GridPerRow, radius, sp.GridTolerance, protect);
+        }
+        var surface = BackgroundSamples.Fit(sp.Samples, radius, s, sp.Surface, sp.AutoSmoothing ? null : sp.SampleSmoothing);
+        if (surface == null) return null;
+        var fit = new Fit { Gesture = sp.Gesture, Spec = sp, Profile = null, Poly = [], PolyDegree = 0, ResidualSigma = surface.ResidualSigma, Width = s.Width, Height = s.Height, Surface = surface };
+        var model = surface.Plane.ToArray();
+        Array.Sort(model);
+        fit.Reference = sp.Mode == GradientMode.Divide ? Statistics.Percentile(model, 0.995) : Statistics.Percentile(model, 0.5);
         return fit;
     }
 
@@ -747,7 +813,7 @@ public static class GradientRemoval
     public static (PlanarImage image, Fit fit)? Correct(PlanarImage image, GradientSpec spec, IReadOnlyList<GradientRegion>? protect = null)
     {
         var s = GetSamples(image, protect);
-        var f = FitSamples(s, spec);
+        var f = FitSamples(s, spec, protect);
         return f == null ? null : (Apply(image, f), f);
     }
 

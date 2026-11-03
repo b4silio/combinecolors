@@ -63,6 +63,12 @@ public struct RenderRequest {
     /// `planes`, in overview pixels.
     public var overview: [ChannelKind: PlanarImage]? = nil
     public var overviewRect: CGRect? = nil
+    /// RGB stars from a stars layer (the same region as `planes`); without it the R, G and B
+    /// channels serve as stars.
+    public var stars: StarsInput? = nil
+    /// A hand-painted correction applied live to one channel (the editor's preview); the channels
+    /// themselves carry their committed corrections.
+    public var correction: CorrectionInput? = nil
 
     public init(planes: [ChannelKind: PlanarImage], analysisPlanes: [ChannelKind: PlanarImage]? = nil, settings: CombineSettings, context: RenderContext, fixedPostStretch: [ResolvedStretch]? = nil, applyDetail: Bool = true, scale: Float = 1,
                 overview: [ChannelKind: PlanarImage]? = nil, overviewRect: CGRect? = nil) {
@@ -100,7 +106,7 @@ public enum Renderer {
             do { return try PixelMath.parse(src) } catch let e as PixelMathError { throw RenderError.pixelMath(PixelMathError(message: "Luminance: " + e.message, position: e.position)) }
         }
         let main = try develop(planes: req.planes, settings: s, context: req.context, available: available, needed: needed, lumExpr: lumExpr,
-                               analysisPlanes: req.analysisPlanes, fixedPostStretch: req.fixedPostStretch)
+                               analysisPlanes: req.analysisPlanes, fixedPostStretch: req.fixedPostStretch, stars: req.stars, correction: req.correction)
         let combined = main.image
         // 7. Local contrast last (non point-wise; the strip renderer applies it on the whole image).
         if req.applyDetail {
@@ -108,7 +114,8 @@ public enum Renderer {
             if !s.detail.isNeutral, let ov = req.overview, let rect = req.overviewRect, needed.allSatisfy({ ov[$0] != nil }) {
                 // The whole picture developed the same way (same stretch), for the detail stage.
                 let o = try develop(planes: ov, settings: s, context: req.context, available: available, needed: needed, lumExpr: lumExpr,
-                                    analysisPlanes: nil, fixedPostStretch: main.postStretch)
+                                    analysisPlanes: nil, fixedPostStretch: main.postStretch,
+                                    correction: req.correction.map { CorrectionInput(map: $0.map, strength: $0.strength, kind: $0.kind, rect: nil) })
                 overview = DetailOverview(image: o.image, rect: rect)
             }
             Denoise.apply(combined, settings: s.denoise)
@@ -126,15 +133,22 @@ public enum Renderer {
     /// Steps 1–6 — normalise, stretch, combine, luminance, colour, stars: everything up to the
     /// non-point-wise detail stage — for one set of planes (the render itself, or its overview).
     static func develop(planes reqPlanes: [ChannelKind: PlanarImage], settings s: CombineSettings, context: RenderContext, available: Set<ChannelKind>,
-                        needed: Set<ChannelKind>, lumExpr: Expr?, analysisPlanes: [ChannelKind: PlanarImage]?, fixedPostStretch: [ResolvedStretch]?) throws -> Developed {
+                        needed: Set<ChannelKind>, lumExpr: Expr?, analysisPlanes: [ChannelKind: PlanarImage]?, fixedPostStretch: [ResolvedStretch]?,
+                        stars: StarsInput? = nil, correction: CorrectionInput? = nil) throws -> Developed {
         guard let anyPlane = reqPlanes.values.first else { throw RenderError.noOutput }
         let w = anyPlane.width, h = anyPlane.height
 
-        // 1. Normalised linear channels (+ gain, pedestal).
+        // 1. Normalised linear channels (+ gain, pedestal). A live correction goes on the plane
+        //    before everything else, as the committed ones do.
         var linear: [ChannelKind: PlanarImage] = [:]
         var linStats: [ChannelKind: ChannelStats] = [:]
         for k in needed {
-            let (p, st) = prepareLinear(k, plane: reqPlanes[k]!, settings: s, context: context)
+            var plane = reqPlanes[k]!
+            if let c = correction, c.kind == k {
+                plane = plane.copy()
+                c.map.apply(to: plane, strength: c.strength, rect: c.rect)
+            }
+            let (p, st) = prepareLinear(k, plane: plane, settings: s, context: context)
             linear[k] = p; linStats[k] = st
         }
         var channelStretch: [ChannelKind: ResolvedStretch] = [:]
@@ -236,10 +250,15 @@ public enum Renderer {
         PostProcess.colorBands(combined, settings: s.colorBands)
         PostProcess.apply(s.post, to: combined)
 
-        // 6. RGB stars.
-        if s.stars.enabled, let r = reqPlanes[.red], let g = reqPlanes[.green], let b = reqPlanes[.blue] {
-            let stars = starsImage(r: r, g: g, b: b, settings: s, context: context)
-            PostProcess.blendStars(combined, stars: stars, settings: s.stars)
+        // 6. RGB stars: from the stars layer, else from the R, G and B channels.
+        if s.stars.enabled {
+            if let st = stars, st.planes.count == 3, st.planes[0].width == w, st.planes[0].height == h {
+                let img = starsImage(planes: st.planes.map { $0.copy() }, stats: st.stats, settings: s)
+                PostProcess.blendStars(combined, stars: img, settings: s.stars)
+            } else if let r = reqPlanes[.red], let g = reqPlanes[.green], let b = reqPlanes[.blue] {
+                let img = starsImage(r: r, g: g, b: b, settings: s, context: context)
+                PostProcess.blendStars(combined, stars: img, settings: s.stars)
+            }
         }
         combined.clamp01()
         return Developed(image: combined, postStretch: postStretch, channelStretch: channelStretch)
@@ -358,6 +377,7 @@ public enum Renderer {
         return Statistics.sample(image: p, options: o).0
     }
 
+    /// Stars from the R, G and B channels (normalised like the channels).
     static func starsImage(r: PlanarImage, g: PlanarImage, b: PlanarImage, settings s: CombineSettings, context: RenderContext) -> RGBImage {
         var planes: [PlanarImage] = []
         var stats: [ChannelStats] = []
@@ -367,6 +387,12 @@ public enum Renderer {
             planes.append(c)
             stats.append(context.normalizedStats[k] ?? Statistics.fromSample(subsample(c)))
         }
+        return starsImage(planes: planes, stats: stats, settings: s)
+    }
+
+    /// The star layer ready to blend: stretched when linear, scaled to white when asked, then the
+    /// brightness (stops) and contrast (spread around the mid-tone). `planes` are consumed.
+    static func starsImage(planes: [PlanarImage], stats: [ChannelStats], settings s: CombineSettings) -> RGBImage {
         // Already-stretched star images (bright stars reach high values) must not be stretched again.
         let looksStretched = (stats.map { $0.percentile(0.999) }.max() ?? 0) > 0.15
         let doStretch: Bool
@@ -375,12 +401,23 @@ public enum Renderer {
         case .none: doStretch = false
         case .autoSTF: doStretch = true
         }
+        // The layer's brightest level (whole-image statistics, so a crop agrees with the export).
+        var peak = stats.map { $0.percentile(0.9999) }.max() ?? 1
         if doStretch {
             var st = StretchSettings()
             st.method = .autoSTF
             st.targetBackground = 0.1
             let resolved = Stretch.resolveLinked(st, stats: stats)
             for p in planes { resolved.apply(to: p) }
+            peak = resolved.evaluate(peak)
+        }
+        var gain = pow(2, s.stars.brightness)
+        if s.stars.normalize, peak > 1e-4 { gain /= peak }
+        let spread = pow(2, s.stars.contrast)
+        if gain != 1 || spread != 1 {
+            // v' = (v·gain − 0.5)·spread + 0.5
+            let a = gain * spread, b = 0.5 - 0.5 * spread
+            for p in planes { p.affine(scale: a, offset: b); p.clamp(min: 0, max: 1) }
         }
         return RGBImage(r: planes[0], g: planes[1], b: planes[2])
     }
@@ -401,6 +438,7 @@ public enum Renderer {
     /// `postStretch` should come from a preview render so the result matches what was shown.
     public static func renderFull(sources: [ChannelKind: ChannelSource], settings: CombineSettings, context: RenderContext,
                                   postStretch: [ResolvedStretch]?, region: PixelRect? = nil, stripPixels: Int = 4_000_000,
+                                  stars: StarsLayer? = nil,
                                   progress: ((Double) -> Void)? = nil, isCancelled: (() -> Bool)? = nil) throws -> RGBImage? {
         guard let any = sources.values.first else { throw RenderError.noOutput }
         let crop = region?.clamped(width: any.width, height: any.height) ?? PixelRect.full(width: any.width, height: any.height)
@@ -420,7 +458,9 @@ public enum Renderer {
             let hh = min(rows, h - y)
             var planes: [ChannelKind: PlanarImage] = [:]
             for (k, s) in sources { planes[k] = s.image.cropped(x: crop.x, y: crop.y + y, width: w, height: hh) }
-            let res = try render(RenderRequest(planes: planes, analysisPlanes: nil, settings: settings, context: context, fixedPostStretch: fixed, applyDetail: false))
+            var req = RenderRequest(planes: planes, analysisPlanes: nil, settings: settings, context: context, fixedPostStretch: fixed, applyDetail: false)
+            if let st = stars, st.width == any.width, st.height == any.height { req.stars = st.input(level: 0, x: crop.x, y: crop.y + y, width: w, height: hh) }
+            let res = try render(req)
             for (src, dst) in zip(res.image.planes, out.planes) {
                 (dst.pointer + y * w).update(from: src.pointer, count: w * hh)
             }

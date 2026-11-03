@@ -106,6 +106,7 @@ struct ContentView: View {
         VStack(alignment: .trailing, spacing: 4) {
             if model.dustEditing != nil { dustToolbar }
             if model.gradientEditing != nil { gradientToolbar }
+            if model.correctionEditing != nil { correctionToolbar }
             HStack(spacing: 4) {
                 if model.dustEditing != nil || model.gradientEditing != nil {
                     EmptyView()
@@ -221,6 +222,58 @@ struct ContentView: View {
         }
     }
 
+    /// Corrections editor: channel switch, darken / brighten, brush, strength, map overlay, undo.
+    private var correctionToolbar: some View {
+        let kind = model.correctionEditing ?? .luminance
+        let loaded = ChannelKind.allCases.filter { model.sources[$0] != nil }
+        let radius = Binding<Float>(get: { Float(model.correctionBrushRadius) }, set: { model.correctionBrushRadius = Double($0) })
+        let flow = Binding<Float>(get: { Float(model.correctionBrushFlow) }, set: { model.correctionBrushFlow = Double($0) })
+        let feather = Binding<Float>(get: { Float(model.correctionBrushFeather) }, set: { model.correctionBrushFeather = Double($0) })
+        let strength = Binding<Float>(get: { Float(model.correctionStrength) }, set: { model.correctionStrength = Double($0) })
+        let darken = Binding<Bool>(get: { model.correctionDarken }, set: { model.correctionDarken = $0 })
+        let maxRadius = Float(model.imageSize.map { max($0.width, $0.height) * 0.2 } ?? 500)
+        return VStack(alignment: .trailing, spacing: 4) {
+            HStack(spacing: 6) {
+                Label("Corrections", systemImage: "paintbrush.pointed").font(.caption.bold())
+                Picker("", selection: Binding(get: { kind }, set: { model.switchCorrectionChannel($0) })) {
+                    ForEach(loaded) { k in Text(k.shortName).tag(k) }
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
+                .help("Channel painted (switching applies the current map)")
+                Picker("", selection: darken) { Text("Darken").tag(true); Text("Brighten").tag(false) }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize()
+                    .help("What the brush does; hold ⌥ while painting for the opposite (D toggles)")
+                Button("") { model.correctionDarken.toggle() }.keyboardShortcut("d", modifiers: []).buttonStyle(.plain).frame(width: 0, height: 0).opacity(0)
+                Toggle(isOn: $model.correctionBypass) { Text("Original") }.toggleStyle(.button).keyboardShortcut("b", modifiers: [])
+                    .help("Show the channel without the corrections, to compare (B)")
+                Toggle(isOn: $model.correctionShowMap) { Text("Map") }.toggleStyle(.button).keyboardShortcut("m", modifiers: [])
+                    .help("Show the painted map as a tint: red darkens, blue brightens (M)")
+                Button("Apply") { model.commitCorrectionEditing() }.keyboardShortcut(.return, modifiers: [])
+                Button("Cancel") { model.cancelCorrectionEditing() }.keyboardShortcut(.escape, modifiers: [])
+            }
+            HStack(spacing: 6) {
+                SliderRow(title: "Radius", value: radius, range: 4...maxRadius, defaultValue: maxRadius / 5, format: "%.0f", logarithmic: true,
+                          help: "Brush radius in image pixels (right-drag on the preview: left shrinks, right grows; up to 20 % of the image)", note: "px", labelWidth: 58)
+                    .frame(width: 170)
+                SliderRow(title: "Flow", value: flow, range: 0.02...1, defaultValue: 0.15, format: "%.2f",
+                          help: "Amount added by every dab: low for gentle, build-up strokes", labelWidth: 40)
+                    .frame(width: 150)
+                SliderRow(title: "Feather", value: feather, range: 0...1, defaultValue: 0.7, format: "%.2f",
+                          help: "Fraction of the radius over which a dab fades out (0 = hard edge)", labelWidth: 48)
+                    .frame(width: 150)
+                SliderRow(title: "Strength", value: strength, range: 0.1...4, defaultValue: 1, format: "%.1f",
+                          help: "Exposure range of the map in stops: a fully painted area is darkened or brightened by this many stops", note: "EV", labelWidth: 66)
+                    .frame(width: 170)
+            }
+            HStack(spacing: 6) {
+                Button("Undo stroke") { model.undoCorrection() }.keyboardShortcut("z", modifiers: .command).disabled(!model.canUndoCorrection)
+                Button("Clear") { model.clearCorrection() }.disabled(model.correctionDraft?.isEmpty ?? true).help("Erase the whole map")
+                Text("Paint on the channel to darken or brighten it · right-drag to set the radius · ⌥ paints the opposite · the map is kept next to the image (.ccmask.png)")
+                    .font(.system(size: 9)).foregroundStyle(.secondary)
+            }
+        }
+    }
+
     /// Gradient editor: channel switch, guide shape and model parameters, protected regions,
     /// before / after toggle, fit read-out.
     private var gradientToolbar: some View {
@@ -240,6 +293,14 @@ struct ContentView: View {
         let degree = edit({ $0.degree }, defaults.degree, { $0.degree = $1 }, { $0.degree = $1 })
         let refine = edit({ $0.refine }, defaults.refine, { $0.refine = $1 }, { $0.refine = $1 })
         let smooth = edit({ Float($0.smoothness) }, Float(defaults.smoothness), { $0.smoothness = Double($1) }, { $0.smoothness = Double($1) })
+        let surface = edit({ $0.surface }, defaults.surface, { $0.surface = $1 }, { $0.surface = $1 })
+        let autoSmooth = edit({ $0.autoSmoothing }, defaults.autoSmoothing, { $0.autoSmoothing = $1 }, { $0.autoSmoothing = $1 })
+        let sampleSmooth = edit({ Float($0.sampleSmoothing) }, Float(defaults.sampleSmoothing), { $0.sampleSmoothing = Double($1) }, { $0.sampleSmoothing = Double($1) })
+        let sampleRadius = edit({ Float($0.sampleRadius) }, Float(defaults.sampleRadius), { $0.sampleRadius = Double($1) }, { $0.sampleRadius = Double($1) })
+        let gridPerRow = edit({ $0.gridPerRow }, defaults.gridPerRow, { $0.gridPerRow = $1 }, { $0.gridPerRow = $1 })
+        let gridTolerance = edit({ Float($0.gridTolerance) }, Float(defaults.gridTolerance), { $0.gridTolerance = Double($1) }, { $0.gridTolerance = Double($1) })
+        let maxRadius = Float(model.imageSize.map { max($0.width, $0.height) / 15 } ?? 300)
+        let isSamples = shape.wrappedValue == .samples
         let fit = model.gradientFit.flatMap { $0.kind == kind ? $0 : nil }
         let regions = model.gradientRegions
         return VStack(alignment: .trailing, spacing: 4) {
@@ -268,8 +329,22 @@ struct ContentView: View {
                 Picker("", selection: mode) { ForEach(GradientMode.allCases) { Text($0.displayName).tag($0) } }
                     .pickerStyle(.segmented).labelsHidden().fixedSize()
                     .help("Subtract: the background is taken off, the overall level kept (sky glow, stretched data).\nDivide: the pixels are divided by the background normalised to its brightest level (vignetting / missing flats on linear data: stars at the edge get their flux back).")
-                MenuPicker(title: "Residual", selection: residual, options: GradientResidual.allCases) { $0.displayName }
-                    .help("Low-order 2-D term fitted after the guided profile, for what the profile cannot explain (a sky gradient on top of the vignetting)")
+                if isSamples {
+                    MenuPicker(title: "Surface", selection: surface, options: SampleSurface.allCases) { $0.displayName }
+                        .help("Spline: thin-plate spline through the samples, relaxed by the smoothing (DBE-like; bends smoothly across the gaps).\nKriging: Gaussian-process mean around a constant, the smoothing sets its reach and nugget (stays near the overall level in the gaps).")
+                    Toggle("Auto", isOn: autoSmooth).toggleStyle(.checkbox)
+                        .help("Pick the smoothing by cross-validation: the surface that best predicts every sample from the others")
+                    SliderRow(title: "Smooth", value: sampleSmooth, range: 0...1, defaultValue: 0.5, format: "%.2f",
+                              help: "Smoothing of the surface: 0 follows the samples closely, 1 is a very stiff surface", labelWidth: 46)
+                        .frame(width: 160).disabled(autoSmooth.wrappedValue)
+                    SliderRow(title: "Radius", value: sampleRadius, range: 0...maxRadius, defaultValue: 0, format: "%.0f",
+                              help: "Radius of the sample discs in pixels (0 = automatic: ≈ 1/80 of the long side)", note: "px", labelWidth: 46)
+                        .frame(width: 160)
+                }
+                if !isSamples {
+                    MenuPicker(title: "Residual", selection: residual, options: GradientResidual.allCases) { $0.displayName }
+                        .help("Low-order 2-D term fitted after the guided profile, for what the profile cannot explain (a sky gradient on top of the vignetting)")
+                }
                 if shape.wrappedValue == .ellipse {
                     MenuPicker(title: "Sectors", selection: sectors, options: [1, 4, 8, 12]) { $0 == 1 ? "1 (round)" : "\($0)" }
                         .help("Angular sectors of the profile: 1 = the same fall-off in every direction; 4–12 let it differ with the direction (tilted sensor, asymmetric vignetting)")
@@ -277,12 +352,27 @@ struct ContentView: View {
                 if shape.wrappedValue == .polynomial {
                     MenuPicker(title: "Degree", selection: degree, options: [1, 2, 3, 4, 5, 6]) { "\($0)" }
                 }
-                SliderRow(title: "Smooth", value: smooth, range: 0...6, defaultValue: 1.5, format: "%.1f",
-                          help: "Smoothing of the profile along the guide, in bins (120 bins across the frame)", labelWidth: 46)
-                    .frame(width: 160)
+                if !isSamples {
+                    SliderRow(title: "Smooth", value: smooth, range: 0...6, defaultValue: 1.5, format: "%.1f",
+                              help: "Smoothing of the profile along the guide, in bins (120 bins across the frame)", labelWidth: 46)
+                        .frame(width: 160)
+                }
+            }
+            if isSamples {
+                HStack(spacing: 6) {
+                    Text("Grid").font(.caption).foregroundStyle(.secondary)
+                    MenuPicker(title: "Per row", selection: gridPerRow, options: [6, 8, 10, 12, 14, 16, 20, 24, 30]) { "\($0)" }
+                        .help("Samples per row of the generated grid")
+                    SliderRow(title: "Tolerance", value: gridTolerance, range: 0.5...10, defaultValue: 2.5, format: "%.1f",
+                              help: "How far above the planar sky model (in sample noises) a grid point may lie and still count as sky; raise it to keep a glow the plane cannot follow, lower it to leave out faint nebulosity", labelWidth: 60)
+                        .frame(width: 190)
+                    Button("Generate") { model.regenerateGradientGrid() }.help("Place the grid again with these parameters (your own samples are dropped)")
+                    Button("Clear samples") { model.clearGradientSamples() }.disabled(model.gradientSamples.isEmpty).help("Remove every sample; click the sky to place them by hand")
+                    Button("Delete") { model.removeSelectedGradientSample() }.disabled(model.selectedGradientSample == nil).help("Remove the selected sample (⌫)")
+                }
             }
             HStack(spacing: 6) {
-                if shape.wrappedValue != .polynomial {
+                if shape.wrappedValue != .polynomial && !isSamples {
                     Toggle("Refine", isOn: refine).toggleStyle(.checkbox)
                         .help("Optimise the drawing from the data (line direction; ellipse centre, axis ratio and angle). The guide used is shown dashed in orange when it differs from the drawing.")
                     Button("Adopt") { model.adoptRefinedGradient() }
@@ -308,16 +398,20 @@ struct ContentView: View {
                         case .line: return String(format: "line %.0f,%.0f → %.0f,%.0f", g.x, g.y, g.x2, g.y2)
                         case .ellipse: return String(format: "ellipse centre %.0f,%.0f · axes %.0f × %.0f · %.0f°", g.x, g.y, g.a, g.b, g.angle * 180 / .pi)
                         case .polynomial: return "polynomial, degree \(spec?.degree ?? 0)"
+                        case .samples:
+                            let used = f.sampleResults.filter { !$0.isRejected }.count
+                            return "\(spec?.surface.displayName.lowercased() ?? "spline") through \(used) of \(f.sampleResults.count) samples"
                         }
                     }()
                     Text(verbatim: String(format: "Fit: %@ · residual %.2fσ · %d ms", geo, f.residualSigma, Int(f.millis)))
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 } else if spec == nil {
-                    Text(shape.wrappedValue == .line ? "Drag along the gradient, from the dark side towards the bright side" : "Drag from the centre of the gradient outwards (the centre may be dragged outside the frame afterwards)")
+                    Text(shape.wrappedValue == .line ? "Drag along the gradient, from the dark side towards the bright side" : isSamples ? "Click the sky to place a sample" : "Drag from the centre of the gradient outwards (the centre may be dragged outside the frame afterwards)")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            Text("Drag the handles to adjust the guide · drag empty sky to pan · regions: Protect then click · B original, M background")
+            Text(isSamples ? "Click the sky to add a sample · drag to move · ⌫ removes the selected one · green = used, red = rejected · regions: Protect then click · B original, M background"
+                 : "Drag the handles to adjust the guide · drag empty sky to pan · regions: Protect then click · B original, M background")
                 .font(.system(size: 9)).foregroundStyle(.secondary)
         }
     }

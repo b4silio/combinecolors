@@ -22,7 +22,9 @@ import AstroCore
 //      --denoise <0..1>       luminance noise reduction;  --denoise-method wavelets | nonLocalMeans | guided | bm3d
 //      --denoise-color <0..1> chroma smoothing
 //      --lum <preset|off>     luminance: ha | lum | haMostly | haOiii | balanced | lumHa | maxLines | meanLines | off (default ha)
-//      --stars                blend RGB stars
+//      --stars                blend RGB stars (from the R, G, B channels, or from --stars-file)
+//      --stars-file <image>   RGB image kept whole and blended as stars;  --stars-blend screen | lighten | add
+//                             --stars-brightness <stops>;  --stars-contrast <-1..1>;  --stars-white (brightest stars to white)
 //      --format <fmt>         png8 | png16 | tiff16 | tiff32 | fits32 | jpeg (default png8)
 //      --project <file.json>  load CombineSettings from a saved project / settings file
 //      --assign <file>=<kind> force a channel assignment (kind: L R G B Ha OIII SII Hb)
@@ -31,7 +33,9 @@ import AstroCore
 //      --dust <kind>:x,y,r[;x,y,r…]  heal dust spots on a channel before anything else (repeatable; a project's
 //                             spots are applied too);  --dust-model surface | radial;  --dust-smooth <px>;  --dust-feather <0..0.5>
 //                             (the three parameters apply to the spots given with --dust)
-//      --gradient <kind>:line:x0,y0,x1,y1 | <kind>:ellipse:cx,cy,a,b[,angle°] | <kind>:poly[:degree]
+//      --gradient <kind>:line:x0,y0,x1,y1 | <kind>:ellipse:cx,cy,a,b[,angle°] | <kind>:poly[:degree] | <kind>:samples[:perRow[,tolerance]]
+//                             (samples: a grid of background samples with a spline / kriging surface;  --gradient-surface spline | kriging;
+//                             --gradient-sample-smooth <0..1>;  --gradient-sample-radius <px>)
 //                             remove a gradient from a channel guided by the drawn shape (repeatable; a project's models are
 //                             applied too);  --gradient-mode subtract | divide;  --gradient-residual none | plane | quadratic
 //                             --gradient-sectors <1|4|8|12>;  --gradient-smooth <bins>;  --gradient-norefine (keep the geometry as given)
@@ -108,7 +112,12 @@ case "render":
     let denoiseMethod = DenoiseMethod(rawValue: option("--denoise-method") ?? "wavelets") ?? .wavelets
     let denoiseColor = Float(option("--denoise-color") ?? "0") ?? 0
     let lum = option("--lum")
-    let stars = flag("--stars")
+    let starsFile = option("--stars-file")
+    let stars = flag("--stars") || starsFile != nil
+    let starsBlend = option("--stars-blend").flatMap { StarsBlendMode(rawValue: $0) }
+    let starsBrightness = Float(option("--stars-brightness") ?? "0") ?? 0
+    let starsContrast = Float(option("--stars-contrast") ?? "0") ?? 0
+    let starsWhite = flag("--stars-white")
     let formatArg = option("--format") ?? "png8"
     let projectArg = option("--project")
     let cropArg = option("--crop")
@@ -140,6 +149,9 @@ case "render":
     if let v = option("--gradient-sectors").flatMap(Int.init) { gradient.sectors = v }
     if let v = option("--gradient-smooth").flatMap(Double.init) { gradient.smoothness = v }
     if flag("--gradient-norefine") { gradient.refine = false }
+    if let v = option("--gradient-surface").flatMap({ SampleSurface(rawValue: $0) }) { gradient.surface = v }
+    if let v = option("--gradient-sample-smooth").flatMap(Double.init) { gradient.sampleSmoothing = v }
+    if let v = option("--gradient-sample-radius").flatMap(Double.init) { gradient.sampleRadius = v }
     while let p = option("--gradient-protect") {
         let v = p.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
         if v.count == 4 { gradient.protect.append(GradientRegion(x: v[0], y: v[1], a: v[2], b: v[3])) } else { print("bad --gradient-protect \(p)") }
@@ -153,6 +165,7 @@ case "render":
         case "line" where v.count == 4: gesture = .line(from: CGPoint(x: v[0], y: v[1]), to: CGPoint(x: v[2], y: v[3]))
         case "ellipse" where v.count >= 4: gesture = .ellipse(center: CGPoint(x: v[0], y: v[1]), a: v[2], b: v[3], angle: (v.count > 4 ? v[4] : 0) * .pi / 180)
         case "poly", "polynomial": gesture = .polynomial(); if let d = v.first { gradient.degree = Int(d) }
+        case "samples": gesture = .samples(); if let n = v.first { gradient.gridPerRow = Int(n) }; if v.count > 1 { gradient.gridTolerance = v[1] }
         default: break
         }
         guard let ge = gesture else { print("bad --gradient \(g)"); continue }
@@ -190,6 +203,9 @@ case "render":
                         case .line: geo = String(format: "line %.0f,%.0f → %.0f,%.0f", g.x, g.y, g.x2, g.y2)
                         case .ellipse: geo = String(format: "ellipse centre %.0f,%.0f axes %.0f×%.0f angle %.1f°", g.x, g.y, g.a, g.b, g.angle * 180 / .pi)
                         case .polynomial: geo = "polynomial degree \(spec.degree)"
+                        case .samples:
+                            let used = fit.sampleResults.filter { !$0.isRejected }.count
+                            geo = "\(fit.spec.surface.rawValue) surface through \(used) of \(fit.sampleResults.count) samples"
                         }
                         gradientNote = String(format: ", gradient removed in %d ms (%@, %@, residual %.2fσ)", Int(Date().timeIntervalSince(t2) * 1000), geo, spec.mode.rawValue, fit.residualSigma)
                     } else { gradientNote = ", gradient model could not be fitted" }
@@ -236,6 +252,18 @@ case "render":
     settings.denoise.amount = denoise; settings.denoise.method = denoiseMethod; settings.denoise.color = denoiseColor
     if let l = lum { applyLum(l, &settings) }
     settings.stars.enabled = stars
+    if let b = starsBlend { settings.stars.mode = b }
+    settings.stars.brightness = starsBrightness; settings.stars.contrast = starsContrast; settings.stars.normalize = starsWhite
+    var starsLayer: StarsLayer? = nil
+    if let p = starsFile {
+        do {
+            let f = try ImageLoader.load(url: URL(fileURLWithPath: p))
+            guard f.isColor else { print("\(p): not a colour image"); exit(1) }
+            starsLayer = StarsLayer(planes: Array(f.planes.prefix(3)), fileName: f.fileName, url: f.url, formatDescription: f.formatDescription)
+            if settings.stars.useMask, f.fileName.lowercased().contains("star") { settings.stars.useMask = false }
+            print("stars layer \(f.fileName) (\(f.formatDescription))")
+        } catch { print("\(p): \(error.localizedDescription)"); exit(1) }
+    }
 
     let t1 = Date()
     let context = RenderContext.make(settings: settings.normalization, sources: sources)
@@ -276,11 +304,16 @@ case "render":
                     let l = src.pyramid.level(lvl)
                     planes[k] = crop.map { l.cropped($0.scaled(level: lvl)) } ?? l
                 }
-                let res = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: analysis, settings: s, context: context, scale: 1 / Float(1 << lvl)))
+                var req = RenderRequest(planes: planes, analysisPlanes: analysis, settings: s, context: context, scale: 1 / Float(1 << lvl))
+                if let st = starsLayer {
+                    let r = crop.map { $0.scaled(level: lvl) } ?? PixelRect(x: 0, y: 0, width: st.pyramids[0].level(lvl).width, height: st.pyramids[0].level(lvl).height)
+                    req.stars = st.input(level: lvl, x: r.x, y: r.y, width: r.width, height: r.height)
+                }
+                let res = try Renderer.render(req)
                 image = res.image
                 print("\(palette.id): level \(lvl) \(image.width)×\(image.height) rendered in \(Int(res.millis)) ms")
             } else {
-                image = try Renderer.renderFull(sources: sources, settings: s, context: context, postStretch: nil, region: crop, progress: nil)!
+                image = try Renderer.renderFull(sources: sources, settings: s, context: context, postStretch: nil, region: crop, stars: starsLayer, progress: nil)!
                 print("\(palette.id): full \(image.width)×\(image.height) rendered in \(Int(Date().timeIntervalSince(t2) * 1000)) ms")
             }
             let url = outDir.appendingPathComponent("\(palette.id).\(format.fileExtension)")

@@ -299,6 +299,7 @@ public sealed partial class StarsBlendSettings : IJsonSettings
         ["enabled"] = SettingsJson.V(Enabled), ["stretch"] = SettingsJson.V(Stretch), ["amount"] = SettingsJson.V(Amount),
         ["threshold"] = SettingsJson.V(Threshold), ["softness"] = SettingsJson.V(Softness), ["mode"] = SettingsJson.V(Mode),
         ["useMask"] = SettingsJson.V(UseMask), ["saturation"] = SettingsJson.V(Saturation),
+        ["brightness"] = SettingsJson.V(Brightness), ["contrast"] = SettingsJson.V(Contrast), ["normalize"] = SettingsJson.V(Normalize),
     };
 
     public static StarsBlendSettings FromJson(JsonObject? c)
@@ -309,6 +310,7 @@ public sealed partial class StarsBlendSettings : IJsonSettings
             Enabled = SettingsJson.B(c, "enabled", d.Enabled), Stretch = SettingsJson.E(c, "stretch", d.Stretch), Amount = SettingsJson.F(c, "amount", d.Amount),
             Threshold = SettingsJson.F(c, "threshold", d.Threshold), Softness = SettingsJson.F(c, "softness", d.Softness), Mode = SettingsJson.E(c, "mode", d.Mode),
             UseMask = SettingsJson.B(c, "useMask", d.UseMask), Saturation = SettingsJson.F(c, "saturation", d.Saturation),
+            Brightness = SettingsJson.F(c, "brightness", d.Brightness), Contrast = SettingsJson.F(c, "contrast", d.Contrast), Normalize = SettingsJson.B(c, "normalize", d.Normalize),
         };
     }
 }
@@ -563,16 +565,25 @@ public sealed partial class GradientSpec : IJsonSettings
     {
         ["gesture"] = Gesture.ToJson(), ["mode"] = SettingsJson.V(Mode), ["residual"] = SettingsJson.V(Residual), ["sectors"] = SettingsJson.V(Sectors),
         ["smoothness"] = SettingsJson.V(Smoothness), ["degree"] = SettingsJson.V(Degree), ["refine"] = SettingsJson.V(Refine),
+        ["samples"] = SamplesJson(), ["sampleRadius"] = SettingsJson.V(SampleRadius), ["surface"] = SettingsJson.V(Surface), ["sampleSmoothing"] = SettingsJson.V(SampleSmoothing),
+        ["autoSmoothing"] = SettingsJson.V(AutoSmoothing), ["gridPerRow"] = SettingsJson.V(GridPerRow), ["gridTolerance"] = SettingsJson.V(GridTolerance),
     };
+
+    JsonArray SamplesJson() { var a = new JsonArray(); foreach (var s in Samples) a.Add(new JsonObject { ["id"] = SettingsJson.V(s.Id), ["x"] = SettingsJson.V(s.X), ["y"] = SettingsJson.V(s.Y) }); return a; }
 
     public static GradientSpec FromJson(JsonObject? c)
     {
         var d = new GradientSpec(GradientGesture.Polynomial());
-        return new GradientSpec(SettingsJson.Obj(c, "gesture") is JsonObject g ? GradientGesture.FromJson(g) : d.Gesture)
+        var spec = new GradientSpec(SettingsJson.Obj(c, "gesture") is JsonObject g ? GradientGesture.FromJson(g) : d.Gesture)
         {
             Mode = SettingsJson.E(c, "mode", d.Mode), Residual = SettingsJson.E(c, "residual", d.Residual), Sectors = SettingsJson.I(c, "sectors", d.Sectors),
             Smoothness = SettingsJson.D(c, "smoothness", d.Smoothness), Degree = SettingsJson.I(c, "degree", d.Degree), Refine = SettingsJson.B(c, "refine", d.Refine),
+            SampleRadius = SettingsJson.D(c, "sampleRadius", d.SampleRadius), Surface = SettingsJson.E(c, "surface", d.Surface), SampleSmoothing = SettingsJson.D(c, "sampleSmoothing", d.SampleSmoothing),
+            AutoSmoothing = SettingsJson.B(c, "autoSmoothing", d.AutoSmoothing), GridPerRow = SettingsJson.I(c, "gridPerRow", d.GridPerRow), GridTolerance = SettingsJson.D(c, "gridTolerance", d.GridTolerance),
         };
+        if (SettingsJson.Arr(c, "samples") is JsonArray sa)
+            spec.Samples = sa.OfType<JsonObject>().Select(o => new BackgroundSample(SettingsJson.D(o, "x", 0), SettingsJson.D(o, "y", 0), SettingsJson.G(o, "id"))).ToList();
+        return spec;
     }
 
     public static GradientSpec Parse(string json) => FromJson(SettingsJson.ParseObject(json));
@@ -590,6 +601,8 @@ public sealed partial class GradientSettings : IJsonSettings
         {
             ["specs"] = specs, ["protect"] = protect, ["shape"] = SettingsJson.V(Shape), ["mode"] = SettingsJson.V(Mode), ["residual"] = SettingsJson.V(Residual),
             ["sectors"] = SettingsJson.V(Sectors), ["smoothness"] = SettingsJson.V(Smoothness), ["degree"] = SettingsJson.V(Degree), ["refine"] = SettingsJson.V(Refine),
+            ["surface"] = SettingsJson.V(Surface), ["sampleSmoothing"] = SettingsJson.V(SampleSmoothing), ["autoSmoothing"] = SettingsJson.V(AutoSmoothing), ["sampleRadius"] = SettingsJson.V(SampleRadius),
+            ["gridPerRow"] = SettingsJson.V(GridPerRow), ["gridTolerance"] = SettingsJson.V(GridTolerance),
         };
     }
 
@@ -600,6 +613,8 @@ public sealed partial class GradientSettings : IJsonSettings
         {
             Shape = SettingsJson.E(c, "shape", d.Shape), Mode = SettingsJson.E(c, "mode", d.Mode), Residual = SettingsJson.E(c, "residual", d.Residual),
             Sectors = SettingsJson.I(c, "sectors", d.Sectors), Smoothness = SettingsJson.D(c, "smoothness", d.Smoothness), Degree = SettingsJson.I(c, "degree", d.Degree), Refine = SettingsJson.B(c, "refine", d.Refine),
+            Surface = SettingsJson.E(c, "surface", d.Surface), SampleSmoothing = SettingsJson.D(c, "sampleSmoothing", d.SampleSmoothing), AutoSmoothing = SettingsJson.B(c, "autoSmoothing", d.AutoSmoothing),
+            SampleRadius = SettingsJson.D(c, "sampleRadius", d.SampleRadius), GridPerRow = SettingsJson.I(c, "gridPerRow", d.GridPerRow), GridTolerance = SettingsJson.D(c, "gridTolerance", d.GridTolerance),
         };
         if (SettingsJson.Obj(c, "specs") is JsonObject so)
             foreach (var kv in so)
@@ -652,7 +667,7 @@ public sealed partial class ProjectDocument : IJsonSettings
         var doc = new JsonObject
         {
             ["version"] = SettingsJson.V(Version), ["channels"] = channels, ["settings"] = Settings.ToJson(), ["presets"] = presets,
-            ["rotation"] = SettingsJson.V(Rotation), ["flipped"] = SettingsJson.V(Flipped), ["dust"] = Dust.ToJson(), ["gradient"] = Gradient.ToJson(),
+            ["rotation"] = SettingsJson.V(Rotation), ["flipped"] = SettingsJson.V(Flipped), ["dust"] = Dust.ToJson(), ["gradient"] = Gradient.ToJson(), ["corrections"] = Corrections.ToJson(),
         };
         if (StarsFile != null) doc["starsFile"] = SettingsJson.V(StarsFile);
         if (Crop is PixelRect c) doc["crop"] = c.ToJson();
@@ -672,6 +687,7 @@ public sealed partial class ProjectDocument : IJsonSettings
             Flipped = SettingsJson.B(c, "flipped", d.Flipped),
             Dust = SettingsJson.Obj(c, "dust") is JsonObject du ? DustSettings.FromJson(du) : d.Dust,
             Gradient = SettingsJson.Obj(c, "gradient") is JsonObject gr ? GradientSettings.FromJson(gr) : d.Gradient,
+            Corrections = SettingsJson.Obj(c, "corrections") is JsonObject co ? CorrectionSettings.FromJson(co) : d.Corrections,
         };
         if (SettingsJson.Arr(c, "channels") is JsonArray chs)
             foreach (var e in chs.OfType<JsonObject>())
@@ -680,5 +696,33 @@ public sealed partial class ProjectDocument : IJsonSettings
         if (SettingsJson.Arr(c, "presets") is JsonArray ps)
             foreach (var e in ps.OfType<JsonObject>()) doc.Presets.Add(SettingsPreset.FromJson(e));
         return doc;
+    }
+}
+
+public sealed partial class CorrectionSettings : IJsonSettings
+{
+    public JsonObject ToJson()
+    {
+        var strength = new JsonObject();
+        foreach (var (k, v) in Strength.OrderBy(kv => kv.Key.RawValue(), StringComparer.Ordinal)) strength[k.RawValue()] = SettingsJson.V(v);
+        return new JsonObject
+        {
+            ["strength"] = strength, ["brushRadius"] = SettingsJson.V(BrushRadius), ["brushFlow"] = SettingsJson.V(BrushFlow),
+            ["brushFeather"] = SettingsJson.V(BrushFeather), ["darken"] = SettingsJson.V(Darken),
+        };
+    }
+
+    public static CorrectionSettings FromJson(JsonObject? c)
+    {
+        var d = new CorrectionSettings();
+        var s = new CorrectionSettings
+        {
+            BrushRadius = SettingsJson.D(c, "brushRadius", d.BrushRadius), BrushFlow = SettingsJson.D(c, "brushFlow", d.BrushFlow),
+            BrushFeather = SettingsJson.D(c, "brushFeather", d.BrushFeather), Darken = SettingsJson.B(c, "darken", d.Darken),
+        };
+        if (SettingsJson.Obj(c, "strength") is JsonObject st)
+            foreach (var (key, node) in st)
+                if (ChannelKinds.FromRawValue(key) is ChannelKind k && node is JsonValue jv && jv.TryGetValue<double>(out var v)) s.Strength[k] = v;
+        return s;
     }
 }

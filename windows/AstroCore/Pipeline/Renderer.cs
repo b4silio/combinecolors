@@ -77,6 +77,10 @@ public sealed class RenderRequest
     /// </summary>
     public Dictionary<ChannelKind, PlanarImage>? Overview;
     public SampleRect? OverviewRect;
+    /// <summary>RGB stars from a stars layer (the same region as the planes); without it the R, G and B channels serve as stars.</summary>
+    public StarsInput? Stars;
+    /// <summary>A hand-painted correction applied live to one channel (the editor's preview); the channels themselves carry their committed corrections.</summary>
+    public CorrectionInput? Correction;
 
     public RenderRequest(Dictionary<ChannelKind, PlanarImage> planes, CombineSettings settings, RenderContext context,
                          Dictionary<ChannelKind, PlanarImage>? analysisPlanes = null, List<ResolvedStretch>? fixedPostStretch = null, bool applyDetail = true, float scale = 1,
@@ -119,7 +123,7 @@ public static class Renderer
             try { lumExpr = PixelMath.Parse(src); }
             catch (PixelMathException e) { throw RenderException.PixelMath(new PixelMathException("Luminance: " + e.Detail, e.Position)); }
         }
-        var main = Develop(req.Planes, s, req.Context, available, needed, lumExpr, req.AnalysisPlanes, req.FixedPostStretch);
+        var main = Develop(req.Planes, s, req.Context, available, needed, lumExpr, req.AnalysisPlanes, req.FixedPostStretch, req.Stars, req.Correction);
         var combined = main.Image;
         // 7. Local contrast last (non point-wise; the strip renderer applies it on the whole image).
         if (req.ApplyDetail)
@@ -128,7 +132,8 @@ public static class Renderer
             if (!s.Detail.IsNeutral && req.Overview is { } ov && req.OverviewRect is { } rect && needed.All(ov.ContainsKey))
             {
                 // The whole picture developed the same way (same stretch), for the detail stage.
-                var o = Develop(ov, s, req.Context, available, needed, lumExpr, null, main.PostStretch);
+                var o = Develop(ov, s, req.Context, available, needed, lumExpr, null, main.PostStretch, null,
+                                req.Correction == null ? null : new CorrectionInput(req.Correction.Map, req.Correction.Strength, req.Correction.Kind, null));
                 overview = new DetailOverview(o.Image, rect);
             }
             Denoise.Apply(combined, s.Denoise);
@@ -149,17 +154,25 @@ public static class Renderer
     /// non-point-wise detail stage — for one set of planes (the render itself, or its overview).
     /// </summary>
     static Developed Develop(Dictionary<ChannelKind, PlanarImage> reqPlanes, CombineSettings s, RenderContext context, HashSet<ChannelKind> available,
-                             HashSet<ChannelKind> needed, Expr? lumExpr, Dictionary<ChannelKind, PlanarImage>? analysisPlanes, List<ResolvedStretch>? fixedPostStretch)
+                             HashSet<ChannelKind> needed, Expr? lumExpr, Dictionary<ChannelKind, PlanarImage>? analysisPlanes, List<ResolvedStretch>? fixedPostStretch,
+                             StarsInput? stars = null, CorrectionInput? correction = null)
     {
         var anyPlane = reqPlanes.Values.FirstOrDefault() ?? throw RenderException.NoOutput();
         int w = anyPlane.Width, h = anyPlane.Height;
 
-        // 1. Normalised linear channels (+ gain, pedestal).
+        // 1. Normalised linear channels (+ gain, pedestal). A live correction goes on the plane
+        //    before everything else, as the committed ones do.
         var linear = new Dictionary<ChannelKind, PlanarImage>();
         var linStats = new Dictionary<ChannelKind, ChannelStats>();
         foreach (var k in needed)
         {
-            var (p, st) = PrepareLinear(k, reqPlanes[k], s, context);
+            var plane = reqPlanes[k];
+            if (correction != null && correction.Kind == k)
+            {
+                plane = plane.Copy();
+                correction.Map.Apply(plane, correction.Strength, correction.Rect);
+            }
+            var (p, st) = PrepareLinear(k, plane, s, context);
             linear[k] = p; linStats[k] = st;
         }
 
@@ -265,11 +278,19 @@ public static class Renderer
         PostProcess.ColorBands(combined, s.ColorBands);
         PostProcess.Apply(s.Post, combined);
 
-        // 6. RGB stars.
-        if (s.Stars.Enabled && reqPlanes.TryGetValue(ChannelKind.Red, out var rr) && reqPlanes.TryGetValue(ChannelKind.Green, out var gg) && reqPlanes.TryGetValue(ChannelKind.Blue, out var bb))
+        // 6. RGB stars: from the stars layer, else from the R, G and B channels.
+        if (s.Stars.Enabled)
         {
-            var stars = StarsImage(rr, gg, bb, s, context);
-            PostProcess.BlendStars(combined, stars, s.Stars);
+            if (stars != null && stars.Planes.Count == 3 && stars.Planes[0].Width == w && stars.Planes[0].Height == h)
+            {
+                var img = StarsImage(stars.Planes.Select(p => p.Copy()).ToList(), stars.Stats, s);
+                PostProcess.BlendStars(combined, img, s.Stars);
+            }
+            else if (reqPlanes.TryGetValue(ChannelKind.Red, out var rr) && reqPlanes.TryGetValue(ChannelKind.Green, out var gg) && reqPlanes.TryGetValue(ChannelKind.Blue, out var bb))
+            {
+                var img = StarsImage(rr, gg, bb, s, context);
+                PostProcess.BlendStars(combined, img, s.Stars);
+            }
         }
         combined.Clamp01();
         return new Developed { Image = combined, PostStretch = postStretch, ChannelStretch = channelStretch };
@@ -425,6 +446,15 @@ public static class Renderer
             planes.Add(c);
             stats.Add(context.NormalizedStats.GetValueOrDefault(k) ?? Statistics.FromSample(Subsample(c)));
         }
+        return StarsImage(planes, stats, s);
+    }
+
+    /// <summary>
+    /// The star layer ready to blend: stretched when linear, scaled to white when asked, then the
+    /// brightness (stops) and contrast (spread around the mid-tone). The planes are consumed.
+    /// </summary>
+    static RGBImage StarsImage(IReadOnlyList<PlanarImage> planes, IReadOnlyList<ChannelStats> stats, CombineSettings s)
+    {
         // Already-stretched star images (bright stars reach high values) must not be stretched again.
         bool looksStretched = stats.Max(st => st.Percentile(0.999)) > 0.15f;
         bool doStretch = s.Stars.Stretch switch
@@ -433,11 +463,23 @@ public static class Renderer
             StarsStretchMode.None => false,
             _ => true,
         };
+        // The layer's brightest level (whole-image statistics, so a crop agrees with the export).
+        float peak = stats.Max(st => st.Percentile(0.9999));
         if (doStretch)
         {
             var st = new StretchSettings { Method = StretchMethod.AutoSTF, TargetBackground = 0.1f };
-            var resolved = Stretch.ResolveLinked(st, stats);
+            var resolved = Stretch.ResolveLinked(st, stats.ToList());
             foreach (var p in planes) resolved.Apply(p);
+            peak = resolved.Evaluate(peak);
+        }
+        float gain = MathF.Pow(2, s.Stars.Brightness);
+        if (s.Stars.Normalize && peak > 1e-4f) gain /= peak;
+        float spread = MathF.Pow(2, s.Stars.Contrast);
+        if (gain != 1 || spread != 1)
+        {
+            // v' = (v·gain − 0.5)·spread + 0.5
+            float a = gain * spread, b = 0.5f - 0.5f * spread;
+            foreach (var p in planes) { p.Affine(a, b); p.Clamp(0, 1); }
         }
         return new RGBImage(planes[0], planes[1], planes[2]);
     }
@@ -461,7 +503,7 @@ public static class Renderer
     /// </summary>
     public static RGBImage? RenderFull(IReadOnlyDictionary<ChannelKind, ChannelSource> sources, CombineSettings settings, RenderContext context,
                                        List<ResolvedStretch>? postStretch, PixelRect? region = null, int stripPixels = 4_000_000,
-                                       Action<double>? progress = null, Func<bool>? isCancelled = null)
+                                       Action<double>? progress = null, Func<bool>? isCancelled = null, StarsLayer? stars = null)
     {
         var any = sources.Values.FirstOrDefault() ?? throw RenderException.NoOutput();
         var crop = region?.Clamped(any.Width, any.Height) ?? PixelRect.Full(any.Width, any.Height);
@@ -483,7 +525,9 @@ public static class Renderer
             int hh = Math.Min(rows, h - y);
             var planes = new Dictionary<ChannelKind, PlanarImage>();
             foreach (var (k, s) in sources) planes[k] = s.Image.Cropped(crop.X, crop.Y + y, w, hh);
-            var res = Render(new RenderRequest(planes, settings, context, null, fixed_, applyDetail: false));
+            var req = new RenderRequest(planes, settings, context, null, fixed_, applyDetail: false);
+            if (stars != null && stars.Width == any.Width && stars.Height == any.Height) req.Stars = stars.Input(0, crop.X, crop.Y + y, w, hh);
+            var res = Render(req);
             var srcPlanes = res.Image.Planes; var dstPlanes = out_.Planes;
             for (int c = 0; c < 3; c++) Array.Copy(srcPlanes[c].Data, 0, dstPlanes[c].Data, y * w, w * hh);
             y += hh;

@@ -226,7 +226,13 @@ public partial class MainWindow : Window
         preview.GradientRegionsChanged += r => model.UpdateGradientRegions(r);
         preview.GradientRegionAdd += p => model.AddGradientRegion(p);
         preview.GradientRegionSelect += id => model.SelectedGradientRegion = id;
-        preview.GradientDelete += model.RemoveSelectedGradientRegion;
+        preview.GradientDelete += model.DeleteGradientSelection;
+        preview.GradientSampleAdd += p => model.AddGradientSample(p);
+        preview.GradientSamplesChanged += s => model.UpdateGradientSamples(s);
+        preview.GradientSampleSelect += id => model.SelectedGradientSample = id;
+        preview.StrokeBegin += model.BeginCorrectionStroke;
+        preview.Paint += (a, b, invert) => model.PaintCorrection(a, b, invert);
+        preview.BrushRadiusChanged += r => model.CorrectionBrushRadius = r;
         preview.DoubleClick += () => preview.Perform(preview.IsActualSize ? ZoomAction.Fit : ZoomAction.ActualSize);
         preview.KeyDown += (_, e) =>
         {
@@ -235,6 +241,16 @@ public partial class MainWindow : Window
                 if (e.Key == Key.Return) { model.CommitDustEditing(); e.Handled = true; }
                 else if (e.Key == Key.Escape) { model.CancelDustEditing(); e.Handled = true; }
                 else if (e.Key == Key.B) { model.DustBypass = !model.DustBypass; e.Handled = true; }
+            }
+            else if (model.CorrectionEditing != null)
+            {
+                bool ctrl = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
+                if (e.Key == Key.Return) { model.CommitCorrectionEditing(); e.Handled = true; }
+                else if (e.Key == Key.Escape) { model.CancelCorrectionEditing(); e.Handled = true; }
+                else if (e.Key == Key.B) { model.CorrectionBypass = !model.CorrectionBypass; e.Handled = true; }
+                else if (e.Key == Key.M) { model.CorrectionShowMap = !model.CorrectionShowMap; e.Handled = true; }
+                else if (e.Key == Key.D) { model.CorrectionDarken = !model.CorrectionDarken; e.Handled = true; }
+                else if (e.Key == Key.Z && ctrl) { model.UndoCorrection(); e.Handled = true; }
             }
             else if (model.GradientEditing != null)
             {
@@ -272,6 +288,18 @@ public partial class MainWindow : Window
         preview.GradientRegions = gradientEditing ? model.GradientRegions : new List<GradientRegion>();
         preview.SelectedGradientRegion = model.SelectedGradientRegion;
         preview.GradientProtectMode = model.GradientProtectMode;
+        preview.GradientSamples = gradientEditing ? model.GradientSamples.ToList() : new List<BackgroundSample>();
+        preview.GradientSampleRadius = model.GradientSampleRadius;
+        var sampleResults = new Dictionary<Guid, SampleResult>();
+        if (model.GradientFit is GradientFitInfo sf && sf.Kind == model.GradientEditing) foreach (var r in sf.SampleResultsOrEmpty) sampleResults[r.Id] = r;
+        preview.GradientSampleResults = sampleResults;
+        preview.SelectedGradientSample = model.SelectedGradientSample;
+        preview.CorrectionEditing = model.CorrectionEditing != null;
+        preview.CorrectionMap = model.CorrectionDraft;
+        preview.CorrectionVersion = model.CorrectionVersion;
+        preview.CorrectionShowMap = model.CorrectionShowMap;
+        preview.BrushRadius = model.CorrectionBrushRadius;
+        preview.BrushDarken = model.CorrectionDarken;
     }
 
     void OnChanged(string what)
@@ -280,7 +308,7 @@ public partial class MainWindow : Window
         {
             case Change.Frame: preview.Frame = model.Frame; break;
             case Change.Sources: SyncPreview(); RefreshToolbars(); break;
-            case Change.Crop: case Change.Dust: case Change.Gradient: SyncPreview(); RefreshToolbars(); break;
+            case Change.Crop: case Change.Dust: case Change.Gradient: case Change.Corrections: SyncPreview(); RefreshToolbars(); break;
             case Change.Status: if (hqItem != null) hqItem.IsChecked = model.HighQualityPreview; break;
             case Change.Settings: UpdateUndo(); break;
             case Change.RecentSets: RefreshRecentMenu(); RefreshEmptyState(); break;
@@ -334,6 +362,7 @@ public partial class MainWindow : Window
         var panel = new StackPanel();
         if (model.DustEditing != null) panel.Children.Add(DustToolbar());
         else if (model.GradientEditing != null) panel.Children.Add(GradientToolbar());
+        else if (model.CorrectionEditing != null) panel.Children.Add(CorrectionToolbar());
         else if (model.CropEditing)
         {
             var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
@@ -453,6 +482,52 @@ public partial class MainWindow : Window
     static T Tip<T>(T c, string tip) where T : FrameworkElement { c.ToolTip = tip; return c; }
 
     /// <summary>Gradient editor: channel switch, guide shape and model parameters, protected regions, view switch, fit read-out.</summary>
+    /// <summary>Corrections editor: channel switch, darken / brighten, brush, strength, map overlay, undo.</summary>
+    UIElement CorrectionToolbar()
+    {
+        var kind = model.CorrectionEditing ?? ChannelKind.Luminance;
+        var loaded = ChannelKinds.All.Where(k => model.Sources.ContainsKey(k)).ToList();
+        double maxRadius = model.ImageSize is Size isz ? Math.Max(isz.Width, isz.Height) * 0.2 : 500;
+        var panel = new StackPanel();
+        var row1 = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        row1.Children.Add(new TextBlock { Text = "✎ Corrections", FontWeight = FontWeights.Bold, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
+        var seg = Ui.Segmented(loaded, k => k.ShortName(), () => kind, k => model.SwitchCorrectionChannel(k), out _);
+        Tip(seg, "Channel painted (switching applies the current map)"); seg.Margin = new Thickness(0, 0, 6, 0);
+        row1.Children.Add(seg);
+        var sense = Ui.Segmented(new[] { true, false }, d => d ? "Darken" : "Brighten", () => model.CorrectionDarken, d => model.CorrectionDarken = d, out _);
+        Tip(sense, "What the brush does; hold Alt while painting for the opposite (D toggles)"); sense.Margin = new Thickness(0, 0, 6, 0);
+        row1.Children.Add(sense);
+        var original = new System.Windows.Controls.Primitives.ToggleButton { Content = "Original", FontSize = 11, Padding = new Thickness(7, 1, 7, 1), IsChecked = model.CorrectionBypass, Margin = new Thickness(0, 0, 6, 0) };
+        Tip(original, "Show the channel without the corrections, to compare (B)");
+        original.Click += (_, _) => model.CorrectionBypass = original.IsChecked == true;
+        row1.Children.Add(original);
+        var map = new System.Windows.Controls.Primitives.ToggleButton { Content = "Map", FontSize = 11, Padding = new Thickness(7, 1, 7, 1), IsChecked = model.CorrectionShowMap, Margin = new Thickness(0, 0, 6, 0) };
+        Tip(map, "Show the painted map as a tint: red darkens, blue brightens (M)");
+        map.Click += (_, _) => model.CorrectionShowMap = map.IsChecked == true;
+        row1.Children.Add(map);
+        row1.Children.Add(Ui.SmallButton("Apply", () => model.CommitCorrectionEditing(), "Return"));
+        var cancel = Ui.SmallButton("Cancel", model.CancelCorrectionEditing, "Esc"); cancel.Margin = new Thickness(0); row1.Children.Add(cancel);
+        panel.Children.Add(row1);
+
+        var row2 = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 4, 0, 0) };
+        row2.Children.Add(new SliderRow("Radius", () => (float)model.CorrectionBrushRadius, v => model.CorrectionBrushRadius = v, 4, (float)maxRadius, (float)(maxRadius / 5), "0", true,
+            "Brush radius in image pixels (right-drag on the preview: left shrinks, right grows; up to 20 % of the image)", "px", 58) { Width = 170 });
+        row2.Children.Add(new SliderRow("Flow", () => (float)model.CorrectionBrushFlow, v => model.CorrectionBrushFlow = v, 0.02f, 1, 0.15f, "0.00", false,
+            "Amount added by every dab: low for gentle, build-up strokes", null, 40) { Width = 150, Margin = new Thickness(6, 0, 0, 0) });
+        row2.Children.Add(new SliderRow("Feather", () => (float)model.CorrectionBrushFeather, v => model.CorrectionBrushFeather = v, 0, 1, 0.7f, "0.00", false,
+            "Fraction of the radius over which a dab fades out (0 = hard edge)", null, 48) { Width = 150, Margin = new Thickness(6, 0, 0, 0) });
+        row2.Children.Add(new SliderRow("Strength", () => (float)model.CorrectionStrength, v => model.CorrectionStrength = v, 0.1f, 4, 1, "0.0", false,
+            "Exposure range of the map in stops: a fully painted area is darkened or brightened by this many stops", "EV", 66) { Width = 170, Margin = new Thickness(6, 0, 0, 0) });
+        panel.Children.Add(row2);
+
+        var row3 = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 4, 0, 0) };
+        var undo = Ui.SmallButton("Undo stroke", model.UndoCorrection, "Undo the last stroke (Ctrl+Z)"); undo.IsEnabled = model.CanUndoCorrection; row3.Children.Add(undo);
+        var clear = Ui.SmallButton("Clear", model.ClearCorrection, "Erase the whole map"); clear.IsEnabled = !(model.CorrectionDraft?.IsEmpty ?? true); row3.Children.Add(clear);
+        row3.Children.Add(new TextBlock { Text = "Paint on the channel to darken or brighten it · right-drag to set the radius · Alt paints the opposite · the map is kept next to the image (.ccmask.png)", FontSize = 9, Foreground = Brushes.Gray, VerticalAlignment = VerticalAlignment.Center });
+        panel.Children.Add(row3);
+        return panel;
+    }
+
     UIElement GradientToolbar()
     {
         var kind = model.GradientEditing ?? ChannelKind.Luminance;
@@ -462,6 +537,8 @@ public partial class MainWindow : Window
         var shape = model.GradientShape;
         var fit = model.GradientFit is GradientFitInfo fi && fi.Kind == kind ? fi : null;
         var regions = model.GradientRegions;
+        bool isSamples = shape == GradientShape.Samples;
+        double maxRadius = model.ImageSize is Size isz ? Math.Max(isz.Width, isz.Height) / 15 : 300;
         var panel = new StackPanel();
         var row1 = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         row1.Children.Add(new TextBlock { Text = "◐ Gradient", FontWeight = FontWeights.Bold, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
@@ -478,24 +555,54 @@ public partial class MainWindow : Window
 
         var row2 = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 4, 0, 0) };
         var shapeSeg = Ui.Segmented(GradientShapes.All, s => s.DisplayName(), () => model.GradientShape, s => model.SetGradientShape(s), out _);
-        Tip(shapeSeg, "Line: the background varies along the line and is constant across it (light pollution from one side).\nEllipse: the background is a function of the distance to the centre, which may lie outside the frame (vignetting, a glow from a bright source).\nPolynomial: no guide, a plain 2-D polynomial of the chosen degree.");
+        Tip(shapeSeg, "Line: the background varies along the line and is constant across it (light pollution from one side).\nEllipse: the background is a function of the distance to the centre, which may lie outside the frame (vignetting, a glow from a bright source).\nPolynomial: no guide, a plain 2-D polynomial of the chosen degree.\nSamples: discs placed on sky (a generated grid plus your own) with a smoothing spline or kriging surface through them.");
         shapeSeg.Margin = new Thickness(0, 0, 6, 0); row2.Children.Add(shapeSeg);
         var modeSeg = Ui.Segmented(GradientModes.All, m => m.DisplayName(), () => model.EditedGradientSpec?.Mode ?? defaults.Mode, m => model.EditGradient(sp => sp.Mode = m, d => d.Mode = m), out _);
         Tip(modeSeg, "Subtract: the background is taken off, the overall level kept (sky glow, stretched data).\nDivide: the pixels are divided by the background normalised to its brightest level (vignetting / missing flats on linear data: stars at the edge get their flux back).");
         row2.Children.Add(modeSeg);
-        row2.Children.Add(new MenuPicker<GradientResidual>("Residual", () => model.EditedGradientSpec?.Residual ?? defaults.Residual, r => model.EditGradient(sp => sp.Residual = r, d => d.Residual = r), GradientResiduals.All, r => r.DisplayName(),
-            "Low-order 2-D term fitted after the guided profile, for what the profile cannot explain (a sky gradient on top of the vignetting)") { Margin = new Thickness(6, 0, 0, 0) });
+        if (isSamples)
+        {
+            row2.Children.Add(new MenuPicker<SampleSurface>("Surface", () => model.EditedGradientSpec?.Surface ?? defaults.Surface, v => model.EditGradient(sp => sp.Surface = v, d => d.Surface = v), SampleSurfaces.All, v => v.DisplayName(),
+                "Spline: thin-plate spline through the samples, relaxed by the smoothing (DBE-like; bends smoothly across the gaps).\nKriging: Gaussian-process mean around a constant, the smoothing sets its reach and nugget (stays near the overall level in the gaps).") { Margin = new Thickness(6, 0, 0, 0) });
+            bool autoOn = spec?.AutoSmoothing ?? defaults.AutoSmoothing;
+            var auto = new CheckBox { Content = "Auto", FontSize = 11, IsChecked = autoOn, VerticalAlignment = VerticalAlignment.Center, MinHeight = 20, Margin = new Thickness(6, 0, 0, 0) };
+            auto.Click += (_, _) => { bool on = auto.IsChecked == true; model.EditGradient(sp => sp.AutoSmoothing = on, d => d.AutoSmoothing = on); };
+            Tip(auto, "Pick the smoothing by cross-validation: the surface that best predicts every sample from the others");
+            row2.Children.Add(auto);
+            row2.Children.Add(new SliderRow("Smooth", () => (float)(spec?.SampleSmoothing ?? defaults.SampleSmoothing), v => model.EditGradient(sp => sp.SampleSmoothing = v, d => d.SampleSmoothing = v),
+                0, 1, 0.5f, "0.00", help: "Smoothing of the surface: 0 follows the samples closely, 1 is a very stiff surface", labelWidth: 46) { Width = 160, Margin = new Thickness(6, 0, 0, 0), IsEnabled = !autoOn });
+            row2.Children.Add(new SliderRow("Radius", () => (float)(spec?.SampleRadius ?? defaults.SampleRadius), v => model.EditGradient(sp => sp.SampleRadius = v, d => d.SampleRadius = v),
+                0, (float)maxRadius, 0, "0", help: "Radius of the sample discs in pixels (0 = automatic: ≈ 1/80 of the long side)", note: "px", labelWidth: 46) { Width = 160, Margin = new Thickness(6, 0, 0, 0) });
+        }
+        else
+            row2.Children.Add(new MenuPicker<GradientResidual>("Residual", () => model.EditedGradientSpec?.Residual ?? defaults.Residual, r => model.EditGradient(sp => sp.Residual = r, d => d.Residual = r), GradientResiduals.All, r => r.DisplayName(),
+                "Low-order 2-D term fitted after the guided profile, for what the profile cannot explain (a sky gradient on top of the vignetting)") { Margin = new Thickness(6, 0, 0, 0) });
         if (shape == GradientShape.Ellipse)
             row2.Children.Add(new MenuPicker<int>("Sectors", () => model.EditedGradientSpec?.Sectors ?? defaults.Sectors, v => model.EditGradient(sp => sp.Sectors = v, d => d.Sectors = v), new[] { 1, 4, 8, 12 }, v => v == 1 ? "1 (round)" : v.ToString(),
                 "Angular sectors of the profile: 1 = the same fall-off in every direction; 4–12 let it differ with the direction (tilted sensor, asymmetric vignetting)") { Margin = new Thickness(6, 0, 0, 0) });
         if (shape == GradientShape.Polynomial)
             row2.Children.Add(new MenuPicker<int>("Degree", () => model.EditedGradientSpec?.Degree ?? defaults.Degree, v => model.EditGradient(sp => sp.Degree = v, d => d.Degree = v), new[] { 1, 2, 3, 4, 5, 6 }, v => v.ToString()) { Margin = new Thickness(6, 0, 0, 0) });
-        row2.Children.Add(new SliderRow("Smooth", () => (float)(model.EditedGradientSpec?.Smoothness ?? model.GradientDraft?.Smoothness ?? 1.5), v => model.EditGradient(sp => sp.Smoothness = v, d => d.Smoothness = v),
-            0, 6, 1.5f, "0.0", help: "Smoothing of the profile along the guide, in bins (120 bins across the frame)", labelWidth: 46) { Width = 160, Margin = new Thickness(6, 0, 0, 0) });
+        if (!isSamples)
+            row2.Children.Add(new SliderRow("Smooth", () => (float)(model.EditedGradientSpec?.Smoothness ?? model.GradientDraft?.Smoothness ?? 1.5), v => model.EditGradient(sp => sp.Smoothness = v, d => d.Smoothness = v),
+                0, 6, 1.5f, "0.0", help: "Smoothing of the profile along the guide, in bins (120 bins across the frame)", labelWidth: 46) { Width = 160, Margin = new Thickness(6, 0, 0, 0) });
         panel.Children.Add(row2);
 
+        if (isSamples)
+        {
+            var rowG = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 4, 0, 0) };
+            rowG.Children.Add(new TextBlock { Text = "Grid", FontSize = 11, Foreground = Brushes.Gray, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
+            rowG.Children.Add(new MenuPicker<int>("Per row", () => spec?.GridPerRow ?? defaults.GridPerRow, v => model.EditGradient(sp => sp.GridPerRow = v, d => d.GridPerRow = v), new[] { 6, 8, 10, 12, 14, 16, 20, 24, 30 }, v => v.ToString(),
+                "Samples per row of the generated grid"));
+            rowG.Children.Add(new SliderRow("Tolerance", () => (float)(spec?.GridTolerance ?? defaults.GridTolerance), v => model.EditGradient(sp => sp.GridTolerance = v, d => d.GridTolerance = v),
+                0.5f, 10, 2.5f, "0.0", help: "How far above the planar sky model (in sample noises) a grid point may lie and still count as sky; raise it to keep a glow the plane cannot follow, lower it to leave out faint nebulosity", labelWidth: 60) { Width = 190, Margin = new Thickness(6, 0, 6, 0) });
+            rowG.Children.Add(Ui.SmallButton("Generate", model.RegenerateGradientGrid, "Place the grid again with these parameters (your own samples are dropped)"));
+            var clearSamples = Ui.SmallButton("Clear samples", model.ClearGradientSamples, "Remove every sample; click the sky to place them by hand"); clearSamples.IsEnabled = model.GradientSamples.Count > 0; rowG.Children.Add(clearSamples);
+            var delSample = Ui.SmallButton("Delete", model.RemoveSelectedGradientSample, "Remove the selected sample (Del)"); delSample.IsEnabled = model.SelectedGradientSample != null; delSample.Margin = new Thickness(0); rowG.Children.Add(delSample);
+            panel.Children.Add(rowG);
+        }
+
         var row3 = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 4, 0, 0) };
-        if (shape != GradientShape.Polynomial)
+        if (shape != GradientShape.Polynomial && !isSamples)
         {
             var refine = new CheckBox { Content = "Refine", FontSize = 11, IsChecked = spec?.Refine ?? defaults.Refine, VerticalAlignment = VerticalAlignment.Center, MinHeight = 20, Margin = new Thickness(0, 0, 6, 0) };
             refine.Click += (_, _) => { bool on = refine.IsChecked == true; model.EditGradient(sp => sp.Refine = on, d => d.Refine = on); };
@@ -523,15 +630,17 @@ public partial class MainWindow : Window
             {
                 GradientShape.Line => FormattableString.Invariant($"line {g.X:0},{g.Y:0} → {g.X2:0},{g.Y2:0}"),
                 GradientShape.Ellipse => FormattableString.Invariant($"ellipse centre {g.X:0},{g.Y:0} · axes {g.A:0} × {g.B:0} · {g.Angle * 180 / Math.PI:0}°"),
+                GradientShape.Samples => $"{(spec?.Surface ?? SampleSurface.Spline).DisplayName().ToLowerInvariant()} through {fit.SampleResultsOrEmpty.Count(r => !r.IsRejected)} of {fit.SampleResultsOrEmpty.Count} samples",
                 _ => $"polynomial, degree {spec?.Degree ?? 0}",
             };
             status = FormattableString.Invariant($"Fit: {geo} · residual {fit.ResidualSigma:0.00}σ · {(int)fit.Millis} ms");
         }
         else if (spec == null)
-            status = shape == GradientShape.Line ? "Drag along the gradient, from the dark side towards the bright side" : "Drag from the centre of the gradient outwards (the centre may be dragged outside the frame afterwards)";
+            status = shape == GradientShape.Line ? "Drag along the gradient, from the dark side towards the bright side" : isSamples ? "Click the sky to place a sample" : "Drag from the centre of the gradient outwards (the centre may be dragged outside the frame afterwards)";
         else status = "";
         if (status.Length > 0) panel.Children.Add(new TextBlock { Text = status, FontSize = 11, Foreground = Brushes.Gray, Margin = new Thickness(0, 4, 0, 0), HorizontalAlignment = HorizontalAlignment.Right });
-        panel.Children.Add(new TextBlock { Text = "Drag the handles to adjust the guide · drag empty sky to pan · regions: Protect then click · B original, M background", FontSize = 9, Foreground = Brushes.Gray, Margin = new Thickness(0, 4, 0, 0), HorizontalAlignment = HorizontalAlignment.Right });
+        panel.Children.Add(new TextBlock { Text = isSamples ? "Click the sky to add a sample · drag to move · Del removes the selected one · green = used, red = rejected · regions: Protect then click · B original, M background"
+            : "Drag the handles to adjust the guide · drag empty sky to pan · regions: Protect then click · B original, M background", FontSize = 9, Foreground = Brushes.Gray, Margin = new Thickness(0, 4, 0, 0), HorizontalAlignment = HorizontalAlignment.Right });
         return panel;
     }
 

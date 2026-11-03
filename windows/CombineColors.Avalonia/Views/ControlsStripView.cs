@@ -47,7 +47,7 @@ public sealed class ControlsStripView : Border
         scroller.AddHandler(PointerReleasedEvent, (_, _) => EndDrag(), RoutingStrategies.Tunnel);
         Child = scroller;
         Add("channels", "Channels", 250); Add("stretch", "Stretch", 262); Add("normalisation", "Normalisation", 290); Add("luminance", "Luminance", 250);
-        Add("bands", "Colour bands", 226); Add("colour", "Colour", 250); Add("denoise", "Denoise", 330); Add("detail", "Detail", 500); Add("stars", "RGB stars", 262);
+        Add("bands", "Colour bands", 226); Add("colour", "Colour", 250); Add("denoise", "Denoise", 330); Add("detail", "Detail", 500); Add("stars", "RGB stars", 390);
         model.Changed += OnChanged;
         Rebuild();
     }
@@ -96,7 +96,7 @@ public sealed class ControlsStripView : Border
             case Change.Settings:
                 if (Signature() != structure) Rebuild(); else RefreshAll();
                 break;
-            case Change.Sources: case Change.Context: Rebuild(); break;
+            case Change.Sources: case Change.Context: case Change.Stars: Rebuild(); break;
         }
     }
 
@@ -127,7 +127,7 @@ public sealed class ControlsStripView : Border
         Build("channels", ChannelsSection); Build("stretch", StretchSection); Build("normalisation", NormalizationSection); Build("luminance", LuminanceSection);
         Build("bands", ColorBandsSection); Build("colour", ColourSection); Build("denoise", DenoiseSection); Build("detail", DetailSection); Build("stars", StarsSection);
         // Stays collapsed while no R, G and B channels are loaded (nothing to blend).
-        blockById["stars"].Expanded = HasRgb && !collapsed.Contains("stars");
+        blockById["stars"].Expanded = !collapsed.Contains("stars");
     }
 
     void Build(string id, Action<StackPanel> builder)
@@ -418,22 +418,46 @@ public sealed class ControlsStripView : Border
     void StarsSection(StackPanel p)
     {
         var st = model.Settings.Stars;
+        const double lw = 70;
+        var top = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 2) };
+        if (model.StarsLayer is StarsLayer layer)
+        {
+            var name = new TextBlock { Text = "✦ " + layer.FileName, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, MaxWidth = 250, TextTrimming = TextTrimming.CharacterEllipsis };
+            ToolTip.SetTip(name, $"Stars layer: {layer.FileName} ({layer.FormatDescription}), kept as an RGB image and blended on top");
+            top.Children.Add(name);
+            top.Children.Add(Ui.IconButton("✕", model.RemoveStarsLayer, "Remove the stars layer"));
+        }
+        else
+        {
+            top.Children.Add(Ui.SmallButton("Load RGB stars…", async () => { if (TopLevel.GetTopLevel(this) is Window win) { var paths = await Panels.OpenImages(win); if (paths.Count > 0) model.LoadStarsLayer(paths[0]); } }, "An RGB image kept whole (not split into channels) and blended as stars: a stars-only image, or any RGB frame. Dropping a colour file offers the same choice."));
+            if (HasRgb) top.Children.Add(Ui.Caption("or the R, G, B channels", 10, false));
+        }
+        p.Children.Add(top);
         var enable = C("Blend RGB stars into the result", x => x.Stars.Enabled, (x, v) => x.Stars.Enabled = v);
-        enable.IsEnabled = HasRgb;
+        enable.IsEnabled = model.HasStars;
         p.Children.Add(enable);
-        if (!HasRgb) p.Children.Add(Ui.Caption("Load R, G and B channels (or a colour stars image) to enable."));
+        if (!model.HasStars) p.Children.Add(Ui.Caption("Load a stars layer, or R, G and B channels, to enable."));
         if (st.Enabled)
         {
-            p.Children.Add(S("Amount", x => x.Stars.Amount, (x, v) => x.Stars.Amount = v, 0, 1, 1));
-            p.Children.Add(M("Star data", x => x.Stars.Stretch, (x, v) => x.Stars.Stretch = v, StarsStretchModes.All, m => m.DisplayName()));
-            p.Children.Add(C("Mask stars by luminance", x => x.Stars.UseMask, (x, v) => x.Stars.UseMask = v, "Off for star-only images from StarNet/StarXTerminator."));
+            // Two columns: the layer's look on the left, the blend on the right.
+            var left = new StackPanel { Width = 190 };
+            left.Children.Add(S("Amount", x => x.Stars.Amount, (x, v) => x.Stars.Amount = v, 0, 1, 1, labelWidth: lw));
+            left.Children.Add(S("Brightness", x => x.Stars.Brightness, (x, v) => x.Stars.Brightness = v, -2, 2, 0, help: "Gain of the star layer in stops, after its stretch", note: "EV", labelWidth: lw));
+            left.Children.Add(S("Contrast", x => x.Stars.Contrast, (x, v) => x.Stars.Contrast = v, -1, 1, 0, help: "Spreads the star layer around the mid-tone: positive darkens faint halos and keeps the cores, negative softens", labelWidth: lw));
+            left.Children.Add(S("Star sat.", x => x.Stars.Saturation, (x, v) => x.Stars.Saturation = v, 0, 3, 1.3f, labelWidth: lw));
+            left.Children.Add(C("Brightest stars to white", x => x.Stars.Normalize, (x, v) => x.Stars.Normalize = v, "Scale the layer so its brightest stars reach white — the brightest values of the result (whole-image peak, so preview and export agree)"));
+            var right = new StackPanel { Width = 170, Margin = new Thickness(8, 0, 0, 0) };
+            right.Children.Add(M("Blend", x => x.Stars.Mode, (x, v) => x.Stars.Mode = v, StarsBlendModes.All, m => m.DisplayName(), "Screen: adds without clipping, soft on bright nebulae (default).\nLighten: the brighter of the two.\nAdd: sum, clipped."));
+            right.Children.Add(M("Star data", x => x.Stars.Stretch, (x, v) => x.Stars.Stretch = v, StarsStretchModes.All, m => m.DisplayName()));
+            right.Children.Add(C("Mask by luminance", x => x.Stars.UseMask, (x, v) => x.Stars.UseMask = v, "Off for star-only images from StarNet/StarXTerminator."));
             if (st.UseMask)
             {
-                p.Children.Add(S("Threshold", x => x.Stars.Threshold, (x, v) => x.Stars.Threshold = v, 0, 1, 0.15f));
-                p.Children.Add(S("Softness", x => x.Stars.Softness, (x, v) => x.Stars.Softness = v, 0.01f, 1, 0.25f));
+                right.Children.Add(S("Threshold", x => x.Stars.Threshold, (x, v) => x.Stars.Threshold = v, 0, 1, 0.15f, labelWidth: lw));
+                right.Children.Add(S("Softness", x => x.Stars.Softness, (x, v) => x.Stars.Softness = v, 0.01f, 1, 0.25f, labelWidth: lw));
             }
-            p.Children.Add(S("Star sat.", x => x.Stars.Saturation, (x, v) => x.Stars.Saturation = v, 0, 3, 1.3f));
-            p.Children.Add(M("Blend", x => x.Stars.Mode, (x, v) => x.Stars.Mode = v, StarsBlendModes.All, m => m.DisplayName()));
+            var columns = new StackPanel { Orientation = Orientation.Horizontal };
+            columns.Children.Add(left); columns.Children.Add(right);
+            p.Children.Add(columns);
         }
     }
 }

@@ -32,6 +32,10 @@ public sealed class PreviewRequest
     public double Scale;
     public int PixelBudget;
     public int Generation;
+    /// <summary>RGB stars layer blended into the result (null: the R, G, B channels serve as stars).</summary>
+    public StarsLayer? Stars;
+    /// <summary>Live hand-painted correction of one channel (the corrections editor).</summary>
+    public (CorrectionMap map, float strength, ChannelKind kind)? Correction;
 }
 
 /// <summary>Serial, latest-wins background renderer.</summary>
@@ -105,8 +109,11 @@ public sealed class RenderCoordinator
         double inv = 1 / sc;
         var rect = new Rect(x0 * inv, y0 * inv, cw * inv, ch * inv);
         var overview = wholeLevel ? null : OverviewPlanes.Overview(req.Sources, level, x0 * inv, y0 * inv, cw * inv, ch * inv);
-        var result = Renderer.Render(new RenderRequest(planes, req.Settings, req.Context, req.AnalysisSamples, req.FixedPostStretch, scale: (float)sc,
-                                                       overview: overview?.planes, overviewRect: overview?.rect));
+        var request = new RenderRequest(planes, req.Settings, req.Context, req.AnalysisSamples, req.FixedPostStretch, scale: (float)sc,
+                                        overview: overview?.planes, overviewRect: overview?.rect);
+        if (req.Settings.Stars.Enabled && req.Stars is StarsLayer st && st.Width == fullW && st.Height == fullH) request.Stars = st.Input(level, x0, y0, cw, ch);
+        if (req.Correction is (CorrectionMap cmap, float cstr, ChannelKind ckind)) request.Correction = new CorrectionInput(cmap, cstr, ckind, new SampleRect(x0 * inv, y0 * inv, cw * inv, ch * inv));
+        var result = Renderer.Render(request);
         var bmp = RasterWriter.MakeDisplayImage(result.Image);
         return new PreviewFrame
         {
@@ -153,6 +160,7 @@ public sealed class ThumbnailCoordinator
         /// <summary>Region in full-resolution pixels (null = whole image).</summary>
         public Rect? Region;
         public int MaxPixels;
+        public StarsLayer? Stars;
     }
 
     public int Submit(Job job)
@@ -202,8 +210,10 @@ public sealed class ThumbnailCoordinator
             settings.Select(palette);
             try
             {
-                var res = Renderer.Render(new RenderRequest(planes, settings, job.Context, job.AnalysisSamples, scale: (float)sc,
-                                                            overview: overview?.planes, overviewRect: overview?.rect));
+                var request = new RenderRequest(planes, settings, job.Context, job.AnalysisSamples, scale: (float)sc,
+                                                overview: overview?.planes, overviewRect: overview?.rect);
+                if (settings.Stars.Enabled && job.Stars is StarsLayer st && st.Width == any.Width && st.Height == any.Height) request.Stars = st.Input(level, x0, y0, cw, ch);
+                var res = Renderer.Render(request);
                 var bmp = RasterWriter.MakeDisplayImage(res.Image);
                 OnThumbnail?.Invoke(palette.Id, bmp, gen);
             }

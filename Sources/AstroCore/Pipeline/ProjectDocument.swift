@@ -37,6 +37,8 @@ public struct ProjectDocument: Codable {
     public var dust: DustSettings = DustSettings()
     /// Gradient models removed from the loaded channels (oriented coordinates) and the shared protected regions.
     public var gradient: GradientSettings = GradientSettings()
+    /// Strength of the hand-painted corrections per channel and the brush defaults (the maps are sidecar files).
+    public var corrections: CorrectionSettings = CorrectionSettings()
 
     public var orientation: Orientation {
         get { Orientation(rotation: rotation, flipped: flipped) }

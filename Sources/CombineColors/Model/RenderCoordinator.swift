@@ -28,6 +28,10 @@ struct PreviewRequest {
     var scale: Double
     var pixelBudget: Int
     var generation: Int
+    /// RGB stars layer blended into the result (nil: the R, G, B channels serve as stars).
+    var stars: StarsLayer? = nil
+    /// Live hand-painted correction of one channel (the corrections editor).
+    var correction: (map: CorrectionMap, strength: Float, kind: ChannelKind)? = nil
 }
 
 /// Serial, latest-wins background renderer.
@@ -95,8 +99,11 @@ final class RenderCoordinator {
         let inv = 1 / s
         let rect = CGRect(x: Double(x0) * inv, y: Double(y0) * inv, width: Double(cw) * inv, height: Double(ch) * inv)
         let overview = wholeLevel ? nil : RenderCoordinator.overview(sources: req.sources, level: level, rect: rect)
-        let result = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: req.analysisSamples, settings: req.settings, context: req.context, fixedPostStretch: req.fixedPostStretch, scale: Float(s),
-                                                       overview: overview?.planes, overviewRect: overview?.rect))
+        var request = RenderRequest(planes: planes, analysisPlanes: req.analysisSamples, settings: req.settings, context: req.context, fixedPostStretch: req.fixedPostStretch, scale: Float(s),
+                                    overview: overview?.planes, overviewRect: overview?.rect)
+        if req.settings.stars.enabled, let st = req.stars, st.width == fullW, st.height == fullH { request.stars = st.input(level: level, x: x0, y: y0, width: cw, height: ch) }
+        if let c = req.correction { request.correction = CorrectionInput(map: c.map, strength: c.strength, kind: c.kind, rect: rect) }
+        let result = try Renderer.render(request)
         guard let cg = RasterWriter.makeDisplayImage(rgb: result.image) else { throw RenderError.noOutput }
         return PreviewFrame(cgImage: cg, rgb: result.image, level: level, rect: rect, millis: result.millis, postStretch: result.postStretch, channelStretch: result.channelStretch, settings: req.settings)
     }
@@ -129,6 +136,7 @@ final class ThumbnailCoordinator {
         /// Region in full-resolution pixels (nil = whole image).
         var region: CGRect?
         var maxPixels: Int
+        var stars: StarsLayer? = nil
     }
 
     func submit(_ job: Job) -> Int {
@@ -163,8 +171,10 @@ final class ThumbnailCoordinator {
                 if stale { return }
                 var settings = job.settings
                 settings.select(palette: palette)
-                guard let res = try? Renderer.render(RenderRequest(planes: planes, analysisPlanes: job.analysisSamples, settings: settings, context: job.context, scale: Float(s),
-                                                                   overview: overview?.planes, overviewRect: overview?.rect)),
+                var request = RenderRequest(planes: planes, analysisPlanes: job.analysisSamples, settings: settings, context: job.context, scale: Float(s),
+                                            overview: overview?.planes, overviewRect: overview?.rect)
+                if settings.stars.enabled, let st = job.stars, st.width == any.width, st.height == any.height { request.stars = st.input(level: level, x: x0, y: y0, width: cw, height: ch) }
+                guard let res = try? Renderer.render(request),
                       let cg = RasterWriter.makeDisplayImage(rgb: res.image) else { continue }
                 DispatchQueue.main.async { self.onThumbnail?(palette.id, cg, gen) }
             }

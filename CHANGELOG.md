@@ -5,6 +5,13 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 (`scripts/bump.sh`). The version lives in `VERSION` and is stamped into the app at build time;
 `scripts/release.sh` tags it and publishes the DMG as a GitHub release.
 
+## [1.8.0] – 2026-11-03
+
+- Background-sample gradient removal (Samples shape, à la DBE / GraXpert): automatic sky grid with nebula rejection, thin-plate spline or kriging surface with leave-one-out robust reweighting and cross-validated smoothing, click / drag / delete samples; Mac, Windows, Linux and the CLI
+- Manual corrections (channel menu › Manual Corrections…): paint a channel darker or brighter with a soft brush (right-drag sets the radius, ⌥ inverts, undo, map tint), applied live as an exposure change and kept next to the image as <image>.ccmask.png
+- RGB stars layer: a colour image can be kept whole (Keep as RGB (stars) when dropping it, Load RGB stars…, --stars-file) and blended on top; Screen / Lighten / Add, star brightness and contrast, Brightest stars to white
+- Formula read-out: the palette panel shows the combination as PixelMath lines with a copy button (tester request)
+
 ## [1.7.0] – 2026-11-02
 
 - XISF input (PixInsight format): monolithic files, UInt8–64 / Float32 / Float64 samples, planar or interleaved, zlib / LZ4 compression with byte shuffling; filter detection from the embedded FITS keywords; Mac, Windows, Linux and the CLI

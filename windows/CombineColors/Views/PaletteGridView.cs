@@ -21,6 +21,9 @@ public sealed class PaletteGridView : DockPanel
     readonly TextBlock hiddenCount = new() { FontSize = 10, Foreground = Brushes.Gray, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0) };
     readonly TextBlock description = new() { FontSize = 10, Foreground = Brushes.Gray, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) };
     readonly TextBlock modeText = new() { FontSize = 9, Foreground = Brushes.DarkGray, Margin = new Thickness(0, 2, 0, 0) };
+    /// <summary>The combination as PixelMath expressions, for copying into PixInsight.</summary>
+    readonly TextBlock formulaText = new() { FontSize = 10, FontFamily = new FontFamily("Consolas, Courier New, monospace"), Foreground = Brushes.Gray, TextWrapping = TextWrapping.Wrap };
+    readonly DockPanel formulaRow = new() { Margin = new Thickness(0, 2, 0, 0) };
     readonly Slider sizeSlider;
     readonly Action refreshFilter, refreshRegion;
     string structure = "";
@@ -107,6 +110,14 @@ public sealed class PaletteGridView : DockPanel
         }
         body.Children.Add(description);
         body.Children.Add(modeText);
+        if (formulaRow.Children.Count == 0)
+        {
+            var copy = Ui.IconButton("⧉", () => { Clipboard.SetText(formulaText.Text); model.StatusText = "Formula copied"; }, "Copy the formula (PixelMath syntax: one expression per output; replace the channel names by your image names in PixInsight)");
+            DockPanel.SetDock(copy, Dock.Right); copy.VerticalAlignment = VerticalAlignment.Top;
+            formulaRow.Children.Add(copy);
+            formulaRow.Children.Add(formulaText);
+        }
+        body.Children.Add(formulaRow);
         UpdateSelection();
         UpdateThumbnails();
     }
@@ -123,6 +134,9 @@ public sealed class PaletteGridView : DockPanel
         description.Text = model.CurrentPalette?.Description ?? "";
         var mode = model.Settings.Mode;
         modeText.Text = mode == CombineMode.PixelMath ? "Combination: Pixel Math (editable)" : (mode == CombineMode.Monochrome ? "Combination: weighted average of all channels" : "Combination: matrix (editable)");
+        var lines = model.Sources.Count > 0 ? model.Settings.FormulaLines(model.AvailableKinds) : new List<string>();
+        formulaText.Text = string.Join("\n", lines);
+        formulaRow.Visibility = lines.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     FrameworkElement BuildCell(Palette p)

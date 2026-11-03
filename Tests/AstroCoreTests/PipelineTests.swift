@@ -691,3 +691,81 @@ final class ColorBandsAndDetailTests: XCTestCase {
         XCTAssertGreaterThan(wide(masked), wide(ref) * 1.1)
     }
 }
+
+final class StarsLayerAndFormulaTests: XCTestCase {
+    /// A black frame with three stars of known peak, as an RGB stars-only layer.
+    private func starsPlanes(width w: Int = 128, height h: Int = 96, peak: Float = 0.6) -> [PlanarImage] {
+        let planes = (0..<3).map { _ in PlanarImage(width: w, height: h) }
+        for (sx, sy) in [(20, 20), (64, 48), (100, 70)] {
+            for y in (sy - 4)...(sy + 4) { for x in (sx - 4)...(sx + 4) {
+                let d2 = Float((x - sx) * (x - sx) + (y - sy) * (y - sy))
+                let v = peak * exp(-d2 / 3)
+                planes[0][x, y] = v; planes[1][x, y] = v * 0.9; planes[2][x, y] = v * 0.8
+            } }
+        }
+        return planes
+    }
+
+    func testStarsLayerBlendsWithoutRGBChannelsAndNormalisesToWhite() throws {
+        let sources: [ChannelKind: ChannelSource] = [.ha: Synth.source(.ha, width: 128, height: 96), .oiii: Synth.source(.oiii, scale: 0.4, seed: 2, width: 128, height: 96)]
+        var s = CombineSettings(); s.select(palette: Palettes.palette(id: "hoo")!)
+        let ctx = RenderContext.make(settings: s.normalization, sources: sources)
+        let planes = sources.mapValues { $0.image }
+        let plain = try Renderer.render(RenderRequest(planes: planes, settings: s, context: ctx))
+        let layer = StarsLayer(planes: starsPlanes(), fileName: "stars.tif")
+        s.stars.enabled = true; s.stars.useMask = false; s.stars.stretch = .none; s.stars.saturation = 1; s.stars.mode = .screen
+        // No R, G, B channels: the stars come from the layer alone.
+        var req = RenderRequest(planes: planes, settings: s, context: ctx)
+        req.stars = layer.input(region: nil)
+        let blended = try Renderer.render(req)
+        XCTAssertGreaterThan(blended.image.r[64, 48], plain.image.r[64, 48] + 0.3, "the star shows in the result")
+        XCTAssertEqual(blended.image.r[5, 5], plain.image.r[5, 5], accuracy: 1e-4, "the black sky of the layer leaves the result alone (screen)")
+        // Brightest stars to white: the star peak (0.6 in the layer) reaches 1.
+        s.stars.normalize = true
+        req.settings = s
+        let white = try Renderer.render(req)
+        XCTAssertEqual(white.image.r[64, 48], 1, accuracy: 0.02)
+        // Brightness −1 EV halves the layer; contrast +1 darkens the faint skirt and keeps the core.
+        s.stars.normalize = false; s.stars.brightness = -1
+        req.settings = s
+        let dim = try Renderer.render(req)
+        XCTAssertLessThan(dim.image.r[64, 48], blended.image.r[64, 48])
+        s.stars.brightness = 0; s.stars.contrast = 1
+        req.settings = s
+        let crisp = try Renderer.render(req)
+        XCTAssertLessThan(crisp.image.r[67, 48] - plain.image.r[67, 48], blended.image.r[67, 48] - plain.image.r[67, 48], "the skirt is darker")
+        XCTAssertGreaterThanOrEqual(crisp.image.r[64, 48], blended.image.r[64, 48] - 0.05, "the core is kept")
+        // Lighten and add differ from screen where the star overlaps the nebula.
+        for mode in StarsBlendMode.allCases {
+            s.stars.contrast = 0; s.stars.mode = mode
+            req.settings = s
+            let r = try Renderer.render(req)
+            XCTAssertGreaterThan(r.image.r[64, 48], plain.image.r[64, 48])
+        }
+        // The strip renderer blends the layer region by region like the whole render.
+        s.stars.mode = .screen
+        let whole = try Renderer.render({ var r = RenderRequest(planes: planes, settings: s, context: ctx); r.stars = layer.input(region: nil); return r }())
+        let strips = try Renderer.renderFull(sources: sources, settings: s, context: ctx, postStretch: whole.postStretch, stripPixels: 128 * 20, stars: layer)!
+        for (p, q) in zip(whole.image.planes, strips.planes) { XCTAssertLessThan(p.maxAbsDifference(q), 1e-4) }
+        // Rotation keeps the layer with the channels.
+        let rotated = layer.applying(.rotateClockwise)
+        XCTAssertEqual(rotated.width, 96); XCTAssertEqual(rotated.height, 128)
+        // Decoding defaults for pre-1.8 settings.
+        let old = try JSONDecoder().decode(StarsBlendSettings.self, from: Data(#"{"enabled":true}"#.utf8))
+        XCTAssertEqual(old.brightness, 0); XCTAssertEqual(old.contrast, 0); XCTAssertFalse(old.normalize); XCTAssertEqual(old.mode, .screen)
+    }
+
+    func testFormulaLinesReadLikePixelMath() {
+        var s = CombineSettings(); s.select(palette: Palettes.palette(id: "sho")!)
+        let available: Set<ChannelKind> = [.ha, .oiii, .sii]
+        let lines = s.formulaLines(available: available)
+        XCTAssertEqual(lines[0], "R: SII"); XCTAssertEqual(lines[1], "G: Ha"); XCTAssertEqual(lines[2], "B: OIII")
+        s.matrix.set(.ha, 0, 0.5); s.matrix.set(.sii, 0, 0.5)
+        XCTAssertEqual(s.formulaLines(available: available)[0], "R: 0.5*Ha + 0.5*SII")
+        s.mode = .pixelMath; s.pixelMath = PixelMathProgram(red: "Ha*0.7 + SII*0.3", green: "OIII", blue: "OIII")
+        XCTAssertEqual(s.formulaLines(available: available)[0], "R: Ha*0.7 + SII*0.3")
+        s.mode = .monochrome; s.monoChannels = [.ha, .oiii]
+        XCTAssertTrue(s.formulaLines(available: available)[0].hasPrefix("Mono: ("))
+        XCTAssertEqual(CombineSettings.formatWeight(0.25), "0.25"); XCTAssertEqual(CombineSettings.formatWeight(1), "1")
+    }
+}

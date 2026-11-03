@@ -24,7 +24,9 @@ using AstroCore;
 //      --denoise <0..1>       luminance noise reduction;  --denoise-method wavelets | nonLocalMeans | guided | bm3d
 //      --denoise-color <0..1> chroma smoothing
 //      --lum <preset|off>     luminance: ha | lum | haMostly | haOiii | balanced | lumHa | maxLines | meanLines | off (default ha)
-//      --stars                blend RGB stars
+//      --stars                blend RGB stars (from the R, G, B channels, or from --stars-file)
+//      --stars-file <image>   RGB image kept whole and blended as stars;  --stars-blend screen | lighten | add
+//                             --stars-brightness <stops>;  --stars-contrast <-1..1>;  --stars-white (brightest stars to white)
 //      --format <fmt>         png8 | png16 | tiff16 | tiff32 | fits32 | fits16 | jpeg (default png8)
 //      --project <file.json>  load CombineSettings from a saved project / settings file
 //      --assign <file>=<kind> force a channel assignment (kind: L R G B Ha OIII SII Hb)
@@ -33,7 +35,9 @@ using AstroCore;
 //      --dust <kind>:x,y,r[;x,y,r…]  heal dust spots on a channel before anything else (repeatable; a project's
 //                             spots are applied too);  --dust-model surface | radial;  --dust-smooth <px>;  --dust-feather <0..0.5>
 //                             (the three parameters apply to the spots given with --dust)
-//      --gradient <kind>:line:x0,y0,x1,y1 | <kind>:ellipse:cx,cy,a,b[,angle°] | <kind>:poly[:degree]
+//      --gradient <kind>:line:x0,y0,x1,y1 | <kind>:ellipse:cx,cy,a,b[,angle°] | <kind>:poly[:degree] | <kind>:samples[:perRow[,tolerance]]
+//                             (samples: a grid of background samples with a spline / kriging surface;  --gradient-surface spline | kriging;
+//                             --gradient-sample-smooth <0..1>;  --gradient-sample-radius <px>)
 //                             remove a gradient from a channel guided by the drawn shape (repeatable; a project's models are
 //                             applied too);  --gradient-mode subtract | divide;  --gradient-residual none | plane | quadratic
 //                             --gradient-sectors <1|4|8|12>;  --gradient-smooth <bins>;  --gradient-norefine;  --gradient-protect cx,cy,a,b
@@ -114,7 +118,11 @@ switch (command)
         var denoiseMethod = EnumRaw.Parse<DenoiseMethod>(Option("--denoise-method") ?? "wavelets") ?? DenoiseMethod.Wavelets;
         float denoiseColor = F(Option("--denoise-color"), 0);
         var lum = Option("--lum");
-        bool stars = Flag("--stars");
+        var starsFile = Option("--stars-file");
+        bool stars = Flag("--stars") || starsFile != null;
+        var starsBlend = EnumRaw.Parse<StarsBlendMode>(Option("--stars-blend") ?? "");
+        float starsBrightness = F(Option("--stars-brightness"), 0), starsContrast = F(Option("--stars-contrast"), 0);
+        bool starsWhite = Flag("--stars-white");
         var formatArg = Option("--format") ?? "png8";
         var projectArg = Option("--project");
         var cropArg = Option("--crop");
@@ -154,6 +162,9 @@ switch (command)
         if (Option("--gradient-sectors") is string gs && int.TryParse(gs, out var gsv)) gradient.Sectors = gsv;
         if (Option("--gradient-smooth") is string gsm && double.TryParse(gsm, NumberStyles.Float, CultureInfo.InvariantCulture, out var gsmv)) gradient.Smoothness = gsmv;
         if (Flag("--gradient-norefine")) gradient.Refine = false;
+        if (Option("--gradient-surface") is string gsf && EnumRaw.Parse<SampleSurface>(gsf) is SampleSurface gsfv) gradient.Surface = gsfv;
+        if (Option("--gradient-sample-smooth") is string gss && double.TryParse(gss, NumberStyles.Float, CultureInfo.InvariantCulture, out var gssv)) { gradient.SampleSmoothing = gssv; gradient.AutoSmoothing = false; }
+        if (Option("--gradient-sample-radius") is string gsr && double.TryParse(gsr, NumberStyles.Float, CultureInfo.InvariantCulture, out var gsrv)) gradient.SampleRadius = gsrv;
         while (Option("--gradient-protect") is string gp)
         {
             var v = gp.Split(',').Select(t => double.TryParse(t.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var x) ? x : double.NaN).ToArray();
@@ -169,10 +180,12 @@ switch (command)
                 "line" when v.Length == 4 => GradientGesture.Line(v[0], v[1], v[2], v[3]),
                 "ellipse" when v.Length >= 4 => GradientGesture.Ellipse(v[0], v[1], v[2], v[3], (v.Length > 4 ? v[4] : 0) * Math.PI / 180),
                 "poly" or "polynomial" => GradientGesture.Polynomial(),
+                "samples" => GradientGesture.Samples(),
                 _ => null,
             };
             if (gesture == null) { Console.WriteLine($"bad --gradient {g}"); continue; }
             if (gesture.Shape == GradientShape.Polynomial && v.Length > 0) gradient.Degree = (int)v[0];
+            if (gesture.Shape == GradientShape.Samples) { if (v.Length > 0) gradient.GridPerRow = (int)v[0]; if (v.Length > 1) gradient.GridTolerance = v[1]; }
             gradient.Specs[gk] = gradient.NewSpec(gesture);
         }
         if (Environment.GetEnvironmentVariable("CC_NO_GPU") == "1") GpuDenoise.Enabled = false;
@@ -217,6 +230,7 @@ switch (command)
                             {
                                 GradientShape.Line => FormattableString.Invariant($"line {gg.X:0},{gg.Y:0} → {gg.X2:0},{gg.Y2:0}"),
                                 GradientShape.Ellipse => FormattableString.Invariant($"ellipse centre {gg.X:0},{gg.Y:0} axes {gg.A:0}×{gg.B:0} angle {gg.Angle * 180 / Math.PI:0.0}°"),
+                                GradientShape.Samples => $"{EnumRaw.Name(fit.Spec.Surface)} surface through {fit.SampleResults.Count(r => !r.IsRejected)} of {fit.SampleResults.Count} samples",
                                 _ => $"polynomial degree {spec.Degree}",
                             };
                             gradientNote = FormattableString.Invariant($", gradient removed in {(int)t2.Elapsed.TotalMilliseconds} ms ({geo}, {EnumRaw.Name(spec.Mode)}, residual {fit.ResidualSigma:0.00}σ)");
@@ -274,6 +288,21 @@ switch (command)
         settings.Denoise.Amount = denoise; settings.Denoise.Method = denoiseMethod; settings.Denoise.Color = denoiseColor;
         if (lum != null) ApplyLum(lum, settings);
         settings.Stars.Enabled = stars;
+        if (starsBlend is StarsBlendMode sbm) settings.Stars.Mode = sbm;
+        settings.Stars.Brightness = starsBrightness; settings.Stars.Contrast = starsContrast; settings.Stars.Normalize = starsWhite;
+        StarsLayer? starsLayer = null;
+        if (starsFile != null)
+        {
+            try
+            {
+                var f = ImageLoader.Load(starsFile);
+                if (!f.IsColor) { Console.WriteLine($"{starsFile}: not a colour image"); return 1; }
+                starsLayer = new StarsLayer(f.Planes.Take(3).ToList(), f.FileName, f.Path, f.FormatDescription);
+                if (settings.Stars.UseMask && f.FileName.Contains("star", StringComparison.OrdinalIgnoreCase)) settings.Stars.UseMask = false;
+                Console.WriteLine($"stars layer {f.FileName} ({f.FormatDescription})");
+            }
+            catch (Exception e) { Console.WriteLine($"{starsFile}: {e.Message}"); return 1; }
+        }
 
         var t2 = Stopwatch.StartNew();
         var context = RenderContext.Make(settings.Normalization, sources);
@@ -319,13 +348,19 @@ switch (command)
                         var l = src.Pyramid.Level(lvl);
                         planes[k] = crop is PixelRect c ? l.Cropped(c.Scaled(lvl)) : l;
                     }
-                    var res = Renderer.Render(new RenderRequest(planes, s, context, analysis, scale: 1f / (1 << lvl)));
+                    var req = new RenderRequest(planes, s, context, analysis, scale: 1f / (1 << lvl));
+                    if (starsLayer is StarsLayer stl)
+                    {
+                        var r = crop is PixelRect cr ? cr.Scaled(lvl) : new PixelRect(0, 0, stl.Pyramids[0].Level(lvl).Width, stl.Pyramids[0].Level(lvl).Height);
+                        req.Stars = stl.Input(lvl, r.X, r.Y, r.Width, r.Height);
+                    }
+                    var res = Renderer.Render(req);
                     image = res.Image;
                     Console.WriteLine($"{palette.Id}: level {lvl} {image.Width}×{image.Height} rendered in {(int)res.Millis} ms");
                 }
                 else
                 {
-                    image = Renderer.RenderFull(sources, s, context, null, crop)!;
+                    image = Renderer.RenderFull(sources, s, context, null, crop, stars: starsLayer)!;
                     Console.WriteLine($"{palette.Id}: full {image.Width}×{image.Height} rendered in {(int)t3.Elapsed.TotalMilliseconds} ms");
                 }
                 var outPath = Path.Combine(outDir, $"{palette.Id}.{format.FileExtension()}");

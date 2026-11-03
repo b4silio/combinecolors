@@ -49,6 +49,8 @@ public sealed partial class ProjectDocument
     public DustSettings Dust = new();
     /// <summary>Gradient models removed from the loaded channels (oriented coordinates) and the shared protected regions.</summary>
     public GradientSettings Gradient = new();
+    /// <summary>Strength of the hand-painted corrections per channel and the brush defaults (the maps are sidecar files).</summary>
+    public CorrectionSettings Corrections = new();
 
     public Orientation Orientation
     {

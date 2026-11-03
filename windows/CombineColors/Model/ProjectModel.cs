@@ -49,7 +49,7 @@ public static class Change
 {
     public const string Sources = "Sources", Settings = "Settings", Frame = "Frame", Thumbnails = "Thumbnails", SlotThumbnails = "SlotThumbnails",
         Status = "Status", Crop = "Crop", Dust = "Dust", Gradient = "Gradient", Presets = "Presets", RecentSets = "RecentSets", PaletteVisibility = "PaletteVisibility",
-        Pending = "Pending", Hover = "Hover", Context = "Context", Peek = "Peek", Error = "Error", Project = "Project";
+        Pending = "Pending", Hover = "Hover", Context = "Context", Peek = "Peek", Error = "Error", Project = "Project", Stars = "Stars", Corrections = "Corrections";
 }
 
 /// <summary>
@@ -133,6 +133,35 @@ public sealed class ProjectModel : INotifyPropertyChanged
     public Orientation Orientation { get; private set; } = Orientation.Identity;
     public int Rotation => Orientation.Rotation;
 
+    // Stars layer
+    StarsLayer? starsLayer;
+    /// <summary>An RGB image kept whole and blended as stars (oriented like the channels).</summary>
+    public StarsLayer? StarsLayer => starsLayer;
+    /// <summary>Whether the RGB stars block has something to blend: a stars layer or R, G and B channels.</summary>
+    public bool HasStars => starsLayer != null || (sources.ContainsKey(ChannelKind.Red) && sources.ContainsKey(ChannelKind.Green) && sources.ContainsKey(ChannelKind.Blue));
+    /// <summary>Stars layer of a project being opened, loaded once the channels are in (size check).</summary>
+    string? pendingStarsFile;
+
+    // Manual corrections
+    /// <summary>Strength per channel and brush defaults (stored in the project).</summary>
+    public CorrectionSettings Corrections { get; private set; } = new();
+    readonly Dictionary<ChannelKind, CorrectionMap> correctionMaps = new();
+    /// <summary>Painted maps applied to the channels (sidecar files next to the images).</summary>
+    public IReadOnlyDictionary<ChannelKind, CorrectionMap> CorrectionMaps => correctionMaps;
+    /// <summary>Channel shown in the corrections editor (null = editor closed).</summary>
+    public ChannelKind? CorrectionEditing { get; private set; }
+    /// <summary>Working copy while the editor is open, painted on directly.</summary>
+    public CorrectionMap? CorrectionDraft { get; private set; }
+    /// <summary>Bumped by every stroke so the views refresh (the map is a reference type).</summary>
+    public int CorrectionVersion { get; private set; }
+    readonly List<CorrectionMap> correctionUndo = new();
+    bool correctionShowMap = true;
+    /// <summary>Tint overlay of the map on the preview.</summary>
+    public bool CorrectionShowMap { get => correctionShowMap; set { if (correctionShowMap == value) return; correctionShowMap = value; Notify(Change.Corrections); } }
+    bool correctionBypass;
+    /// <summary>Shows the edited channel without its corrections (before / after).</summary>
+    public bool CorrectionBypass { get => correctionBypass; set { if (correctionBypass == value) return; correctionBypass = value; Notify(Change.Corrections); if (CorrectionEditing != null) ScheduleRender(); } }
+
     // Dust spots
     readonly Dictionary<ChannelKind, PlanarImage> originalImages = new();
     /// <summary>Loaded (oriented) planes before dust healing; the same instance as the channel image when a channel has no spots.</summary>
@@ -175,7 +204,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
         {
             bool changed = !Equals(gradientDraft, value);
             gradientDraft = value;
-            if (changed) { Notify(Change.Gradient); if (GradientEditing != null) ScheduleGradientPreview(); }
+            if (changed) { Notify(Change.Gradient); if (GradientEditing != null && !gradientDraftSilently) ScheduleGradientPreview(); }
         }
     }
     /// <summary>Channel shown in the gradient editor (null = editor closed).</summary>
@@ -188,6 +217,10 @@ public sealed class ProjectModel : INotifyPropertyChanged
     public bool GradientProtectMode { get => gradientProtectMode; set { if (gradientProtectMode == value) return; gradientProtectMode = value; Notify(Change.Gradient); } }
     Guid? selectedGradientRegion;
     public Guid? SelectedGradientRegion { get => selectedGradientRegion; set { if (selectedGradientRegion == value) return; selectedGradientRegion = value; Notify(Change.Gradient); } }
+    Guid? selectedGradientSample;
+    public Guid? SelectedGradientSample { get => selectedGradientSample; set { if (selectedGradientSample == value) return; selectedGradientSample = value; Notify(Change.Gradient); } }
+    /// <summary>Set while the model writes a generated grid back into the draft (no preview round trip).</summary>
+    bool gradientDraftSilently;
     /// <summary>The latest preview fit of the edited channel (refined guide, residual, timing).</summary>
     public GradientFitInfo? GradientFit { get; private set; }
     IDisposable? gradientPreviewTimer;
@@ -236,7 +269,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
     {
         get
         {
-            var k = PeekChannel ?? DustEditing ?? GradientEditing;
+            var k = PeekChannel ?? DustEditing ?? GradientEditing ?? CorrectionEditing;
             if (k is ChannelKind kind && sources.ContainsKey(kind)) return PeekSettings(kind, settings);
             return settings;
         }
@@ -479,6 +512,74 @@ public sealed class ProjectModel : INotifyPropertyChanged
         Notify(Change.Pending);
     }
 
+    /// <summary>Keeps a colour file whole as the stars layer (blended on top; the channels stay as they are).</summary>
+    public void AssignColorFileAsStars(PendingFile pending)
+    {
+        PendingColorFile = null;
+        SetStarsLayer(pending.File);
+    }
+
+    /// <summary>Sets the stars layer from a colour file (oriented like the channels; the size must match the loaded channels).</summary>
+    public void SetStarsLayer(LoadedFile f)
+    {
+        if (f.Planes.Count < 3) { ErrorMessage = $"{f.FileName} is not a colour image."; return; }
+        if (RequiredFileSize is Size sz && ((int)sz.Width != f.Width || (int)sz.Height != f.Height))
+        {
+            ErrorMessage = $"{f.FileName}: {f.Width}×{f.Height} does not match the loaded channels ({(int)sz.Width}×{(int)sz.Height}).";
+            return;
+        }
+        var orient = Orientation;
+        IsLoading = true;
+        LoadingMessage = "Analysing stars layer…";
+        Task.Run(() =>
+        {
+            var layer = new StarsLayer(f.Planes.Take(3).Select(p => orient.Apply(p)).ToList(), f.FileName, f.Path, f.FormatDescription);
+            ui.Post(() =>
+            {
+                starsLayer = layer;
+                var s = settings.Clone(); bool changed = false;
+                if (!s.Stars.Enabled) { s.Stars.Enabled = true; changed = true; }
+                if (s.Stars.UseMask && f.FileName.Contains("star", StringComparison.OrdinalIgnoreCase)) { s.Stars.UseMask = false; changed = true; }
+                IsLoading = false;
+                if (changed) Settings = s;
+                Notify(Change.Stars); Notify(Change.Sources);
+                ScheduleRender();
+                ScheduleThumbnails(TimeSpan.FromSeconds(0.3));
+                ScheduleRecentStateSave();
+            });
+        });
+    }
+
+    public void LoadStarsLayer(string path)
+    {
+        IsLoading = true;
+        LoadingMessage = $"Loading {Path.GetFileName(path)}…";
+        Task.Run(() =>
+        {
+            try
+            {
+                var f = ImageLoader.Load(path);
+                ui.Post(() =>
+                {
+                    IsLoading = false;
+                    if (f.IsColor) SetStarsLayer(f); else ErrorMessage = $"{f.FileName} is not a colour image (a stars layer needs R, G and B).";
+                });
+            }
+            catch (Exception e) { ui.Post(() => { IsLoading = false; ErrorMessage = e.Message; }); }
+        });
+    }
+
+    public void RemoveStarsLayer()
+    {
+        if (starsLayer == null) return;
+        starsLayer = null;
+        if (!HasStars && settings.Stars.Enabled) UpdateSettings(s => s.Stars.Enabled = false);
+        Notify(Change.Stars); Notify(Change.Sources);
+        ScheduleRender();
+        ScheduleThumbnails(TimeSpan.FromSeconds(0.3));
+        ScheduleRecentStateSave();
+    }
+
     /// <summary>Assigns the planes of a colour file to R, G, B.</summary>
     public void AssignColorFileAsRGB(PendingFile pending)
     {
@@ -495,29 +596,45 @@ public sealed class ProjectModel : INotifyPropertyChanged
         if (items.Count == 0) return;
         IsLoading = true;
         LoadingMessage = $"Analysing {string.Join(", ", items.Select(i => i.Kind.ShortName()))}…";
-        var cropNow = crop; var orient = Orientation; var dust = Dust.Clone(); var gradient = Gradient.Clone();
+        var cropNow = crop; var orient = Orientation; var dust = Dust.Clone(); var gradient = Gradient.Clone(); var corr = Corrections.Clone();
         Task.Run(() =>
         {
             var built = new ChannelSource[items.Count];
             var originals = new PlanarImage[items.Count];
+            var maps = new CorrectionMap?[items.Count];
             Parallel.For(0, items.Count, i =>
             {
                 var it = items[i];
                 var oriented = orient.Apply(it.Plane);
-                var healed = Process(oriented, it.Kind, dust, gradient);
+                // A stored correction map (sidecar) comes in the file's orientation.
+                CorrectionMap? map = null;
+                if (it.Path != null && CorrectionMap.Read(it.Path, it.Plane.Width, it.Plane.Height) is CorrectionMap stored)
+                {
+                    var m = stored;
+                    if (orient.Flipped) m = m.Applying(OrientationOp.FlipHorizontal);
+                    for (int r = 0; r < orient.Rotation; r++) m = m.Applying(OrientationOp.RotateClockwise);
+                    map = m;
+                }
+                var healed = Process(oriented, it.Kind, dust, gradient, map == null ? null : (map, (float)corr.StrengthFor(it.Kind)));
                 built[i] = new ChannelSource(it.Kind, healed, it.FileName, it.Path, it.Format);
                 originals[i] = oriented;
+                maps[i] = map;
             });
             var cropped = built.Select(b => cropNow == null ? b : new ChannelSource(b, cropNow)).ToArray();
             var thumbs = cropped.Select(c => (c.Kind, SlotThumbnail(c))).ToArray();
             ui.Post(() =>
             {
-                for (int i = 0; i < built.Length; i++) { baseSources[built[i].Kind] = built[i]; sources[cropped[i].Kind] = cropped[i]; originalImages[built[i].Kind] = originals[i]; }
+                for (int i = 0; i < built.Length; i++)
+                {
+                    baseSources[built[i].Kind] = built[i]; sources[cropped[i].Kind] = cropped[i]; originalImages[built[i].Kind] = originals[i];
+                    if (maps[i] is CorrectionMap m) correctionMaps[built[i].Kind] = m; else correctionMaps.Remove(built[i].Kind);
+                }
                 foreach (var (k, t) in thumbs) slotThumbnails[k] = t;
                 IsLoading = false;
-                Notify(Change.SlotThumbnails);
+                Notify(Change.SlotThumbnails); Notify(Change.Corrections);
                 SourcesChanged();
                 OpenEditorFromLaunchArgument();
+                if (pendingStarsFile is string sp) { pendingStarsFile = null; LoadStarsLayer(sp); }
             });
         });
     }
@@ -540,6 +657,8 @@ public sealed class ProjectModel : INotifyPropertyChanged
         gradientDraft?.Specs.Remove(kind);
         gradientPreviewed.Remove(kind);
         if (GradientEditing == kind) { GradientEditing = null; gradientDraft = null; GradientFit = null; gradientHealed = null; Notify(Change.Gradient); }
+        correctionMaps.Remove(kind); Corrections.Strength.Remove(kind);
+        if (CorrectionEditing == kind) { CorrectionEditing = null; CorrectionDraft = null; correctionUndo.Clear(); Notify(Change.Corrections); }
         if (sources.Count == 0) { Frame = null; crop = null; cropDraft = null; cropEditing = false; Notify(Change.Crop); Notify(Change.Frame); }
         Notify(Change.SlotThumbnails);
         SourcesChanged();
@@ -551,7 +670,9 @@ public sealed class ProjectModel : INotifyPropertyChanged
         crop = null; cropDraft = null; cropEditing = false; Orientation = Orientation.Identity;
         originalImages.Clear(); Dust = new DustSettings(); dustDraft = null; DustEditing = null; dustPreviewed.Clear();
         Gradient = new GradientSettings(); gradientDraft = null; GradientEditing = null; gradientPreviewed.Clear(); GradientFit = null; gradientHealed = null;
-        Notify(Change.Crop); Notify(Change.Dust); Notify(Change.Gradient); Notify(Change.Frame); Notify(Change.SlotThumbnails); Notify(Change.Thumbnails);
+        starsLayer = null; pendingStarsFile = null;
+        Corrections = new CorrectionSettings(); correctionMaps.Clear(); CorrectionEditing = null; CorrectionDraft = null; correctionUndo.Clear();
+        Notify(Change.Crop); Notify(Change.Dust); Notify(Change.Gradient); Notify(Change.Frame); Notify(Change.SlotThumbnails); Notify(Change.Thumbnails); Notify(Change.Stars); Notify(Change.Corrections);
         SourcesChanged();
     }
 
@@ -585,12 +706,23 @@ public sealed class ProjectModel : INotifyPropertyChanged
         var dust = Dust; var draft = dustDraft; var editing = DustEditing;
         var gradient = Gradient; var gdraft = gradientDraft; var gediting = GradientEditing;
         var originals = new Dictionary<ChannelKind, PlanarImage>(originalImages);
+        // Correction maps (and the draft being painted) turn with the image.
+        foreach (var k in correctionMaps.Keys.ToList()) correctionMaps[k] = correctionMaps[k].Applying(op);
+        if (CorrectionDraft != null)
+        {
+            CorrectionDraft = CorrectionDraft.Applying(op);
+            for (int i = 0; i < correctionUndo.Count; i++) correctionUndo[i] = correctionUndo[i].Applying(op);
+            CorrectionVersion++;
+        }
+        var maps = new Dictionary<ChannelKind, CorrectionMap>(correctionMaps); var corr = Corrections.Clone();
+        var stars = starsLayer;
         IsLoading = true;
         LoadingMessage = op == OrientationOp.RotateClockwise ? "Rotating…" : "Flipping…";
         Frame = null;
-        Notify(Change.Frame); Notify(Change.Dust); Notify(Change.Gradient);
+        Notify(Change.Frame); Notify(Change.Dust); Notify(Change.Gradient); Notify(Change.Corrections);
         Task.Run(() =>
         {
+            var newStars = stars?.Applying(op);
             var kinds = baseCopy.Keys.ToArray();
             var newBase = new ChannelSource[kinds.Length]; var newCur = new ChannelSource[kinds.Length]; var newOrig = new PlanarImage[kinds.Length];
             Parallel.For(0, kinds.Length, i =>
@@ -600,7 +732,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
                 // The edited channel keeps showing its draft spots / model.
                 var d = (k == editing ? draft : null) ?? dust;
                 var g = (k == gediting ? gdraft : null) ?? gradient;
-                var healed = Process(orig, k, d, g);
+                var healed = Process(orig, k, d, g, maps.TryGetValue(k, out var cm) ? (cm, (float)corr.StrengthFor(k)) : null);
                 var b = new ChannelSource(k, healed, old.FileName, old.Path, old.FormatDescription);
                 newBase[i] = b; newCur[i] = newCrop == null ? b : new ChannelSource(b, newCrop); newOrig[i] = orig;
             });
@@ -609,6 +741,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
             {
                 baseSources.Clear(); sources.Clear(); originalImages.Clear();
                 for (int i = 0; i < kinds.Length; i++) { baseSources[kinds[i]] = newBase[i]; sources[kinds[i]] = newCur[i]; originalImages[kinds[i]] = newOrig[i]; }
+                starsLayer = newStars;
                 foreach (var (k, t) in thumbs) slotThumbnails[k] = t;
                 IsLoading = false;
                 postStretchCache.Clear();
@@ -642,8 +775,13 @@ public sealed class ProjectModel : INotifyPropertyChanged
         Gradient.Specs.TryGetValue(newKind, out var otherGradient); GradientSpec? otherGradientDraft = null; gradientDraft?.Specs.TryGetValue(newKind, out otherGradientDraft);
         if (Gradient.Specs.TryGetValue(kind, out var gsp)) Gradient.Specs[newKind] = gsp; else Gradient.Specs.Remove(newKind);
         if (gradientDraft != null) { if (gradientDraft.Specs.TryGetValue(kind, out var gdsp)) gradientDraft.Specs[newKind] = gdsp; else gradientDraft.Specs.Remove(newKind); }
+        correctionMaps.TryGetValue(newKind, out var otherMap); double? otherStrength = Corrections.Strength.TryGetValue(newKind, out var os) ? os : null;
+        if (correctionMaps.TryGetValue(kind, out var cmap)) correctionMaps[newKind] = cmap; else correctionMaps.Remove(newKind);
+        if (Corrections.Strength.TryGetValue(kind, out var cstr)) Corrections.Strength[newKind] = cstr; else Corrections.Strength.Remove(newKind);
         if (otherBase != null && otherCur != null)
         {
+            if (otherMap != null) correctionMaps[kind] = otherMap; else correctionMaps.Remove(kind);
+            if (otherStrength is double ost) Corrections.Strength[kind] = ost; else Corrections.Strength.Remove(kind);
             baseSources[kind] = new ChannelSource(otherBase, kind); sources[kind] = new ChannelSource(otherCur, kind);
             if (otherThumb != null) slotThumbnails[kind] = otherThumb; else slotThumbnails.Remove(kind);
             if (otherOrig != null) originalImages[kind] = otherOrig; else originalImages.Remove(kind);
@@ -657,7 +795,10 @@ public sealed class ProjectModel : INotifyPropertyChanged
             baseSources.Remove(kind); sources.Remove(kind); slotThumbnails.Remove(kind);
             originalImages.Remove(kind); Dust.Spots.Remove(kind); dustDraft?.Spots.Remove(kind);
             Gradient.Specs.Remove(kind); gradientDraft?.Specs.Remove(kind);
+            correctionMaps.Remove(kind); Corrections.Strength.Remove(kind);
         }
+        if (CorrectionEditing == kind) CorrectionEditing = newKind;
+        Notify(Change.Corrections);
         if (dustPreviewed.Remove(kind)) dustPreviewed.Add(newKind);
         if (DustEditing == kind) DustEditing = newKind;
         if (gradientPreviewed.Remove(kind)) gradientPreviewed.Add(newKind);
@@ -928,11 +1069,16 @@ public sealed class ProjectModel : INotifyPropertyChanged
         {
             // Different normalisation than the live context: render with a context of its own.
             var snapshotCtx = RenderContext.Make(shown.Normalization, srcs);
-            renderer.Submit(new PreviewRequest { Sources = srcs, Settings = shown, Context = snapshotCtx, AnalysisSamples = AnalysisSamples, FixedPostStretch = null, VisibleRect = visible, Scale = viewport.Scale, PixelBudget = budget, Generation = renderGeneration });
+            renderer.Submit(new PreviewRequest { Sources = srcs, Settings = shown, Context = snapshotCtx, AnalysisSamples = AnalysisSamples, FixedPostStretch = null, VisibleRect = visible, Scale = viewport.Scale, PixelBudget = budget, Generation = renderGeneration, Stars = starsLayer });
             return;
         }
         List<ResolvedStretch>? fixedStretch = shown.StretchStage == StretchStage.PostCombine && postStretchCache.TryGetValue(PostStretchKey(shown), out var ps) ? ps : null;
-        renderer.Submit(new PreviewRequest { Sources = srcs, Settings = shown, Context = ctx, AnalysisSamples = AnalysisSamples, FixedPostStretch = fixedStretch, VisibleRect = visible, Scale = viewport.Scale, PixelBudget = budget, Generation = renderGeneration });
+        // The corrections editor paints on the channel live: the draft goes with the render (a copy,
+        // the renderer runs while the next stroke lands); the source shows the uncorrected channel meanwhile.
+        (CorrectionMap map, float strength, ChannelKind kind)? correction = null;
+        if (CorrectionEditing is ChannelKind ck && CorrectionDraft is CorrectionMap cd && !correctionBypass && !cd.IsEmpty)
+            correction = (cd.Copy(), (float)Corrections.StrengthFor(ck), ck);
+        renderer.Submit(new PreviewRequest { Sources = srcs, Settings = shown, Context = ctx, AnalysisSamples = AnalysisSamples, FixedPostStretch = fixedStretch, VisibleRect = visible, Scale = viewport.Scale, PixelBudget = budget, Generation = renderGeneration, Stars = starsLayer, Correction = correction });
     }
 
     public void ScheduleThumbnails(TimeSpan delay)
@@ -953,7 +1099,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
         thumbnailGeneration = thumbnailer.Submit(new ThumbnailCoordinator.Job
         {
             Palettes = Palettes.Available(AvailableKinds), Sources = new Dictionary<ChannelKind, ChannelSource>(sources), Settings = settings.Clone(), Context = ctx,
-            AnalysisSamples = AnalysisSamples, Region = region, MaxPixels = 90_000,
+            AnalysisSamples = AnalysisSamples, Region = region, MaxPixels = 90_000, Stars = starsLayer,
         });
     }
 
@@ -1039,13 +1185,13 @@ public sealed class ProjectModel : INotifyPropertyChanged
             s.Stars.Enabled = false;
         }
         postStretchCache.TryGetValue(PostStretchKey(s), out var fixedStretch);
-        var srcs = new Dictionary<ChannelKind, ChannelSource>(sources); var cropNow = crop;
+        var srcs = new Dictionary<ChannelKind, ChannelSource>(sources); var cropNow = crop; var stars = starsLayer;
         ExportProgress = 0; Notify(Change.Status);
         Task.Run(() =>
         {
             try
             {
-                var img = Renderer.RenderFull(srcs, s, ctx, fixedStretch, cropNow, progress: p => ui.Post(() => { ExportProgress = p * 0.9; Notify(Change.Status); }));
+                var img = Renderer.RenderFull(srcs, s, ctx, fixedStretch, cropNow, progress: p => ui.Post(() => { ExportProgress = p * 0.9; Notify(Change.Status); }), stars: stars);
                 if (img == null) { ui.Post(() => { ExportProgress = null; Notify(Change.Status); completion(null); }); return; }
                 RasterWriter.Write(img.Planes, path, format);
                 ui.Post(() => { ExportProgress = null; StatusText = $"Exported {Path.GetFileName(path)}"; completion(null); });
@@ -1069,7 +1215,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
 
     public ProjectDocument ProjectDocument()
     {
-        var doc = new ProjectDocument { Settings = settings.Clone(), Crop = crop, Orientation = Orientation, Dust = Dust.Clone(), Gradient = Gradient.Clone(), Presets = Presets.Select(p => p.Clone()).ToList() };
+        var doc = new ProjectDocument { Settings = settings.Clone(), Crop = crop, Orientation = Orientation, Dust = Dust.Clone(), Gradient = Gradient.Clone(), Corrections = Corrections.Clone(), Presets = Presets.Select(p => p.Clone()).ToList(), StarsFile = starsLayer?.Path };
         doc.Channels = sources.Values.OrderBy(s => s.Kind.RawValue(), StringComparer.Ordinal).Where(s => s.Path != null).Select(s => new ProjectDocument.ChannelRef(s.Kind, s.Path!)).ToList();
         return doc;
     }
@@ -1097,7 +1243,9 @@ public sealed class ProjectModel : INotifyPropertyChanged
         Orientation = doc.Orientation;
         Dust = doc.Dust.Clone();
         Gradient = doc.Gradient.Clone();
-        Notify(Change.Dust); Notify(Change.Gradient);
+        Corrections = doc.Corrections.Clone();
+        pendingStarsFile = doc.StarsFile;
+        Notify(Change.Dust); Notify(Change.Gradient); Notify(Change.Corrections);
         if (refs.Count == 0) { Settings = doc.Settings.Clone(); Crop = doc.Crop; return; }
         IsLoading = true;
         LoadingMessage = "Loading project…";
@@ -1397,20 +1545,21 @@ public sealed class ProjectModel : INotifyPropertyChanged
     }
 
     /// <summary>Heals <paramref name="kinds"/> from their originals with the applied spots and rebuilds their sources (statistics, star mask, thumbnails), then the render context.</summary>
-    void RebuildHealed(HashSet<ChannelKind> kinds)
+    void RebuildHealed(HashSet<ChannelKind> kinds, Action? completion = null)
     {
         var todo = kinds.Where(k => baseSources.ContainsKey(k) && originalImages.ContainsKey(k)).ToArray();
-        if (todo.Length == 0) { ScheduleRender(); return; }
+        if (todo.Length == 0) { ScheduleRender(); completion?.Invoke(); return; }
         var baseCopy = new Dictionary<ChannelKind, ChannelSource>(baseSources); var originals = new Dictionary<ChannelKind, PlanarImage>(originalImages); var dust = Dust.Clone(); var gradient = Gradient.Clone(); var cropNow = crop;
+        var maps = new Dictionary<ChannelKind, CorrectionMap>(correctionMaps); var corr = Corrections.Clone();
         IsLoading = true;
-        LoadingMessage = gradient.IsEmpty ? "Healing dust spots…" : "Processing channels…";
+        LoadingMessage = gradient.IsEmpty && maps.Count == 0 ? "Healing dust spots…" : "Processing channels…";
         Task.Run(() =>
         {
             var outB = new ChannelSource[todo.Length]; var outC = new ChannelSource[todo.Length];
             Parallel.For(0, todo.Length, i =>
             {
                 var k = todo[i]; var old = baseCopy[k];
-                var healed = Process(originals[k], k, dust, gradient);
+                var healed = Process(originals[k], k, dust, gradient, maps.TryGetValue(k, out var cm) ? (cm, (float)corr.StrengthFor(k)) : null);
                 var b = new ChannelSource(k, healed, old.FileName, old.Path, old.FormatDescription);
                 outB[i] = b; outC[i] = cropNow == null ? b : new ChannelSource(b, cropNow);
             });
@@ -1422,14 +1571,185 @@ public sealed class ProjectModel : INotifyPropertyChanged
                 IsLoading = false;
                 Notify(Change.SlotThumbnails);
                 SourcesChanged();
+                completion?.Invoke();
             });
         });
     }
-    // ---- Gradient removal ------------------------------------------------------------------------
 
-    /// <summary>A loaded (oriented) channel after dust healing and gradient removal, in that order.</summary>
-    public static PlanarImage Process(PlanarImage oriented, ChannelKind kind, DustSettings dust, GradientSettings gradient)
-        => GradientRemoval.Correct(DustRemoval.Heal(oriented, dust.SpotsFor(kind)), kind, gradient);
+    /// <summary>A loaded (oriented) channel after dust healing, gradient removal and the painted corrections, in that order.</summary>
+    public static PlanarImage Process(PlanarImage oriented, ChannelKind kind, DustSettings dust, GradientSettings gradient, (CorrectionMap map, float strength)? correction = null)
+    {
+        var healed = DustRemoval.Heal(oriented, dust.SpotsFor(kind));
+        var corrected = GradientRemoval.Correct(healed, kind, gradient);
+        if (correction is not (CorrectionMap map, float strength) || map.IsEmpty) return corrected;
+        return map.Applied(corrected, strength);
+    }
+
+    // ---- Manual corrections ----------------------------------------------------------------------
+
+    /// <summary>Strength (stops) of the edited channel's map.</summary>
+    public double CorrectionStrength
+    {
+        get => CorrectionEditing is ChannelKind k ? Corrections.StrengthFor(k) : CorrectionSettings.DefaultStrength;
+        set { if (CorrectionEditing is not ChannelKind k) return; Corrections.Strength[k] = value; Notify(Change.Corrections); ScheduleRender(); }
+    }
+    double LongSide => ImageSize is Size s ? Math.Max(s.Width, s.Height) : 1000;
+    /// <summary>Brush radius in image pixels (the settings keep it as a fraction of the long side).</summary>
+    public double CorrectionBrushRadius
+    {
+        get => Corrections.BrushRadius * LongSide;
+        set { Corrections.BrushRadius = Math.Min(Math.Max(value / LongSide, 0.003), 0.2); Notify(Change.Corrections); }
+    }
+    public double CorrectionBrushFlow { get => Corrections.BrushFlow; set { Corrections.BrushFlow = Math.Min(Math.Max(value, 0.02), 1); Notify(Change.Corrections); } }
+    public double CorrectionBrushFeather { get => Corrections.BrushFeather; set { Corrections.BrushFeather = Math.Min(Math.Max(value, 0), 1); Notify(Change.Corrections); } }
+    public bool CorrectionDarken { get => Corrections.Darken; set { Corrections.Darken = value; Notify(Change.Corrections); } }
+    public bool CanUndoCorrection => correctionUndo.Count > 0;
+    public bool HasCorrection(ChannelKind kind) => correctionMaps.ContainsKey(kind);
+
+    /// <summary>
+    /// Opens the corrections editor on a channel: the preview shows that channel alone, without its
+    /// committed map, with the draft (a copy of the committed map) painted on live.
+    /// </summary>
+    public void BeginCorrectionEditing(ChannelKind kind)
+    {
+        if (!sources.ContainsKey(kind) || ImageSize is not Size size) return;
+        if (CropEditing) CancelCropEditing();
+        if (DustEditing != null) CancelDustEditing();
+        if (GradientEditing != null) CancelGradientEditing();
+        PeekChannel = null;
+        if (CorrectionEditing is ChannelKind k && k != kind) { CommitCorrectionEditing(kind); return; }
+        CorrectionDraft = correctionMaps.TryGetValue(kind, out var m) ? m.Copy() : new CorrectionMap((int)size.Width, (int)size.Height);
+        correctionUndo.Clear();
+        correctionBypass = false;
+        CorrectionEditing = kind;
+        CorrectionVersion++;
+        Notify(Change.Corrections);
+        ShowUncorrectedSource(kind);
+    }
+
+    /// <summary>Swaps the edited channel's source for its uncorrected version (dust-healed, gradient-corrected).</summary>
+    void ShowUncorrectedSource(ChannelKind k)
+    {
+        if (!correctionMaps.ContainsKey(k) || !originalImages.TryGetValue(k, out var orig) || !baseSources.TryGetValue(k, out var baseSrc)) { ScheduleRender(); return; }
+        var dust = Dust.Clone(); var gradient = Gradient.Clone(); var cropNow = crop;
+        IsLoading = true;
+        LoadingMessage = $"Preparing {k.ShortName()}…";
+        Task.Run(() =>
+        {
+            var plain = Process(orig, k, dust, gradient);
+            var b = new ChannelSource(baseSrc, plain);
+            var c = cropNow == null ? b : new ChannelSource(b, cropNow);
+            ui.Post(() =>
+            {
+                if (CorrectionEditing != k) return;
+                baseSources[k] = b;
+                sources[k] = c;
+                IsLoading = false;
+                Notify(Change.Sources);
+                ScheduleRender();
+            });
+        });
+    }
+
+    public void SwitchCorrectionChannel(ChannelKind kind)
+    {
+        if (CorrectionEditing == null || CorrectionEditing == kind || !sources.ContainsKey(kind)) return;
+        CommitCorrectionEditing(kind);
+    }
+
+    /// <summary>Paints a stroke segment (image points) with the current brush; invert swaps darken / brighten (Alt).</summary>
+    public void PaintCorrection(Point a, Point b, bool invert)
+    {
+        if (CorrectionEditing == null || CorrectionDraft is not CorrectionMap d) return;
+        float sign = (Corrections.Darken != invert) ? -1 : 1;
+        d.Stroke(a.X, a.Y, b.X, b.Y, CorrectionBrushRadius, sign * (float)Corrections.BrushFlow, (float)(1 - Corrections.BrushFeather));
+        CorrectionVersion++;
+        Notify(Change.Corrections);
+        ScheduleRender();
+    }
+
+    /// <summary>Start of a stroke: the undo snapshot.</summary>
+    public void BeginCorrectionStroke()
+    {
+        if (CorrectionDraft is not CorrectionMap d) return;
+        correctionUndo.Add(d.Copy());
+        if (correctionUndo.Count > 24) correctionUndo.RemoveAt(0);
+    }
+
+    public void UndoCorrection()
+    {
+        if (CorrectionEditing == null || correctionUndo.Count == 0) return;
+        CorrectionDraft = correctionUndo[^1];
+        correctionUndo.RemoveAt(correctionUndo.Count - 1);
+        CorrectionVersion++;
+        Notify(Change.Corrections);
+        ScheduleRender();
+    }
+
+    public void ClearCorrection()
+    {
+        if (CorrectionEditing == null || CorrectionDraft is not CorrectionMap d || d.IsEmpty) return;
+        BeginCorrectionStroke();
+        d.Clear();
+        CorrectionVersion++;
+        Notify(Change.Corrections);
+        ScheduleRender();
+    }
+
+    /// <summary>Applies the draft: the map is stored (sidecar), the channel re-processed.</summary>
+    public void CommitCorrectionEditing(ChannelKind? reopen = null)
+    {
+        if (CorrectionEditing is not ChannelKind k) return;
+        var draft = CorrectionDraft;
+        CorrectionEditing = null;
+        CorrectionDraft = null;
+        correctionUndo.Clear();
+        correctionBypass = false;
+        if (draft is CorrectionMap d && !d.IsEmpty)
+        {
+            correctionMaps[k] = d;
+            if (baseSources.TryGetValue(k, out var src) && src.Path is string path)
+            {
+                try { d.Unoriented(Orientation).Write(path); } catch (Exception e) { ErrorMessage = $"The correction map could not be saved: {e.Message}"; }
+            }
+        }
+        else
+        {
+            correctionMaps.Remove(k);
+            if (baseSources.TryGetValue(k, out var src) && src.Path is string path) CorrectionMap.Remove(path);
+        }
+        CorrectionVersion++;
+        Notify(Change.Corrections);
+        ScheduleRecentStateSave();
+        if (reopen is ChannelKind next) RebuildHealed([k], () => BeginCorrectionEditing(next));
+        else RebuildHealed([k]);
+    }
+
+    /// <summary>Drops the draft; the channel goes back to its committed state.</summary>
+    public void CancelCorrectionEditing()
+    {
+        if (CorrectionEditing is not ChannelKind k) return;
+        CorrectionEditing = null;
+        CorrectionDraft = null;
+        correctionUndo.Clear();
+        correctionBypass = false;
+        CorrectionVersion++;
+        Notify(Change.Corrections);
+        if (correctionMaps.ContainsKey(k)) RebuildHealed([k]); else ScheduleRender();
+    }
+
+    /// <summary>Removes a channel's map (outside the editor).</summary>
+    public void RemoveCorrection(ChannelKind kind)
+    {
+        if (!correctionMaps.ContainsKey(kind)) return;
+        if (CorrectionEditing == kind) CancelCorrectionEditing();
+        correctionMaps.Remove(kind);
+        if (baseSources.TryGetValue(kind, out var src) && src.Path is string path) CorrectionMap.Remove(path);
+        Notify(Change.Corrections);
+        RebuildHealed([kind]);
+    }
+
+    // ---- Gradient removal ------------------------------------------------------------------------
 
     /// <summary>The model the editor currently shows for a channel (the draft while editing, else the applied one).</summary>
     public GradientSpec? GradientSpecFor(ChannelKind kind) => (gradientDraft ?? Gradient).SpecFor(kind);
@@ -1453,6 +1773,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
         if (GradientEditing != kind) gradientHealed = null;
         GradientEditing = kind;
         selectedGradientRegion = null;
+        selectedGradientSample = null;
         GradientFit = null;
         Notify(Change.Gradient);
         ScheduleGradientPreview();
@@ -1466,6 +1787,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
         GradientEditing = kind;
         gradientHealed = null;
         selectedGradientRegion = null;
+        selectedGradientSample = null;
         GradientFit = null;
         Notify(Change.Gradient);
         ScheduleGradientPreview();
@@ -1489,6 +1811,8 @@ public sealed class ProjectModel : INotifyPropertyChanged
         nd.Specs[k] = spec.Clone();
         nd.Mode = spec.Mode; nd.Residual = spec.Residual; nd.Sectors = spec.Sectors; nd.Smoothness = spec.Smoothness;
         nd.Degree = spec.Degree; nd.Refine = spec.Refine; nd.Shape = spec.Gesture.Shape;
+        nd.Surface = spec.Surface; nd.SampleSmoothing = spec.SampleSmoothing; nd.AutoSmoothing = spec.AutoSmoothing; nd.SampleRadius = spec.SampleRadius;
+        nd.GridPerRow = spec.GridPerRow; nd.GridTolerance = spec.GridTolerance;
         GradientDraft = nd;
     }
 
@@ -1507,7 +1831,75 @@ public sealed class ProjectModel : INotifyPropertyChanged
         nd.Shape = shape;
         if (nd.Specs.TryGetValue(k, out var spec)) spec.Gesture = spec.Gesture.ConvertedTo(shape);
         else if (shape == GradientShape.Polynomial) nd.Specs[k] = nd.NewSpec(GradientGesture.Polynomial());
+        else if (shape == GradientShape.Samples) nd.Specs[k] = nd.NewSpec(GradientGesture.Samples());
+        selectedGradientSample = null;
         GradientDraft = nd;
+    }
+
+    // Background samples of the edited channel (Samples shape).
+
+    public IReadOnlyList<BackgroundSample> GradientSamples => EditedGradientSpec?.Samples ?? (IReadOnlyList<BackgroundSample>)[];
+    /// <summary>Radius of the sample discs shown (the model's, or the automatic one).</summary>
+    public double GradientSampleRadius => EditedGradientSpec is GradientSpec sp && ImageSize is Size sz ? sp.ResolvedSampleRadius((int)sz.Width, (int)sz.Height) : 20;
+
+    public void AddGradientSample(Point p)
+    {
+        if (GradientEditing is not ChannelKind k || gradientDraft == null) return;
+        var nd = gradientDraft.Clone();
+        if (!nd.Specs.TryGetValue(k, out var spec)) { spec = nd.NewSpec(GradientGesture.Samples()); nd.Specs[k] = spec; }
+        if (spec.Gesture.Shape != GradientShape.Samples) return;
+        var sample = new BackgroundSample(p.X, p.Y);
+        spec.Samples.Add(sample);
+        selectedGradientSample = sample.Id;
+        GradientDraft = nd;
+    }
+
+    /// <summary>Replaces the samples (moves from the preview).</summary>
+    public void UpdateGradientSamples(List<BackgroundSample> samples)
+    {
+        if (GradientEditing is not ChannelKind k || gradientDraft == null || !gradientDraft.Specs.TryGetValue(k, out var sp) || sp.Gesture.Shape != GradientShape.Samples) return;
+        var nd = gradientDraft.Clone();
+        nd.Specs[k].Samples = samples.Select(s => s.Clone()).ToList();
+        GradientDraft = nd;
+    }
+
+    public void RemoveSelectedGradientSample()
+    {
+        if (GradientEditing is not ChannelKind k || selectedGradientSample is not Guid id || gradientDraft == null || !gradientDraft.Specs.ContainsKey(k)) return;
+        var nd = gradientDraft.Clone();
+        nd.Specs[k].Samples.RemoveAll(s => s.Id == id);
+        selectedGradientSample = null;
+        GradientDraft = nd;
+    }
+
+    /// <summary>Drops the samples; the next fit generates the grid again with the current parameters.</summary>
+    public void RegenerateGradientGrid()
+    {
+        if (GradientEditing is not ChannelKind k || gradientDraft == null || !gradientDraft.Specs.TryGetValue(k, out var sp) || sp.Gesture.Shape != GradientShape.Samples) return;
+        var nd = gradientDraft.Clone();
+        var spec = nd.Specs[k];
+        spec.Samples.Clear();
+        if (spec.GridPerRow <= 0) spec.GridPerRow = Math.Max(4, nd.GridPerRow);
+        selectedGradientSample = null;
+        GradientDraft = nd;
+    }
+
+    /// <summary>Removes every sample without generating a grid (click to place samples by hand).</summary>
+    public void ClearGradientSamples()
+    {
+        if (GradientEditing is not ChannelKind k || gradientDraft == null || !gradientDraft.Specs.TryGetValue(k, out var sp) || sp.Gesture.Shape != GradientShape.Samples) return;
+        var nd = gradientDraft.Clone();
+        nd.Specs[k].Samples.Clear();
+        nd.Specs[k].GridPerRow = 0;
+        selectedGradientSample = null;
+        GradientFit = null;
+        GradientDraft = nd;
+    }
+
+    /// <summary>Del in the editor: the selected sample, else the selected region.</summary>
+    public void DeleteGradientSelection()
+    {
+        if (selectedGradientSample != null) RemoveSelectedGradientSample(); else RemoveSelectedGradientRegion();
     }
 
     /// <summary>Removes the model of the edited channel.</summary>
@@ -1649,7 +2041,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
                 if (GradientRemoval.Correct(healed, spec, protect) is var (corrected, fit))
                 {
                     image = view == GradientView.Background ? fit.BackgroundImage() : corrected;
-                    info = new GradientFitInfo(k, fit.Gesture, fit.ResidualSigma, t0.Elapsed.TotalMilliseconds);
+                    info = new GradientFitInfo(k, fit.Gesture, fit.ResidualSigma, t0.Elapsed.TotalMilliseconds, fit.SampleResults, fit.Spec.Samples);
                 }
             }
             var b = view == GradientView.Background && !ReferenceEquals(image, healed)
@@ -1663,6 +2055,15 @@ public sealed class ProjectModel : INotifyPropertyChanged
                 baseSources[k] = b;
                 sources[k] = c;
                 GradientFit = info;
+                // A samples model without samples got its grid from the fit: keep it (editable).
+                if (info?.Samples is { Count: > 0 } generated && gradientDraft != null && gradientDraft.Specs.TryGetValue(k, out var gsp) && gsp.Gesture.Shape == GradientShape.Samples && gsp.Samples.Count == 0)
+                {
+                    var nd = gradientDraft.Clone();
+                    nd.Specs[k].Samples = generated.Select(s => s.Clone()).ToList();
+                    gradientDraftSilently = true;
+                    GradientDraft = nd;
+                    gradientDraftSilently = false;
+                }
                 Notify(Change.Sources); Notify(Change.Gradient);
                 ScheduleRender();
             });
@@ -1679,9 +2080,11 @@ public sealed class ProjectModel : INotifyPropertyChanged
         if (parts[0] == "gradient")
         {
             BeginGradientEditing(k);
+            if (parts.Length > 3 && EnumRaw.Parse<GradientShape>(parts[3]) is GradientShape shape) SetGradientShape(shape);
             if (parts.Length > 2 && EnumRaw.Parse<GradientView>(parts[2]) is GradientView gv) GradientView = gv;
         }
         else if (parts[0] == "dust") BeginDustEditing(k);
+        else if (parts[0] == "corrections") BeginCorrectionEditing(k);
         if (LaunchEditorAction is string action)
             ui.Delay(TimeSpan.FromSeconds(5), () =>
             {
@@ -1690,6 +2093,15 @@ public sealed class ProjectModel : INotifyPropertyChanged
                     case "removeModel": ClearGradient(); break;
                     case "clearRegions": ClearGradientRegions(); break;
                     case "adopt": AdoptRefinedGradient(); break;
+                    case "paintTest":
+                        // Two strokes for screenshots: a darkening one top-left to centre, a brightening one at the right.
+                        if (ImageSize is not Size size) break;
+                        CorrectionBrushRadius = Math.Max(size.Width, size.Height) * 0.04;
+                        BeginCorrectionStroke();
+                        PaintCorrection(new Point(size.Width * 0.15, size.Height * 0.2), new Point(size.Width * 0.45, size.Height * 0.5), false);
+                        BeginCorrectionStroke();
+                        PaintCorrection(new Point(size.Width * 0.7, size.Height * 0.3), new Point(size.Width * 0.8, size.Height * 0.8), true);
+                        break;
                 }
             });
     }
@@ -1705,5 +2117,9 @@ public static class GradientViews
 }
 
 /// <summary>Result of a gradient fit shown in the editor: the guide actually used (refined from the drawing when asked), the residual and the timing.</summary>
-public sealed record GradientFitInfo(ChannelKind Kind, GradientGesture Gesture, float ResidualSigma, double Millis);
+/// <summary>Result of a gradient fit shown in the editor: the guide used, the residual, timing, and for the Samples shape what became of each sample and the samples used (the grid generated when the model had none).</summary>
+public sealed record GradientFitInfo(ChannelKind Kind, GradientGesture Gesture, float ResidualSigma, double Millis, IReadOnlyList<SampleResult>? SampleResults = null, IReadOnlyList<BackgroundSample>? Samples = null)
+{
+    public IReadOnlyList<SampleResult> SampleResultsOrEmpty => SampleResults ?? (IReadOnlyList<SampleResult>)[];
+}
 

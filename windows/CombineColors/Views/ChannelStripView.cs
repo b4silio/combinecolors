@@ -101,6 +101,13 @@ public sealed class ChannelStripView : DockPanel
                     Child = new TextBlock { Text = $"◌ {n}", FontSize = 9, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White },
                     ToolTip = $"{n} dust spot{(n == 1 ? "" : "s")} healed on this channel",
                 });
+            if (model.HasCorrection(kind))
+                grid.Children.Add(new Border
+                {
+                    Background = new SolidColorBrush(Color.FromArgb(140, 0, 0, 0)), CornerRadius = new CornerRadius(3), Padding = new Thickness(4, 0, 4, 1), Margin = new Thickness(4), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false,
+                    Child = new TextBlock { Text = "✎", FontSize = 9, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White },
+                    ToolTip = "Hand-painted corrections applied to this channel",
+                });
             if (model.GradientSpecFor(kind) is GradientSpec gspec)
                 grid.Children.Add(new Border
                 {
@@ -147,6 +154,8 @@ public sealed class ChannelStripView : DockPanel
         menu.Items.Add(new Separator());
         var heal = new MenuItem { Header = "Heal Dust Spots…" }; heal.Click += (_, _) => model.BeginDustEditing(kind); menu.Items.Add(heal);
         var gradient = new MenuItem { Header = "Remove Gradient…" }; gradient.Click += (_, _) => model.BeginGradientEditing(kind); menu.Items.Add(gradient);
+        var corrections = new MenuItem { Header = "Manual Corrections…" }; corrections.Click += (_, _) => model.BeginCorrectionEditing(kind); menu.Items.Add(corrections);
+        if (model.HasCorrection(kind)) { var rc = new MenuItem { Header = "Remove Corrections" }; rc.Click += (_, _) => model.RemoveCorrection(kind); menu.Items.Add(rc); }
         var save = new MenuItem { Header = "Save channel as FITS…" };
         save.Click += (_, _) =>
         {

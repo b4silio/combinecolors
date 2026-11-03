@@ -182,7 +182,7 @@ struct ColorFileSheet: View {
     let pending: PendingFile
 
     enum Mode: String, CaseIterable, Identifiable {
-        case rgb, dualBand
+        case rgb, dualBand, stars
         var id: String { rawValue }
     }
 
@@ -201,12 +201,16 @@ struct ColorFileSheet: View {
             Text("\(file.fileName) is a colour image").font(.title3).bold()
             Text(verbatim: "\(file.width) × \(file.height) · \(file.formatDescription)").font(.caption).foregroundStyle(.secondary)
             Picker("", selection: $modeRaw) {
-                Text("RGB").tag(Mode.rgb.rawValue)
+                Text("Split RGB").tag(Mode.rgb.rawValue)
                 Text("Dual-band").tag(Mode.dualBand.rawValue)
+                Text("Keep as RGB (stars)").tag(Mode.stars.rawValue)
             }
-            .pickerStyle(.segmented).labelsHidden().frame(width: 220)
+            .pickerStyle(.segmented).labelsHidden().frame(width: 360)
             if mode == .rgb {
-                Text("The red, green and blue planes become the R, G and B channels (broadband colour or an RGB stars image).")
+                Text("The red, green and blue planes become the R, G and B channels (broadband colour).")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } else if mode == .stars {
+                Text("The image stays an RGB image and is blended on top of the result as stars (a stars-only image from a star-removal tool, or any RGB frame whose stars are wanted); the channel slots are untouched. Brightness, contrast, blend mode and the luminance mask are in the RGB stars block.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             } else {
                 Text("One-shot-colour images taken through a dual-band filter hold one emission line in the red channel and the other in green/blue. They are extracted into two monochrome channels.")
@@ -295,6 +299,8 @@ struct ColorFileSheet: View {
     private func add() {
         if mode == .rgb {
             model.assignColorFileAsRGB(pending)
+        } else if mode == .stars {
+            model.assignColorFileAsStars(pending)
         } else {
             let (a, b) = split()
             let kinds = settings.outputKinds

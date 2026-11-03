@@ -136,6 +136,56 @@ export at full resolution.
   / `--gradient L:poly:4`, `--gradient-mode subtract|divide`, `--gradient-residual
   none|plane|quadratic`, `--gradient-sectors 1|4|8|12`, `--gradient-smooth`,
   `--gradient-norefine`, `--gradient-protect cx,cy,a,b`.
+* **Background-sample gradient removal** (the *Samples* shape in the same editor,
+  à la DBE / GraXpert): a grid of sample discs is placed on the sky and a smooth
+  surface is fitted through their levels. The grid generator (*Generate*, *Per
+  row*, *Tolerance*) measures each disc on the star-masked cell medians, moves it
+  to the darkest of five nearby windows, and keeps only what looks like sky:
+  enough star-free cells, little scatter or skew inside the disc, and not more
+  than *Tolerance* sample noises above a planar sky model fitted on the lower
+  envelope of the candidates (asymmetric least squares) — a bright nebula is
+  left out while a planar light-pollution gradient is kept; a compact glow the
+  plane cannot follow needs a few clicks or a larger tolerance. Click the sky to
+  add samples, drag to move, ⌫ removes; samples the fit rejects are shown red.
+  The surface is a **thin-plate spline** with smoothing (DBE-like) or **Gaussian
+  kriging** (GraXpert-like), fitted with asymmetric robust reweighting on the
+  leave-one-out residuals (a sample on nebulosity is compared with what its
+  neighbours predict, not with a surface bent through it; above the surface it
+  loses weight three times faster than below), *Auto* picks the smoothing by
+  cross-validation, and the surface is evaluated on a 512 px grid and sampled
+  bilinearly. CLI: `--gradient Ha:samples[:perRow[,tolerance]]`,
+  `--gradient-surface spline|kriging`, `--gradient-sample-smooth`,
+  `--gradient-sample-radius`.
+* **Manual corrections** (channel menu › *Manual Corrections…*): paint areas
+  of a channel darker or brighter with a soft brush. The strokes build a
+  correction map (≤ 1024 px on the long side — corrections are feathered and
+  smooth, so the map needs no more), applied to the linear data as an exposure
+  change (`× 2^(strength · map)`, *Strength* in stops). *Darken* / *Brighten*
+  (D, or hold ⌥ for the opposite), *Radius* (right-drag on the preview: the
+  circle and "r = N px" follow the pointer, left shrinks and right grows, up to
+  20 % of the image), *Flow* and *Feather*, *Map* shows the strokes as a red /
+  blue tint, *Original* compares, *Undo stroke* (⌘Z) and *Clear*. Painting is
+  live: the map goes with every preview render (a few milliseconds per stroke
+  segment), the channel is re-processed on Apply. The map is saved next to the
+  image as `<image>.ccmask.png` (16-bit; in *Application Support* when the
+  folder is read-only) and comes back with the image; its strength lives in the
+  project.
+* **RGB stars**: the R, G and B channels, or an RGB image kept whole as a
+  **stars layer** (drop a colour file and choose *Keep as RGB (stars)*, or
+  *Load RGB stars…* in the block — a stars-only image from a star-removal tool,
+  or any RGB frame whose stars are wanted on top of the narrowband result), are
+  blended into the result: *Screen* (default, adds without clipping), *Lighten*
+  (max) or *Add*; *Brightness* (stops) and *Contrast* (spread around the
+  mid-tone, positive darkens faint halos) of the star layer; *Brightest stars to
+  white* scales the layer so its brightest stars reach the brightest values of
+  the result; star saturation, the luminance mask (threshold / softness, off for
+  stars-only images) and the stretch decision for linear data. CLI:
+  `--stars-file`, `--stars-blend`, `--stars-brightness`, `--stars-contrast`,
+  `--stars-white`.
+* **Formula read-out**: the palette panel shows the current combination as one
+  PixelMath-style expression per output (`R: 0.5*Ha + 0.5*SII`, …) with a copy
+  button, for reproducing it in PixInsight's PixelMath (swap the channel
+  identifiers for your image names).
 * **Crop, rotation and flips**: one rectangle shared by every channel, drawn on the
   preview or typed in, or detected automatically from the empty registration
   borders. The crop drives statistics, channel thumbnails and the export; its
@@ -216,9 +266,10 @@ release with the changelog section as notes.
 
 1. **Load channels** — drop files or a folder on the window (or ⌘O). Drop a
    file on a specific slot (left column) to force its channel. A colour file
-   opens a dialog: use it as RGB (stars/broadband) or split it as a dual-band
+   opens a dialog: split it into R, G, B (broadband), split it as a dual-band
    image (choose the filter pair, e.g. Hα + OIII, with live previews of both
-   lines; the weights and cross-talk are under *Advanced*).
+   lines; the weights and cross-talk are under *Advanced*), or keep it whole as
+   the RGB stars layer.
 2. **Crop** (optional but recommended for registered stacks with empty
    borders) — *Auto trim* finds the borders; or press the crop button, drag a
    rectangle, adjust it with the handles, press Return. The crop applies to all
