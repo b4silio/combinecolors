@@ -55,20 +55,31 @@ public class CorrectionsTests
         // Sidecar: written next to the image, read back with the same values.
         var image = Synth.TempPath("corr.fits");
         FitsWriter.Write([new PlanarImage(800, 600, 0.1f)], image);
-        var location = m.Write(image);
-        Assert.EndsWith("corr.fits.ccmask.png", location);
-        var read = CorrectionMap.Read(image, 800, 600);
+        var location = m.Write(image, ChannelKind.Red);
+        Assert.EndsWith("corr.fits.R.ccmask.png", location);
+        var read = CorrectionMap.Read(image, ChannelKind.Red, 800, 600);
         Assert.NotNull(read);
         Assert.True(read!.Plane.MaxAbsDifference(m.Plane) < 1.0f / 65535 * 2);
-        Assert.Null(CorrectionMap.Read(image, 801, 600));
-        CorrectionMap.Remove(image);
-        Assert.Null(CorrectionMap.Read(image, 800, 600));
+        Assert.Null(CorrectionMap.Read(image, ChannelKind.Green, 800, 600));
+        Assert.Null(CorrectionMap.Read(image, ChannelKind.Red, 801, 600));
+        CorrectionMap.Remove(image, ChannelKind.Red);
+        Assert.Null(CorrectionMap.Read(image, ChannelKind.Red, 800, 600));
+        // A map saved before the channel went into the name is read by every channel, and replaced on the next save.
+        var legacy = CorrectionMap.SidecarPath(image);
+        File.Move(m.Write(image, ChannelKind.Green), legacy);
+        Assert.NotNull(CorrectionMap.Read(image, ChannelKind.Red, 800, 600));
+        Assert.NotNull(CorrectionMap.Read(image, ChannelKind.Blue, 800, 600));
+        m.Write(image, ChannelKind.Red);
+        Assert.False(File.Exists(legacy));
+        Assert.Null(CorrectionMap.Read(image, ChannelKind.Blue, 800, 600));
+        CorrectionMap.Remove(image, ChannelKind.Red);
         // Read-only folder: the fallback in the application data folder takes it.
         var ro = OperatingSystem.IsWindows() ? @"C:\Windows\nonexistent\x.fits" : "/System/Library/nonexistent.fits";
-        var fb = m.Write(ro);
+        var fb = m.Write(ro, ChannelKind.Ha);
         Assert.Contains("Corrections", fb);
-        Assert.NotNull(CorrectionMap.Read(ro, 800, 600));
-        CorrectionMap.Remove(ro);
+        Assert.EndsWith(".Ha.ccmask.png", fb);
+        Assert.NotNull(CorrectionMap.Read(ro, ChannelKind.Ha, 800, 600));
+        CorrectionMap.Remove(ro, ChannelKind.Ha);
         // Settings decode with defaults.
         var old = CorrectionSettings.FromJson(System.Text.Json.Nodes.JsonNode.Parse("{}")!.AsObject());
         Assert.Equal(0.04, old.BrushRadius); Assert.Equal(1, old.StrengthFor(ChannelKind.Ha));

@@ -142,45 +142,58 @@ public final class CorrectionMap {
 
     // MARK: Storage
 
-    /// Sidecar next to the image: `<image>.ccmask.png` (16-bit grey, 32768 = no change).
-    public static func sidecarURL(for image: URL) -> URL {
-        image.deletingLastPathComponent().appendingPathComponent(image.lastPathComponent + ".ccmask.png")
+    /// Sidecar next to the image: `<image>.<channel>.ccmask.png` (16-bit grey, 32768 = no change).
+    /// The channel is part of the name so a colour file split into R, G and B keeps one map per
+    /// channel; maps saved before that (`<image>.ccmask.png`, no channel) are still read.
+    public static func sidecarURL(for image: URL, kind: ChannelKind? = nil) -> URL {
+        image.deletingLastPathComponent().appendingPathComponent(image.lastPathComponent + suffix(kind))
     }
 
+    static func suffix(_ kind: ChannelKind?) -> String { (kind.map { "." + $0.rawValue } ?? "") + ".ccmask.png" }
+
     /// Fallback when the image's folder is not writable: Application Support, keyed by the image path.
-    public static func fallbackURL(for image: URL) -> URL {
+    public static func fallbackURL(for image: URL, kind: ChannelKind? = nil) -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSTemporaryDirectory())
         let dir = base.appendingPathComponent("CombineColors/Corrections", isDirectory: true)
         let key = SHA256.hash(data: Data(image.standardizedFileURL.path.utf8)).map { String(format: "%02x", $0) }.joined().prefix(32)
-        return dir.appendingPathComponent(String(key) + ".ccmask.png")
+        return dir.appendingPathComponent(String(key) + suffix(kind))
     }
 
-    /// Writes the map (16-bit PNG). Tries the sidecar, then the fallback; returns where it went.
+    /// Writes the channel's map (16-bit PNG). Tries the sidecar, then the fallback; returns where
+    /// it went. A map saved without the channel in its name is removed (it is superseded).
     @discardableResult
-    public func write(for image: URL) throws -> URL {
+    public func write(for image: URL, kind: ChannelKind) throws -> URL {
         let data = PlanarImage(width: width, height: height)
         var a: Float = 0.5, b: Float = 0.5
         vDSP_vsmsa(plane.pointer, 1, &a, &b, data.pointer, 1, vDSP_Length(plane.count))
-        let sidecar = CorrectionMap.sidecarURL(for: image)
+        defer { CorrectionMap.removeLegacy(for: image) }
+        let sidecar = CorrectionMap.sidecarURL(for: image, kind: kind)
         do {
             try RasterWriter.write(planes: [data], to: sidecar, format: .png16)
             return sidecar
         } catch {
-            let fb = CorrectionMap.fallbackURL(for: image)
+            let fb = CorrectionMap.fallbackURL(for: image, kind: kind)
             try FileManager.default.createDirectory(at: fb.deletingLastPathComponent(), withIntermediateDirectories: true)
             try RasterWriter.write(planes: [data], to: fb, format: .png16)
             return fb
         }
     }
 
-    /// Removes the stored map (sidecar and fallback).
-    public static func remove(for image: URL) {
+    /// Removes the channel's stored map (sidecar and fallback), and the channel-less one.
+    public static func remove(for image: URL, kind: ChannelKind) {
+        for u in [sidecarURL(for: image, kind: kind), fallbackURL(for: image, kind: kind)] { try? FileManager.default.removeItem(at: u) }
+        removeLegacy(for: image)
+    }
+
+    static func removeLegacy(for image: URL) {
         for u in [sidecarURL(for: image), fallbackURL(for: image)] { try? FileManager.default.removeItem(at: u) }
     }
 
-    /// Reads the stored map of an image of the given (unoriented) size, if any.
-    public static func read(for image: URL, imageWidth: Int, imageHeight: Int) -> CorrectionMap? {
-        for u in [sidecarURL(for: image), fallbackURL(for: image)] where FileManager.default.fileExists(atPath: u.path) {
+    /// Reads the channel's stored map of an image of the given (unoriented) size, if any; a map
+    /// without the channel in its name is the fallback.
+    public static func read(for image: URL, kind: ChannelKind, imageWidth: Int, imageHeight: Int) -> CorrectionMap? {
+        let candidates = [sidecarURL(for: image, kind: kind), fallbackURL(for: image, kind: kind), sidecarURL(for: image), fallbackURL(for: image)]
+        for u in candidates where FileManager.default.fileExists(atPath: u.path) {
             guard let r = try? RasterReader.read(url: u), let p = r.planes.first else { continue }
             let expected = CorrectionMap(imageWidth: imageWidth, imageHeight: imageHeight)
             guard p.width == expected.width, p.height == expected.height else { continue }

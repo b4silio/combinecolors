@@ -610,7 +610,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
                 var oriented = orient.Apply(it.Plane);
                 // A stored correction map (sidecar) comes in the file's orientation.
                 CorrectionMap? map = null;
-                if (it.Path != null && CorrectionMap.Read(it.Path, it.Plane.Width, it.Plane.Height) is CorrectionMap stored)
+                if (it.Path != null && CorrectionMap.Read(it.Path, it.Kind, it.Plane.Width, it.Plane.Height) is CorrectionMap stored)
                 {
                     var m = stored;
                     if (orient.Flipped) m = m.Applying(OrientationOp.FlipHorizontal);
@@ -799,6 +799,13 @@ public sealed class ProjectModel : INotifyPropertyChanged
             Gradient.Specs.Remove(kind); gradientDraft?.Specs.Remove(kind);
             correctionMaps.Remove(kind); Corrections.Strength.Remove(kind);
         }
+        // The maps on disk are named after the channel: move them with the slots (old names first,
+        // the two channels may share one file).
+        correctionMaps.TryGetValue(newKind, out var movedMap); CorrectionMap? swappedMap = null; if (otherBase != null) correctionMaps.TryGetValue(kind, out swappedMap);
+        if (src.Path is string sp0) CorrectionMap.Remove(sp0, kind);
+        if (otherBase?.Path is string op0) CorrectionMap.Remove(op0, newKind);
+        if (src.Path is string sp1 && movedMap != null) { try { movedMap.Unoriented(Orientation).Write(sp1, newKind); } catch { } }
+        if (otherBase?.Path is string op1 && swappedMap != null) { try { swappedMap.Unoriented(Orientation).Write(op1, kind); } catch { } }
         if (CorrectionEditing == kind) CorrectionEditing = newKind;
         Notify(Change.Corrections);
         if (dustPreviewed.Remove(kind)) dustPreviewed.Add(newKind);
@@ -1733,13 +1740,13 @@ public sealed class ProjectModel : INotifyPropertyChanged
             correctionMaps[k] = d;
             if (baseSources.TryGetValue(k, out var src) && src.Path is string path)
             {
-                try { d.Unoriented(Orientation).Write(path); } catch (Exception e) { ErrorMessage = $"The correction map could not be saved: {e.Message}"; }
+                try { d.Unoriented(Orientation).Write(path, k); } catch (Exception e) { ErrorMessage = $"The correction map could not be saved: {e.Message}"; }
             }
         }
         else
         {
             correctionMaps.Remove(k);
-            if (baseSources.TryGetValue(k, out var src) && src.Path is string path) CorrectionMap.Remove(path);
+            if (baseSources.TryGetValue(k, out var src) && src.Path is string path) CorrectionMap.Remove(path, k);
         }
         CorrectionVersion++;
         Notify(Change.Corrections);
@@ -1767,7 +1774,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
         if (!correctionMaps.ContainsKey(kind)) return;
         if (CorrectionEditing == kind) CancelCorrectionEditing();
         correctionMaps.Remove(kind);
-        if (baseSources.TryGetValue(kind, out var src) && src.Path is string path) CorrectionMap.Remove(path);
+        if (baseSources.TryGetValue(kind, out var src) && src.Path is string path) CorrectionMap.Remove(path, kind);
         Notify(Change.Corrections);
         RebuildHealed([kind]);
     }

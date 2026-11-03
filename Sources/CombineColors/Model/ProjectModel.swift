@@ -478,7 +478,7 @@ final class ProjectModel {
                 let oriented = orient.apply(to: plane)
                 // A stored correction map (sidecar) comes in the file's orientation.
                 var map: CorrectionMap? = nil
-                if let u = url, let stored = CorrectionMap.read(for: u, imageWidth: plane.width, imageHeight: plane.height) {
+                if let u = url, let stored = CorrectionMap.read(for: u, kind: kind, imageWidth: plane.width, imageHeight: plane.height) {
                     var m = stored
                     if orient.flipped { m = m.applying(.flipHorizontal) }
                     for _ in 0..<orient.rotation { m = m.applying(.rotateClockwise) }
@@ -690,6 +690,13 @@ final class ProjectModel {
             gradient.specs.removeValue(forKey: kind); gradientDraft?.specs.removeValue(forKey: kind)
             correctionMaps.removeValue(forKey: kind); corrections.strength.removeValue(forKey: kind)
         }
+        // The maps on disk are named after the channel: move them with the slots (old names first,
+        // the two channels may share one file).
+        let movedMap = correctionMaps[newKind], swappedMap = otherBase != nil ? correctionMaps[kind] : nil
+        if let u = src.url { CorrectionMap.remove(for: u, kind: kind) }
+        if let u = otherBase?.url { CorrectionMap.remove(for: u, kind: newKind) }
+        if let u = src.url, let m = movedMap { try? m.unoriented(orientation).write(for: u, kind: newKind) }
+        if let u = otherBase?.url, let m = swappedMap { try? m.unoriented(orientation).write(for: u, kind: kind) }
         if correctionEditing == kind { correctionEditing = newKind }
         if dustPreviewed.contains(kind) { dustPreviewed.remove(kind); dustPreviewed.insert(newKind) }
         if dustEditing == kind { dustEditing = newKind }
@@ -1533,11 +1540,11 @@ extension ProjectModel {
         if let d = draft, !d.isEmpty {
             correctionMaps[k] = d
             if let u = baseSources[k]?.url {
-                do { try d.unoriented(orientation).write(for: u) } catch { errorMessage = "The correction map could not be saved: \(error.localizedDescription)" }
+                do { try d.unoriented(orientation).write(for: u, kind: k) } catch { errorMessage = "The correction map could not be saved: \(error.localizedDescription)" }
             }
         } else {
             correctionMaps.removeValue(forKey: k)
-            if let u = baseSources[k]?.url { CorrectionMap.remove(for: u) }
+            if let u = baseSources[k]?.url { CorrectionMap.remove(for: u, kind: k) }
         }
         correctionVersion += 1
         scheduleRecentStateSave()
@@ -1565,7 +1572,7 @@ extension ProjectModel {
         guard correctionMaps[kind] != nil else { return }
         if correctionEditing == kind { cancelCorrectionEditing() }
         correctionMaps.removeValue(forKey: kind)
-        if let u = baseSources[kind]?.url { CorrectionMap.remove(for: u) }
+        if let u = baseSources[kind]?.url { CorrectionMap.remove(for: u, kind: kind) }
         rebuildHealed(kinds: [kind])
     }
 }

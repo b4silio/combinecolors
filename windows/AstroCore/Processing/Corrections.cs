@@ -150,50 +150,69 @@ public sealed class CorrectionMap
 
     // Storage
 
-    /// <summary>Sidecar next to the image: &lt;image&gt;.ccmask.png (16-bit grey, 32768 = no change).</summary>
-    public static string SidecarPath(string imagePath) => imagePath + ".ccmask.png";
+    /// <summary>
+    /// Sidecar next to the image: <c>&lt;image&gt;.&lt;channel&gt;.ccmask.png</c> (16-bit grey, 32768 = no change).
+    /// The channel is part of the name so a colour file split into R, G and B keeps one map per
+    /// channel; maps saved before that (<c>&lt;image&gt;.ccmask.png</c>, no channel) are still read.
+    /// </summary>
+    public static string SidecarPath(string imagePath, ChannelKind? kind = null) => imagePath + Suffix(kind);
+
+    static string Suffix(ChannelKind? kind) => (kind is ChannelKind k ? "." + k.RawValue() : "") + ".ccmask.png";
 
     /// <summary>Fallback when the image's folder is not writable: the application data folder, keyed by the image path.</summary>
-    public static string FallbackPath(string imagePath)
+    public static string FallbackPath(string imagePath, ChannelKind? kind = null)
     {
         var baseDir = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
         if (string.IsNullOrEmpty(baseDir)) baseDir = System.IO.Path.GetTempPath();
         var dir = System.IO.Path.Combine(baseDir, "CombineColors", "Corrections");
         var full = System.IO.Path.GetFullPath(imagePath);
         var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(full))).ToLowerInvariant()[..32];
-        return System.IO.Path.Combine(dir, key + ".ccmask.png");
+        return System.IO.Path.Combine(dir, key + Suffix(kind));
     }
 
-    /// <summary>Writes the map (16-bit PNG). Tries the sidecar, then the fallback; returns where it went.</summary>
-    public string Write(string imagePath)
+    /// <summary>
+    /// Writes the channel's map (16-bit PNG). Tries the sidecar, then the fallback; returns where it
+    /// went. A map saved without the channel in its name is removed (it is superseded).
+    /// </summary>
+    public string Write(string imagePath, ChannelKind kind)
     {
         var data = PlanarImage.Uninitialized(Width, Height);
         Vec.ScaleAdd(Plane.Data, 0.5f, 0.5f, data.Data);
-        var sidecar = SidecarPath(imagePath);
         try
         {
-            RasterWriter.Write([data], sidecar, RasterFormat.Png16);
-            return sidecar;
+            var sidecar = SidecarPath(imagePath, kind);
+            try
+            {
+                RasterWriter.Write([data], sidecar, RasterFormat.Png16);
+                return sidecar;
+            }
+            catch
+            {
+                var fb = FallbackPath(imagePath, kind);
+                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(fb)!);
+                RasterWriter.Write([data], fb, RasterFormat.Png16);
+                return fb;
+            }
         }
-        catch
-        {
-            var fb = FallbackPath(imagePath);
-            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(fb)!);
-            RasterWriter.Write([data], fb, RasterFormat.Png16);
-            return fb;
-        }
+        finally { RemoveLegacy(imagePath); }
     }
 
-    /// <summary>Removes the stored map (sidecar and fallback).</summary>
-    public static void Remove(string imagePath)
+    /// <summary>Removes the channel's stored map (sidecar and fallback), and the channel-less one.</summary>
+    public static void Remove(string imagePath, ChannelKind kind)
+    {
+        foreach (var p in new[] { SidecarPath(imagePath, kind), FallbackPath(imagePath, kind) }) { try { if (File.Exists(p)) File.Delete(p); } catch { } }
+        RemoveLegacy(imagePath);
+    }
+
+    static void RemoveLegacy(string imagePath)
     {
         foreach (var p in new[] { SidecarPath(imagePath), FallbackPath(imagePath) }) { try { if (File.Exists(p)) File.Delete(p); } catch { } }
     }
 
-    /// <summary>Reads the stored map of an image of the given (unoriented) size, if any.</summary>
-    public static CorrectionMap? Read(string imagePath, int imageWidth, int imageHeight)
+    /// <summary>Reads the channel's stored map of an image of the given (unoriented) size, if any; a map without the channel in its name is the fallback.</summary>
+    public static CorrectionMap? Read(string imagePath, ChannelKind kind, int imageWidth, int imageHeight)
     {
-        foreach (var u in new[] { SidecarPath(imagePath), FallbackPath(imagePath) })
+        foreach (var u in new[] { SidecarPath(imagePath, kind), FallbackPath(imagePath, kind), SidecarPath(imagePath), FallbackPath(imagePath) })
         {
             if (!File.Exists(u)) continue;
             RasterReader.Result r;

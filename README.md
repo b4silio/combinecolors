@@ -171,9 +171,9 @@ export at full resolution.
   blue tint, *Original* compares, *Undo stroke* (⌘Z) and *Clear*. Painting is
   live: the map goes with every preview render (a few milliseconds per stroke
   segment), the channel is re-processed on Apply. The map is saved next to the
-  image as `<image>.ccmask.png` (16-bit; in *Application Support* when the
-  folder is read-only) and comes back with the image; its strength lives in the
-  project.
+  image as `<image>.<channel>.ccmask.png` (16-bit; in *Application Support* when the
+  folder is read-only; one map per channel, so a colour file split into R, G and B keeps
+  three) and comes back with the image; its strength lives in the project.
 * **RGB stars**: the R, G and B channels, or an RGB image kept whole as a
   **stars layer** (drop a colour file and choose *Keep as RGB (stars)*, or
   *Load RGB stars…* in the block — a stars-only image from a star-removal tool,
