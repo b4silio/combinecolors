@@ -744,8 +744,9 @@ final class ProjectModel {
     func saveRecentState() {
         stateSaveTimer?.invalidate()
         guard !suppressRecent, !isLoading, !sources.isEmpty else { return }
+        // Only complete sets (every channel backed by a file; a split colour file backs three).
+        guard sources.values.allSatisfy({ $0.url != nil }) else { return }
         let paths = Set(sources.values.compactMap { $0.url?.path })
-        guard paths.count == sources.count else { return }
         var doc = projectDocument()
         doc.channels = []
         recentSets = recentStore.updateState(paths: paths, state: doc)
@@ -761,20 +762,9 @@ final class ProjectModel {
         removeAll()
         isLoading = true
         loadingMessage = "Loading \(set.name)…"
-        let entries = set.entries
+        let entries = set.entries.map { ($0.kind, $0.path) }
         Task.detached(priority: .userInitiated) {
-            var items: [(ChannelKind, PlanarImage, String, URL?, String)] = []
-            var errors: [String] = []
-            let lock = NSLock()
-            DispatchQueue.concurrentPerform(iterations: entries.count) { i in
-                let e = entries[i]
-                let u = URL(fileURLWithPath: e.path)
-                do {
-                    let f = try ImageLoader.load(url: u)
-                    lock.lock(); items.append((e.kind, f.planes[0], f.fileName, u, f.formatDescription)); lock.unlock()
-                } catch { lock.lock(); errors.append("\(u.lastPathComponent): \(error.localizedDescription)"); lock.unlock() }
-            }
-            let its = items, errs = errors
+            let (its, errs) = ProjectModel.loadEntries(entries)
             await MainActor.run {
                 if !errs.isEmpty { self.errorMessage = errs.joined(separator: "\n") }
                 if let st = set.state {
@@ -788,6 +778,40 @@ final class ProjectModel {
                 }
                 self.addChannels(its)
             }
+        }
+    }
+
+    /// Loads the files of a recorded set or project, each path once, and hands every entry the
+    /// plane it was made from: a colour file split into R, G and B gives its own plane to each of
+    /// the three (they share the path), everything else comes from the first plane.
+    nonisolated static func loadEntries(_ entries: [(ChannelKind, String)]) -> (items: [(ChannelKind, PlanarImage, String, URL?, String)], errors: [String]) {
+        var byPath: [String: [ChannelKind]] = [:]
+        var paths: [String] = []
+        for (k, p) in entries { if byPath[p] == nil { paths.append(p) }; byPath[p, default: []].append(k) }
+        var loaded: [(LoadedFile?, Error?)] = Array(repeating: (nil, nil), count: paths.count)
+        let lock = NSLock()
+        DispatchQueue.concurrentPerform(iterations: paths.count) { i in
+            do { let f = try ImageLoader.load(url: URL(fileURLWithPath: paths[i])); lock.lock(); loaded[i] = (f, nil); lock.unlock() }
+            catch { lock.lock(); loaded[i] = (nil, error); lock.unlock() }
+        }
+        var items: [(ChannelKind, PlanarImage, String, URL?, String)] = []
+        var errors: [String] = []
+        for (i, p) in paths.enumerated() {
+            let u = URL(fileURLWithPath: p)
+            if let e = loaded[i].1 { errors.append("\(u.lastPathComponent): \(e.localizedDescription)"); continue }
+            guard let f = loaded[i].0 else { continue }
+            for k in byPath[p] ?? [] { items.append((k, ProjectModel.plane(of: f, for: k), f.fileName, u, f.formatDescription)) }
+        }
+        return (items, errors)
+    }
+
+    /// The plane of a loaded file that a channel uses: R, G and B of a colour file are its three planes.
+    nonisolated static func plane(of f: LoadedFile, for kind: ChannelKind) -> PlanarImage {
+        guard f.isColor else { return f.planes[0] }
+        switch kind {
+        case .green: return f.planes[1]
+        case .blue: return f.planes[2]
+        default: return f.planes[0]
         }
     }
 
@@ -1107,18 +1131,7 @@ final class ProjectModel {
             isLoading = true
             loadingMessage = "Loading project…"
             Task.detached(priority: .userInitiated) {
-                var items: [(ChannelKind, PlanarImage, String, URL?, String)] = []
-                var errors: [String] = []
-                let lock = NSLock()
-                DispatchQueue.concurrentPerform(iterations: refs.count) { i in
-                    let r = refs[i]
-                    let u = URL(fileURLWithPath: r.path)
-                    do {
-                        let f = try ImageLoader.load(url: u)
-                        lock.lock(); items.append((r.kind, f.planes[0], f.fileName, u, f.formatDescription)); lock.unlock()
-                    } catch { lock.lock(); errors.append("\(u.lastPathComponent): \(error.localizedDescription)"); lock.unlock() }
-                }
-                let its = items, errs = errors
+                let (its, errs) = ProjectModel.loadEntries(refs.map { ($0.kind, $0.path) })
                 await MainActor.run {
                     if !errs.isEmpty { self.errorMessage = errs.joined(separator: "\n") }
                     self.settings = doc.settings

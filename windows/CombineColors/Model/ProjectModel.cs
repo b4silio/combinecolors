@@ -858,13 +858,45 @@ public sealed class ProjectModel : INotifyPropertyChanged
         stateSaveTimer = ui.Delay(TimeSpan.FromSeconds(0.7), SaveRecentState);
     }
 
+    /// <summary>
+    /// Loads the files of a recorded set or project, each path once, and hands every entry the plane
+    /// it was made from: a colour file split into R, G and B gives its own plane to each of the three
+    /// (they share the path), everything else comes from the first plane.
+    /// </summary>
+    static (List<ChannelItem> items, List<string> errors) LoadEntries(List<(ChannelKind kind, string path)> entries)
+    {
+        var paths = entries.Select(e => e.path).Distinct(StringComparer.Ordinal).ToList();
+        var loaded = new (LoadedFile? file, Exception? error)[paths.Count];
+        Parallel.For(0, paths.Count, i =>
+        {
+            try { loaded[i] = (ImageLoader.Load(paths[i]), null); }
+            catch (Exception ex) { loaded[i] = (null, ex); }
+        });
+        var items = new List<ChannelItem>();
+        var errors = new List<string>();
+        for (int i = 0; i < paths.Count; i++)
+        {
+            if (loaded[i].error is Exception ex) { errors.Add($"{Path.GetFileName(paths[i])}: {ex.Message}"); continue; }
+            if (loaded[i].file is not LoadedFile f) continue;
+            foreach (var e in entries) if (e.path == paths[i]) items.Add(new ChannelItem(e.kind, PlaneFor(f, e.kind), f.FileName, paths[i], f.FormatDescription));
+        }
+        return (items, errors);
+    }
+
+    /// <summary>The plane of a loaded file that a channel uses: R, G and B of a colour file are its three planes.</summary>
+    static PlanarImage PlaneFor(LoadedFile f, ChannelKind kind)
+    {
+        if (!f.IsColor) return f.Planes[0];
+        return kind switch { ChannelKind.Green => f.Planes[1], ChannelKind.Blue => f.Planes[2], _ => f.Planes[0] };
+    }
+
     public void SaveRecentState()
     {
-        System.Diagnostics.Debug.WriteLine("");
         stateSaveTimer?.Dispose(); stateSaveTimer = null;
         if (suppressRecent || IsLoading || sources.Count == 0) return;
-        var paths = sources.Values.Where(s => s.Path != null).Select(s => s.Path!).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (paths.Count != sources.Count) return;
+        // Only complete sets (every channel backed by a file; a split colour file backs three).
+        if (sources.Values.Any(s => s.Path == null)) return;
+        var paths = sources.Values.Select(s => s.Path!).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var doc = ProjectDocument();
         doc.Channels = new();
         RecentSets = recentStore.UpdateState(paths, doc);
@@ -884,20 +916,10 @@ public sealed class ProjectModel : INotifyPropertyChanged
         RemoveAll();
         IsLoading = true;
         LoadingMessage = $"Loading {set.Name}…";
-        var entries = set.Entries.ToList();
+        var entries = set.Entries.Select(e => (e.Kind, e.Path)).ToList();
         Task.Run(() =>
         {
-            var items = new List<ChannelItem>();
-            var errors = new List<string>();
-            Parallel.ForEach(entries, e =>
-            {
-                try
-                {
-                    var f = ImageLoader.Load(e.Path);
-                    lock (items) items.Add(new ChannelItem(e.Kind, f.Planes[0], f.FileName, e.Path, f.FormatDescription));
-                }
-                catch (Exception ex) { lock (errors) errors.Add($"{Path.GetFileName(e.Path)}: {ex.Message}"); }
-            });
+            var (items, errors) = LoadEntries(entries);
             ui.Post(() =>
             {
                 if (errors.Count > 0) ErrorMessage = string.Join("\n", errors);
@@ -1252,17 +1274,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
         LoadingMessage = "Loading project…";
         Task.Run(() =>
         {
-            var items = new List<ChannelItem>();
-            var errors = new List<string>();
-            Parallel.ForEach(refs, r =>
-            {
-                try
-                {
-                    var f = ImageLoader.Load(r.Path);
-                    lock (items) items.Add(new ChannelItem(r.Kind, f.Planes[0], f.FileName, r.Path, f.FormatDescription));
-                }
-                catch (Exception ex) { lock (errors) errors.Add($"{Path.GetFileName(r.Path)}: {ex.Message}"); }
-            });
+            var (items, errors) = LoadEntries(refs.Select(r => (r.Kind, r.Path)).ToList());
             ui.Post(() =>
             {
                 if (errors.Count > 0) ErrorMessage = string.Join("\n", errors);

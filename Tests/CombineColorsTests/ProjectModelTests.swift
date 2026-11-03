@@ -115,6 +115,39 @@ final class ProjectModelTests: XCTestCase {
         XCTAssertEqual(Set(m.sources.keys), [.red, .green, .blue])
     }
 
+    /// A split colour file is one path behind three channels: the recent set and the project must
+    /// give R, G and B their own planes again (not the first plane three times), and the set's
+    /// state is still auto-saved.
+    func testSplitColorFileReopensWithThreePlanes() async throws {
+        let m = ProjectModel(defaults: defaults)
+        let url = dir.appendingPathComponent("rgb.fits")
+        try FITSWriter.write(planes: [PlanarImage(width: 50, height: 40, fill: 0.1), PlanarImage(width: 50, height: 40, fill: 0.2), PlanarImage(width: 50, height: 40, fill: 0.3)], to: url)
+        m.loadFiles([url])
+        await wait { m.pendingColorFile != nil }
+        m.assignColorFileAsRGB(m.pendingColorFile!)
+        await wait { m.sources.count == 3 && !m.isLoading && !m.recentSets.isEmpty }
+        XCTAssertEqual(m.recentSets[0].entries.map(\.kind), [.blue, .green, .red].sorted { $0.rawValue < $1.rawValue })
+        m.settings.post.saturation = 1.4
+        await wait(timeout: 5) { m.recentSets[0].state?.settings.post.saturation == 1.4 }
+        XCTAssertEqual(m.recentSets[0].state?.settings.post.saturation, 1.4, "state saved for a one-file set")
+        let project = dir.appendingPathComponent("rgb.json")
+        try m.saveProject(to: project)
+        // Recent set.
+        let m2 = ProjectModel(defaults: defaults)
+        m2.openRecentSet(m2.recentSets[0])
+        await wait { m2.sources.count == 3 && !m2.isLoading }
+        XCTAssertEqual(m2.sources[.red]!.image[5, 5], 0.1, accuracy: 1e-5)
+        XCTAssertEqual(m2.sources[.green]!.image[5, 5], 0.2, accuracy: 1e-5)
+        XCTAssertEqual(m2.sources[.blue]!.image[5, 5], 0.3, accuracy: 1e-5)
+        XCTAssertEqual(m2.settings.post.saturation, 1.4)
+        // Project file.
+        let m3 = ProjectModel(defaults: defaults)
+        m3.openProject(from: project)
+        await wait { m3.sources.count == 3 && !m3.isLoading }
+        XCTAssertEqual(m3.sources[.green]!.image[5, 5], 0.2, accuracy: 1e-5)
+        XCTAssertEqual(m3.sources[.blue]!.image[5, 5], 0.3, accuracy: 1e-5)
+    }
+
     func testReassignAndRemove() async throws {
         let m = try await loadedModel()
         m.reassign(.sii, to: .hb)

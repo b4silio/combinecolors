@@ -134,6 +134,30 @@ public class ProjectModelTests : IDisposable
     }
 
     [Fact]
+    public void SplitColorFileReopensWithThreePlanes()
+    {
+        var m = f.NewModel();
+        var path = Path.Combine(f.Dir, "rgb.fits");
+        FitsWriter.Write([new PlanarImage(50, 40, 0.1f), new PlanarImage(50, 40, 0.2f), new PlanarImage(50, 40, 0.3f)], path);
+        m.LoadFiles([path]);
+        Assert.True(f.Wait(() => m.PendingColorFile != null));
+        m.AssignColorFileAsRGB(m.PendingColorFile!);
+        Assert.True(f.Wait(() => m.Sources.Count == 3 && !m.IsLoading && m.RecentSets.Count > 0));
+        var project = Path.Combine(f.Dir, "rgb.json");
+        m.SaveProject(project);
+        var m2 = f.NewModel();
+        m2.OpenRecentSet(m2.RecentSets[0]);
+        Assert.True(f.Wait(() => m2.Sources.Count == 3 && !m2.IsLoading));
+        Assert.Equal(0.1f, m2.Sources[ChannelKind.Red].Image[5, 5], 1e-5f);
+        Assert.Equal(0.2f, m2.Sources[ChannelKind.Green].Image[5, 5], 1e-5f);
+        Assert.Equal(0.3f, m2.Sources[ChannelKind.Blue].Image[5, 5], 1e-5f);
+        var m3 = f.NewModel();
+        m3.OpenProject(project);
+        Assert.True(f.Wait(() => m3.Sources.Count == 3 && !m3.IsLoading));
+        Assert.Equal(0.2f, m3.Sources[ChannelKind.Green].Image[5, 5], 1e-5f);
+    }
+
+    [Fact]
     public void ReassignAndRemove()
     {
         var m = f.LoadedModel();
