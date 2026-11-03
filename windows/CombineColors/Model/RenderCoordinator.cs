@@ -16,6 +16,8 @@ public sealed class PreviewFrame
     public double Millis { get; init; }
     /// <summary>The first pipeline stage that ran (earlier ones came from the render cache); null when uncached.</summary>
     public RenderCache.Stage? RanFrom { get; init; }
+    /// <summary>Channels whose prepared planes the combine stage reused (when it ran).</summary>
+    public int ReusedChannels { get; init; }
     public List<ResolvedStretch>? PostStretch { get; init; }
     public required Dictionary<ChannelKind, ResolvedStretch> ChannelStretch { get; init; }
     public required CombineSettings Settings { get; init; }
@@ -136,7 +138,7 @@ public sealed class RenderCoordinator
         var bmp = RasterWriter.MakeDisplayImage(result.Image);
         return new PreviewFrame
         {
-            Bitmap = bmp, Rgb = result.Image, Level = level, Rect = rect, Millis = result.Millis, RanFrom = result.RanFrom, PostStretch = result.PostStretch,
+            Bitmap = bmp, Rgb = result.Image, Level = level, Rect = rect, Millis = result.Millis, RanFrom = result.RanFrom, ReusedChannels = result.ReusedChannels, PostStretch = result.PostStretch,
             ChannelStretch = result.ChannelStretch, Settings = req.Settings,
         };
     }

@@ -386,14 +386,86 @@ public enum PostProcess {
         img.clamp01()
     }
 
+    /// L* of the image replaced by `amount` of the luminance's L* (both treated as linear-light, the
+    /// convention PixInsight's LRGBCombination uses on stretched data), a and b kept. Vectorised
+    /// (vDSP + vForce) in chunks, chunks in parallel; `injectLuminanceLabScalar` is the reference.
     static func injectLuminanceLab(_ img: RGBImage, lum: PlanarImage, amount: Float) {
+        let n = img.width * img.height
+        let r = img.r.pointer, g = img.g.pointer, b = img.b.pointer, l = lum.pointer
+        let chunk = 16_384
+        let chunks = (n + chunk - 1) / chunk
+        let thr: Float = 0.008856, k16: Float = 16.0 / 116.0, slope: Float = 7.787
+        DispatchQueue.concurrentPerform(iterations: chunks) { c in
+            let start = c * chunk, len = min(chunk, n - start)
+            let vn = vDSP_Length(len); var cnt = Int32(len)
+            let fx = UnsafeMutablePointer<Float>.allocate(capacity: len * 7)
+            defer { fx.deallocate() }
+            let fy = fx + len, fz = fy + len, fl = fz + len, cube = fl + len, lin = cube + len, mask = lin + len
+            // X / 0.95047, Y, Z / 1.08883 from R, G, B (the white-point divisions folded into the weights).
+            func mix(_ out: UnsafeMutablePointer<Float>, _ wr: Float, _ wg: Float, _ wb: Float) {
+                var a = wr, bb = wg, cc = wb
+                vDSP_vsmul(r + start, 1, &a, out, 1, vn)
+                vDSP_vsma(g + start, 1, &bb, out, 1, out, 1, vn)
+                vDSP_vsma(b + start, 1, &cc, out, 1, out, 1, vn)
+            }
+            mix(fx, 0.4124 / 0.95047, 0.3576 / 0.95047, 0.1805 / 0.95047)
+            mix(fy, 0.2126, 0.7152, 0.0722)
+            mix(fz, 0.0193 / 1.08883, 0.1192 / 1.08883, 0.9505 / 1.08883)
+            var zero: Float = 0
+            vDSP_vthr(l + start, 1, &zero, fl, 1, vn)
+            /// t → t > thr ? ∛t : 7.787 t + 16/116, in place.
+            func fwd(_ t: UnsafeMutablePointer<Float>) {
+                vvcbrtf(cube, t, &cnt)
+                var sl = slope, k = k16
+                vDSP_vsmsa(t, 1, &sl, &k, lin, 1, vn)
+                var th = thr, half: Float = 0.5
+                vDSP_vthrsc(t, 1, &th, &half, mask, 1, vn)
+                vDSP_vsadd(mask, 1, &half, mask, 1, vn)          // 1 where t > thr, else 0
+                vDSP_vsub(lin, 1, cube, 1, cube, 1, vn)            // cube − lin
+                vDSP_vma(mask, 1, cube, 1, lin, 1, t, 1, vn)      // lin + mask·(cube − lin)
+            }
+            fwd(fx); fwd(fy); fwd(fz); fwd(fl)
+            // L* moves by amount·(Lt − L*): the same shift on fx, fy, fz keeps a and b.
+            var am = amount
+            vDSP_vsub(fy, 1, fl, 1, fl, 1, vn)                     // fl − fy
+            vDSP_vsmul(fl, 1, &am, fl, 1, vn)
+            vDSP_vadd(fx, 1, fl, 1, fx, 1, vn)
+            vDSP_vadd(fy, 1, fl, 1, fy, 1, vn)
+            vDSP_vadd(fz, 1, fl, 1, fz, 1, vn)
+            /// t → t³ > thr ? t³ : (t − 16/116) / 7.787, in place.
+            func inv(_ t: UnsafeMutablePointer<Float>) {
+                vDSP_vsq(t, 1, cube, 1, vn)
+                vDSP_vmul(cube, 1, t, 1, cube, 1, vn)
+                var isl = 1 / slope, k = -k16 / slope
+                vDSP_vsmsa(t, 1, &isl, &k, lin, 1, vn)
+                var th = thr, half: Float = 0.5
+                vDSP_vthrsc(cube, 1, &th, &half, mask, 1, vn)
+                vDSP_vsadd(mask, 1, &half, mask, 1, vn)
+                vDSP_vsub(lin, 1, cube, 1, cube, 1, vn)
+                vDSP_vma(mask, 1, cube, 1, lin, 1, t, 1, vn)
+            }
+            inv(fx); inv(fy); inv(fz)
+            // Back to RGB (X = 0.95047·fx, Z = 1.08883·fz folded into the matrix).
+            func out(_ dst: UnsafeMutablePointer<Float>, _ wx: Float, _ wy: Float, _ wz: Float) {
+                var a = wx * 0.95047, bb = wy, cc = wz * 1.08883
+                vDSP_vsmul(fx, 1, &a, dst, 1, vn)
+                vDSP_vsma(fy, 1, &bb, dst, 1, dst, 1, vn)
+                vDSP_vsma(fz, 1, &cc, dst, 1, dst, 1, vn)
+            }
+            out(r + start, 3.2406, -1.5372, -0.4986)
+            out(g + start, -0.9689, 1.8758, 0.0415)
+            out(b + start, 0.0557, -0.2040, 1.0570)
+        }
+        img.clamp01()
+    }
+
+    /// Scalar reference of `injectLuminanceLab` (tests).
+    static func injectLuminanceLabScalar(_ img: RGBImage, lum: PlanarImage, amount: Float) {
         let n = img.width * img.height
         let r = img.r.pointer, g = img.g.pointer, b = img.b.pointer, l = lum.pointer
         @inline(__always) func fwd(_ t: Float) -> Float { t > 0.008856 ? cbrtf(t) : (7.787 * t + 16.0 / 116.0) }
         @inline(__always) func inv(_ t: Float) -> Float { let c = t * t * t; return c > 0.008856 ? c : (t - 16.0 / 116.0) / 7.787 }
         for i in 0..<n {
-            // Treat the stretched values as linear-light for the purpose of the L replacement
-            // (the same convention PixInsight uses for LRGBCombination on stretched data).
             let R = r[i], G = g[i], B = b[i]
             let X = 0.4124 * R + 0.3576 * G + 0.1805 * B
             let Y = 0.2126 * R + 0.7152 * G + 0.0722 * B
@@ -401,7 +473,6 @@ public enum PostProcess {
             let fx = fwd(X / 0.95047), fy = fwd(Y), fz = fwd(Z / 1.08883)
             var Lstar = 116 * fy - 16
             let a = 500 * (fx - fy), bb = 200 * (fy - fz)
-            // Target L* from the luminance plane (treated the same way).
             let Lt = 116 * fwd(max(l[i], 0)) - 16
             Lstar = Lstar + amount * (Lt - Lstar)
             let fy2 = (Lstar + 16) / 116

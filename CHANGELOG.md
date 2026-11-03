@@ -5,6 +5,10 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 (`scripts/bump.sh`). The version lives in `VERSION` and is stamped into the app at build time;
 `scripts/release.sh` tags it and publishes the DMG as a GitHub release.
 
+## [1.11.0] – 2026-11-03
+
+- Combine stage ×5 faster: the Lab luminance injection is vectorised (29 → 3 ms at the preview size) and each channel's prepared plane is kept, so a gain or weight change prepares that channel only; the status bar says how many channels were reused
+
 ## [1.10.0] – 2026-11-03
 
 - Render cache: moving a Detail, Denoise or colour slider re-runs only the stages after it (Detail 57 → 17 ms, with BM3D on 277 → 17 ms at the preview size); the status bar says what was reused

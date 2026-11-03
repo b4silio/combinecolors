@@ -22,7 +22,9 @@ public sealed record RenderInputKey(IReadOnlyDictionary<ChannelKind, Guid> Sourc
 /// </list>
 /// Detail (local contrast, sharpening) runs on a copy of the last one every time. Moving a denoise
 /// slider therefore costs denoise + detail, a colour slider costs colour + stars + denoise + detail,
-/// and only a change to the channels, the stretch or the combination runs the whole pipeline.
+/// and only a change to the channels, the stretch or the combination runs the whole pipeline. Even
+/// then the single channels' prepared planes (normalised, stretched, adjusted) are kept per channel
+/// (<see cref="ChannelPlaneStore"/>): a gain or weight change on one channel prepares that channel only.
 /// <para>
 /// The cache holds up to three images of the preview size (an intermediate behind a neutral stage is
 /// the same object as the one before it, not a copy). Renders with a live correction, or without the
@@ -35,11 +37,12 @@ public sealed class RenderCache
     public enum Stage { Combine, Colour, Denoise, Detail, Nothing }
 
     RenderInputKey? inputs;
+    readonly ChannelPlaneStore channels = new();
     (CombineSettings settings, Renderer.Developed developed)? combined;
     (CombineSettings settings, RGBImage image, DetailOverview? overview)? developed;
     (DenoiseSettings settings, RGBImage image)? denoised;
 
-    public void Clear() { inputs = null; combined = null; developed = null; denoised = null; }
+    public void Clear() { inputs = null; channels.Clear(); combined = null; developed = null; denoised = null; }
 
     /// <summary>Settings as far as the combined stage sees them (later stages neutral).</summary>
     internal static CombineSettings CombineSettingsOf(CombineSettings s)
@@ -71,9 +74,12 @@ public sealed class RenderCache
         var combineSettings = CombineSettingsOf(s);
         bool reuse = key.Equals(inputs) && combined is { } c0 && c0.settings.Equals(combineSettings);
         if (reuse && req.FixedPostStretch is { } f && !SameStretch(f, combined!.Value.developed.PostStretch)) reuse = false;
+        int reusedChannels = 0;
         if (!reuse)
         {
-            var d = Renderer.CombineStage(plan, req.Planes, req.Context, req.AnalysisPlanes, req.FixedPostStretch);
+            if (!key.Equals(inputs)) channels.Clear();
+            var d = Renderer.CombineStage(plan, req.Planes, req.Context, req.AnalysisPlanes, req.FixedPostStretch, null, channels);
+            reusedChannels = d.ReusedChannels;
             inputs = key;
             combined = (combineSettings, d);
             developed = null; denoised = null;
@@ -119,7 +125,7 @@ public sealed class RenderCache
             PostProcess.Detail(output, s.Detail, req.Scale, developed!.Value.overview);
             if (ranFrom == Stage.Nothing) ranFrom = Stage.Detail;
         }
-        return new RenderResult { Image = output, PostStretch = @base.PostStretch, ChannelStretch = @base.ChannelStretch, Millis = t0.Elapsed.TotalMilliseconds, RanFrom = ranFrom };
+        return new RenderResult { Image = output, PostStretch = @base.PostStretch, ChannelStretch = @base.ChannelStretch, Millis = t0.Elapsed.TotalMilliseconds, RanFrom = ranFrom, ReusedChannels = reusedChannels };
     }
 
     static bool SameStretch(List<ResolvedStretch> a, List<ResolvedStretch>? b)

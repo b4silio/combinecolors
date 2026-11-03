@@ -71,6 +71,52 @@ final class RenderCacheTests: XCTestCase {
         XCTAssertEqual(r1.image.width, 80)
     }
 
+    func testOneChannelChangePreparesThatChannelOnly() throws {
+        let srcs = sources()
+        var s = CombineSettings(); s.select(palette: Palettes.palette(id: "sho")!)
+        let ctx = RenderContext.make(settings: s.normalization, sources: srcs)
+        let analysis = Renderer.analysisSamples(sources: srcs)
+        let cache = RenderCache()
+        let planes = srcs.mapValues { $0.pyramid.level(0) }
+        func check(_ s: CombineSettings, reused: Int, _ what: String) throws {
+            let cached = try cache.render(RenderRequest(planes: planes, analysisPlanes: analysis, settings: s, context: ctx), inputs: key(srcs, ctx: ctx))
+            let fresh = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: analysis, settings: s, context: ctx))
+            assertSame(cached.image, fresh.image, what)
+            XCTAssertEqual(cached.ranFrom, .combine, what)
+            XCTAssertEqual(cached.reusedChannels, reused, what)
+        }
+        try check(s, reused: 0, "first render prepares every channel")
+        var a = s.adjust(.oiii); a.gain = 1.4; s.setAdjust(.oiii, a)
+        try check(s, reused: 0, "gain of one channel with a linked stretch: the stretch of every channel moves")
+        s.stretch.linked = false
+        try check(s, reused: 0, "unlinked: every channel stretched on its own")
+        a.gain = 1.8; s.setAdjust(.oiii, a)
+        try check(s, reused: 2, "gain of one channel, unlinked: that channel only")
+        s.stretch.linked = true
+        a.weight = 0.7; s.setAdjust(.oiii, a)
+        try check(s, reused: 0, "back to linked")
+        a.weight = 0.6; s.setAdjust(.oiii, a)
+        try check(s, reused: 2, "weight of one channel (after the stretch): that channel only")
+        s.luminance.amount = 0.5
+        try check(s, reused: 3, "luminance amount: every plane reused")
+        s.stretch.targetBackground = 0.3
+        try check(s, reused: 0, "stretch: every plane prepared again")
+        // Post-combine: the linear planes carry the weight; the others stay.
+        s.stretchStage = .postCombine
+        try check(s, reused: 0, "post-combine: linear planes")
+        a.weight = 1.3; s.setAdjust(.oiii, a)
+        try check(s, reused: 2, "post-combine weight of one channel")
+        s.stretch.targetBackground = 0.25
+        try check(s, reused: 3, "post-combine stretch: the linear planes stay")
+        // Pixel-math luminance naming a bare channel must not alias the stored plane (it is clamped later).
+        s.stretchStage = .preCombine
+        s.mode = .pixelMath; s.pixelMath = PixelMathProgram(red: "SII", green: "Ha", blue: "OIII", luminance: "Ha")
+        var ha = s.adjust(.ha); ha.weight = 1.5; s.setAdjust(.ha, ha)
+        try check(s, reused: 0, "pixel math with a Ha luminance")
+        a.weight = 0.9; s.setAdjust(.oiii, a)
+        try check(s, reused: 2, "the stored Ha plane (reused) was not clamped by the first render's luminance")
+    }
+
     func testLiveCorrectionAndStripRendersBypassTheCache() throws {
         let srcs = sources()
         var s = CombineSettings(); s.select(palette: Palettes.palette(id: "sho")!)

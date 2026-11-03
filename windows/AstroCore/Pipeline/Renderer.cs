@@ -103,6 +103,32 @@ public sealed class RenderResult
     public double Millis { get; init; }
     /// <summary>Set by <see cref="RenderCache"/>: the first stage that ran for this render (what was reused is before it).</summary>
     public RenderCache.Stage? RanFrom { get; set; }
+    /// <summary>Set by <see cref="RenderCache"/>: channels whose prepared planes (normalised, stretched, adjusted) were reused by a combine stage that had to run.</summary>
+    public int ReusedChannels { get; set; }
+}
+
+/// <summary>
+/// The planes of single channels ready for the combination — normalised, stretched and adjusted
+/// (steps 1–2) — kept between renders by <see cref="RenderCache"/> so that a change to one channel,
+/// or none, leaves the others' planes as they are. Every entry carries what made it. Planes handed
+/// out are shared: readers only.
+/// </summary>
+public sealed class ChannelPlaneStore
+{
+    internal sealed record Key(ChannelAdjust Adjust, StretchStage Stage, ResolvedStretch? Stretch)
+    {
+        public bool Equals(Key? o) => o != null && Adjust.Equals(o.Adjust) && Stage == o.Stage && (Stretch == null ? o.Stretch == null : o.Stretch != null && Stretch.Equals(o.Stretch));
+        public override int GetHashCode() => (int)Stage;
+    }
+    internal sealed class Entry
+    {
+        public required Key Key;
+        public required PlanarImage Plane;
+        /// <summary>Statistics of the plane; null when the render did not need them (computed on demand).</summary>
+        public ChannelStats? Stats;
+    }
+    internal readonly Dictionary<ChannelKind, Entry> Entries = new();
+    public void Clear() => Entries.Clear();
 }
 
 public static class Renderer
@@ -174,6 +200,8 @@ public static class Renderer
         public required RGBImage Image;
         public List<ResolvedStretch>? PostStretch;
         public required Dictionary<ChannelKind, ResolvedStretch> ChannelStretch;
+        /// <summary>Channels whose prepared planes came from the <see cref="ChannelPlaneStore"/>.</summary>
+        public int ReusedChannels;
     }
 
     /// <summary>
@@ -190,20 +218,25 @@ public static class Renderer
 
     /// <summary>
     /// Steps 1–4 — normalise, stretch, combine, luminance — the point-wise work that depends on the
-    /// channels, the stretch and the combination only. The image comes back unclamped.
+    /// channels, the stretch and the combination only. The image comes back unclamped. With a
+    /// <paramref name="store"/>, a channel's prepared plane is taken from it when the same settings
+    /// made it, and the planes prepared here are put in it (for the planes of one and the same region only).
     /// </summary>
     internal static Developed CombineStage(Plan plan, Dictionary<ChannelKind, PlanarImage> reqPlanes, RenderContext context, Dictionary<ChannelKind, PlanarImage>? analysisPlanes,
-                                           List<ResolvedStretch>? fixedPostStretch, CorrectionInput? correction = null)
+                                           List<ResolvedStretch>? fixedPostStretch, CorrectionInput? correction = null, ChannelPlaneStore? store = null)
     {
         CombineSettings s = plan.Settings; var available = plan.Available; var needed = plan.Needed; var lumExpr = plan.LumExpr;
         var anyPlane = reqPlanes.Values.FirstOrDefault() ?? throw RenderException.NoOutput();
         int w = anyPlane.Width, h = anyPlane.Height;
+        if (correction != null) store = null;
+        int reused = 0;
 
         // 1. Normalised linear channels (+ gain, pedestal). A live correction goes on the plane
-        //    before everything else, as the committed ones do.
+        //    before everything else, as the committed ones do. With a store the statistics come
+        //    first (from the context, no pixel work) and a plane is prepared only when needed.
         var linear = new Dictionary<ChannelKind, PlanarImage>();
         var linStats = new Dictionary<ChannelKind, ChannelStats>();
-        foreach (var k in needed)
+        (PlanarImage, ChannelStats) Prepare(ChannelKind k)
         {
             var plane = reqPlanes[k];
             if (correction != null && correction.Kind == k)
@@ -211,7 +244,12 @@ public static class Renderer
                 plane = plane.Copy();
                 correction.Map.Apply(plane, correction.Strength, correction.Rect);
             }
-            var (p, st) = PrepareLinear(k, plane, s, context);
+            return PrepareLinear(k, plane, s, context);
+        }
+        foreach (var k in needed)
+        {
+            if (store != null && LinearStats(k, s, context) is { } cst) { linStats[k] = cst; continue; }
+            var (p, st) = Prepare(k);
             linear[k] = p; linStats[k] = st;
         }
 
@@ -229,9 +267,9 @@ public static class Renderer
             ResolvedStretch? linkedStretch = s.Stretch.Linked
                 ? Stretch.ResolveLinked(s.Stretch, stretchKinds.Where(linStats.ContainsKey).Select(k => linStats[k]).ToList())
                 : null;
+            bool wantStats = UsesChannelStats(s);
             foreach (var k in needed)
             {
-                var p = linear[k];
                 ResolvedStretch r;
                 var adj = s.Adjust(k);
                 if (linkedStretch != null && stretchKinds.Contains(k) && adj.StretchBoost == 0) r = linkedStretch;
@@ -242,15 +280,22 @@ public static class Renderer
                     r = Stretch.Resolve(ss, linStats[k]);
                 }
                 channelStretch[k] = r;
+                var key = new ChannelPlaneStore.Key(adj.Clone(), StretchStage.PreCombine, r);
+                ChannelStats Stats() => PostStretchAdjustedStats(adj, linStats[k].Transformed(r.Evaluate, 1));
+                if (store != null && store.Entries.TryGetValue(k, out var e) && e.Key.Equals(key))
+                {
+                    stretched[k] = e.Plane;
+                    reused++;
+                    if (wantStats) { e.Stats ??= Stats(); stStats[k] = e.Stats; }
+                    continue;
+                }
+                var p = linear.TryGetValue(k, out var lp) ? lp : Prepare(k).Item1;
                 r.Apply(p);
                 ApplyPostStretchAdjust(adj, p);
                 stretched[k] = p;
-                if (UsesChannelStats(s))
-                {
-                    var st = linStats[k].Transformed(r.Evaluate, 1);
-                    st = PostStretchAdjustedStats(adj, st);
-                    stStats[k] = st;
-                }
+                ChannelStats? st = wantStats ? Stats() : null;
+                if (st != null) stStats[k] = st;
+                if (store != null) store.Entries[k] = new ChannelPlaneStore.Entry { Key = key, Plane = p, Stats = st };
             }
             combined = Combine(stretched, stStats, s, w, h, out lumPlane);
             if (lumPlane == null && lumExpr != null) lumPlane = EvaluateLuminance(lumExpr, stretched, w, h);
@@ -260,8 +305,19 @@ public static class Renderer
             // Weight acts as a linear multiplier here.
             foreach (var k in needed)
             {
-                float wgt = s.Adjust(k).Weight;
-                if (wgt != 1) { linear[k].Affine(wgt, 0); linStats[k] = linStats[k].Affine(wgt, 0); }
+                var adj = s.Adjust(k);
+                var key = new ChannelPlaneStore.Key(adj.Clone(), StretchStage.PostCombine, null);
+                if (store != null && store.Entries.TryGetValue(k, out var e) && e.Key.Equals(key) && e.Stats is { } est)
+                {
+                    linear[k] = e.Plane; linStats[k] = est;
+                    reused++;
+                    continue;
+                }
+                var p = linear.TryGetValue(k, out var lp) ? lp : Prepare(k).Item1;
+                var st = linStats[k];
+                if (adj.Weight != 1) { p.Affine(adj.Weight, 0); st = st.Affine(adj.Weight, 0); }
+                linear[k] = p; linStats[k] = st;
+                if (store != null) store.Entries[k] = new ChannelPlaneStore.Entry { Key = key, Plane = p, Stats = st };
             }
             combined = Combine(linear, UsesChannelStats(s) ? linStats : new Dictionary<ChannelKind, ChannelStats>(), s, w, h, out var lumLinear);
             if (lumLinear == null && lumExpr != null) lumLinear = EvaluateLuminance(lumExpr, linear, w, h);
@@ -312,7 +368,20 @@ public static class Renderer
             PostProcess.InjectLuminance(combined, lumPlane, s.Luminance.Amount, s.Luminance.Method);
         }
 
-        return new Developed { Image = combined, PostStretch = postStretch, ChannelStretch = channelStretch };
+        return new Developed { Image = combined, PostStretch = postStretch, ChannelStretch = channelStretch, ReusedChannels = reused };
+    }
+
+    /// <summary>
+    /// Statistics of a channel's normalised linear plane (+ gain, pedestal) from the context alone;
+    /// null when the context has none for it (then the plane itself is needed, see <see cref="PrepareLinear"/>).
+    /// </summary>
+    static ChannelStats? LinearStats(ChannelKind k, CombineSettings s, RenderContext context)
+    {
+        if (!context.NormalizedStats.TryGetValue(k, out var st)) return null;
+        var adj = s.Adjust(k);
+        float offset = adj.OffsetSigma * context.ReferenceBackgroundSigma;
+        if (adj.Gain != 1 || offset != 0) st = st.Affine(adj.Gain, offset);
+        return st;
     }
 
     /// <summary>Steps 5–6 on the combined image, in place: colour post-processing and the RGB stars.</summary>
@@ -456,7 +525,7 @@ public static class Renderer
                     var r = PixelMath.EvaluateToPlane(compiled.Red, env);
                     var g = PixelMath.EvaluateToPlane(compiled.Green, env);
                     var b = PixelMath.EvaluateToPlane(compiled.Blue, env);
-                    if (compiled.Luminance != null) lum = PixelMath.EvaluateToPlane(compiled.Luminance, env);
+                    if (compiled.Luminance != null) lum = Own(PixelMath.EvaluateToPlane(compiled.Luminance, env));
                     // Expressions may return the very same plane object (e.g. "OIII"); copy to keep planes independent.
                     PlanarImage Own(PlanarImage p) => planes.Values.Any(q => ReferenceEquals(q, p)) ? p.Copy() : p;
                     return new RGBImage(Own(r), Own(g), Own(b));

@@ -359,7 +359,8 @@ public sealed class ProjectModel : INotifyPropertyChanged
             LastRenderMillis = frame.Millis;
             LastRenderNote = frame.RanFrom switch
             {
-                null or RenderCache.Stage.Combine => "",
+                null => "",
+                RenderCache.Stage.Combine => frame.ReusedChannels > 0 ? $"{frame.ReusedChannels} ch reused" : "",
                 RenderCache.Stage.Nothing => "cached",
                 RenderCache.Stage st => "from " + st.ToString().ToLowerInvariant(),
             };

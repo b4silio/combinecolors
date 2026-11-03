@@ -27,7 +27,9 @@ public struct RenderInputKey: Hashable {
 ///
 /// Detail (local contrast, sharpening) runs on a copy of the last one every time. Moving a denoise
 /// slider therefore costs denoise + detail, a colour slider costs colour + stars + denoise + detail,
-/// and only a change to the channels, the stretch or the combination runs the whole pipeline.
+/// and only a change to the channels, the stretch or the combination runs the whole pipeline. Even
+/// then the single channels' prepared planes (normalised, stretched, adjusted) are kept per channel
+/// (`ChannelPlaneStore`): a gain or weight change on one channel prepares that channel only.
 ///
 /// The cache holds up to three images of the preview size (an intermediate behind a neutral stage is
 /// the same object as the one before it, not a copy). Renders with a live correction, or without the
@@ -37,13 +39,14 @@ public final class RenderCache {
     public enum Stage: String { case combine, colour, denoise, detail, nothing }
 
     private var inputs: RenderInputKey? = nil
+    private let channels = ChannelPlaneStore()
     private var combined: (settings: CombineSettings, developed: Renderer.Developed)? = nil
     private var developed: (settings: CombineSettings, image: RGBImage, overview: DetailOverview?)? = nil
     private var denoised: (settings: DenoiseSettings, image: RGBImage)? = nil
 
     public init() {}
 
-    public func clear() { inputs = nil; combined = nil; developed = nil; denoised = nil }
+    public func clear() { inputs = nil; channels.removeAll(); combined = nil; developed = nil; denoised = nil }
 
     /// Settings as far as the combined stage sees them (later stages neutral).
     static func combineSettings(_ s: CombineSettings) -> CombineSettings {
@@ -72,8 +75,11 @@ public final class RenderCache {
         let combineSettings = RenderCache.combineSettings(s)
         var reuse = key == inputs && combined?.settings == combineSettings
         if reuse, let f = req.fixedPostStretch, f != combined!.developed.postStretch { reuse = false }
+        var reusedChannels = 0
         if !reuse {
-            let d = try Renderer.combineStage(plan, planes: req.planes, context: req.context, analysisPlanes: req.analysisPlanes, fixedPostStretch: req.fixedPostStretch)
+            if key != inputs { channels.removeAll() }
+            let d = try Renderer.combineStage(plan, planes: req.planes, context: req.context, analysisPlanes: req.analysisPlanes, fixedPostStretch: req.fixedPostStretch, store: channels)
+            reusedChannels = d.reusedChannels
             inputs = key
             combined = (combineSettings, d)
             developed = nil; denoised = nil
@@ -119,6 +125,7 @@ public final class RenderCache {
         }
         var res = RenderResult(image: out, postStretch: base.postStretch, channelStretch: base.channelStretch, millis: Date().timeIntervalSince(t0) * 1000)
         res.ranFrom = ranFrom
+        res.reusedChannels = reusedChannels
         return res
     }
 }

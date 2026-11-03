@@ -88,6 +88,31 @@ public struct RenderResult {
     public let millis: Double
     /// Set by `RenderCache`: the first stage that ran for this render (what was reused is before it).
     public var ranFrom: RenderCache.Stage? = nil
+    /// Set by `RenderCache`: channels whose prepared planes (normalised, stretched, adjusted) were reused
+    /// by a combine stage that had to run.
+    public var reusedChannels: Int = 0
+}
+
+/// The planes of single channels ready for the combination — normalised, stretched and adjusted
+/// (steps 1–2) — kept between renders by `RenderCache` so that a change to one channel, or none,
+/// leaves the others' planes as they are. Every entry carries what made it. Planes handed out are
+/// shared: readers only.
+public final class ChannelPlaneStore {
+    struct Key: Equatable {
+        var adjust: ChannelAdjust
+        var stage: StretchStage
+        /// The stretch applied (pre-combine); nil in the post-combine stage, where the plane stays linear.
+        var stretch: ResolvedStretch?
+    }
+    struct Entry {
+        var key: Key
+        var plane: PlanarImage
+        /// Statistics of the plane; nil when the render did not need them (computed on demand).
+        var stats: ChannelStats?
+    }
+    var entries: [ChannelKind: Entry] = [:]
+    public init() {}
+    public func removeAll() { entries = [:] }
 }
 
 public enum Renderer {
@@ -149,6 +174,8 @@ public enum Renderer {
         var image: RGBImage
         var postStretch: [ResolvedStretch]?
         var channelStretch: [ChannelKind: ResolvedStretch]
+        /// Channels whose prepared planes came from the `ChannelPlaneStore`.
+        var reusedChannels: Int = 0
     }
 
     /// Steps 1–6 — normalise, stretch, combine, luminance, colour, stars: everything up to the
@@ -161,24 +188,33 @@ public enum Renderer {
     }
 
     /// Steps 1–4 — normalise, stretch, combine, luminance — the point-wise work that depends on the
-    /// channels, the stretch and the combination only. The image comes back unclamped.
+    /// channels, the stretch and the combination only. The image comes back unclamped. With a
+    /// `store`, a channel's prepared plane is taken from it when the same settings made it, and the
+    /// planes prepared here are put in it (for the planes of one and the same region only).
     static func combineStage(_ plan: Plan, planes reqPlanes: [ChannelKind: PlanarImage], context: RenderContext, analysisPlanes: [ChannelKind: PlanarImage]?,
-                             fixedPostStretch: [ResolvedStretch]?, correction: CorrectionInput? = nil) throws -> Developed {
+                             fixedPostStretch: [ResolvedStretch]?, correction: CorrectionInput? = nil, store: ChannelPlaneStore? = nil) throws -> Developed {
         let s = plan.settings, available = plan.available, needed = plan.needed, lumExpr = plan.lumExpr
         guard let anyPlane = reqPlanes.values.first else { throw RenderError.noOutput }
         let w = anyPlane.width, h = anyPlane.height
+        let store = correction == nil ? store : nil
+        var reused = 0
 
         // 1. Normalised linear channels (+ gain, pedestal). A live correction goes on the plane
-        //    before everything else, as the committed ones do.
+        //    before everything else, as the committed ones do. With a store the statistics come
+        //    first (from the context, no pixel work) and a plane is prepared only when needed.
         var linear: [ChannelKind: PlanarImage] = [:]
         var linStats: [ChannelKind: ChannelStats] = [:]
-        for k in needed {
+        func prepare(_ k: ChannelKind) -> (PlanarImage, ChannelStats) {
             var plane = reqPlanes[k]!
             if let c = correction, c.kind == k {
                 plane = plane.copy()
                 c.map.apply(to: plane, strength: c.strength, rect: c.rect)
             }
-            let (p, st) = prepareLinear(k, plane: plane, settings: s, context: context)
+            return prepareLinear(k, plane: plane, settings: s, context: context)
+        }
+        for k in needed {
+            if store != nil, let st = linearStats(k, settings: s, context: context) { linStats[k] = st; continue }
+            let (p, st) = prepare(k)
             linear[k] = p; linStats[k] = st
         }
         var channelStretch: [ChannelKind: ResolvedStretch] = [:]
@@ -195,8 +231,8 @@ public enum Renderer {
             let linkedStretch: ResolvedStretch? = s.stretch.linked
                 ? Stretch.resolveLinked(s.stretch, stats: stretchKinds.compactMap { linStats[$0] })
                 : nil
+            let wantStats = usesChannelStats(s)
             for k in needed {
-                let p = linear[k]!
                 var r: ResolvedStretch
                 let adj = s.adjust(k)
                 if let l = linkedStretch, stretchKinds.contains(k), adj.stretchBoost == 0 {
@@ -207,14 +243,24 @@ public enum Renderer {
                     r = Stretch.resolve(ss, stats: linStats[k]!)
                 }
                 channelStretch[k] = r
+                let key = ChannelPlaneStore.Key(adjust: adj, stage: .preCombine, stretch: r)
+                func stats() -> ChannelStats { postStretchAdjustedStats(adj, linStats[k]!.transformed({ r.evaluate($0) }, scale: 1)) }
+                if let store, var e = store.entries[k], e.key == key {
+                    stretched[k] = e.plane
+                    reused += 1
+                    if wantStats {
+                        if e.stats == nil { e.stats = stats(); store.entries[k] = e }
+                        stStats[k] = e.stats
+                    }
+                    continue
+                }
+                let p = linear[k] ?? prepare(k).0
                 r.apply(to: p)
                 applyPostStretchAdjust(adj, to: p)
                 stretched[k] = p
-                if usesChannelStats(s) {
-                    var st = linStats[k]!.transformed({ r.evaluate($0) }, scale: 1)
-                    st = postStretchAdjustedStats(adj, st)
-                    stStats[k] = st
-                }
+                let st: ChannelStats? = wantStats ? stats() : nil
+                if let st { stStats[k] = st }
+                store?.entries[k] = ChannelPlaneStore.Entry(key: key, plane: p, stats: st)
             }
             combined = try combine(stretched, stats: stStats, settings: s, width: w, height: h, lum: &lumPlane)
             if lumPlane == nil, let e = lumExpr {
@@ -223,8 +269,18 @@ public enum Renderer {
         case .postCombine:
             // Weight acts as a linear multiplier here.
             for k in needed {
-                let wgt = s.adjust(k).weight
-                if wgt != 1 { linear[k]!.affine(scale: wgt, offset: 0); linStats[k] = linStats[k]!.affine(a: wgt, b: 0) }
+                let adj = s.adjust(k)
+                let key = ChannelPlaneStore.Key(adjust: adj, stage: .postCombine, stretch: nil)
+                if let store, let e = store.entries[k], e.key == key, let st = e.stats {
+                    linear[k] = e.plane; linStats[k] = st
+                    reused += 1
+                    continue
+                }
+                let p = linear[k] ?? prepare(k).0
+                var st = linStats[k]!
+                if adj.weight != 1 { p.affine(scale: adj.weight, offset: 0); st = st.affine(a: adj.weight, b: 0) }
+                linear[k] = p; linStats[k] = st
+                store?.entries[k] = ChannelPlaneStore.Entry(key: key, plane: p, stats: st)
             }
             var lumLinear: PlanarImage? = nil
             combined = try combine(linear, stats: usesChannelStats(s) ? linStats : [:], settings: s, width: w, height: h, lum: &lumLinear)
@@ -275,7 +331,17 @@ public enum Renderer {
             PostProcess.injectLuminance(combined, lum: lum, amount: s.luminance.amount, method: s.luminance.method)
         }
 
-        return Developed(image: combined, postStretch: postStretch, channelStretch: channelStretch)
+        return Developed(image: combined, postStretch: postStretch, channelStretch: channelStretch, reusedChannels: reused)
+    }
+
+    /// Statistics of a channel's normalised linear plane (+ gain, pedestal) from the context alone;
+    /// nil when the context has none for it (then the plane itself is needed, see `prepareLinear`).
+    static func linearStats(_ k: ChannelKind, settings s: CombineSettings, context: RenderContext) -> ChannelStats? {
+        guard var st = context.normalizedStats[k] else { return nil }
+        let adj = s.adjust(k)
+        let offset = adj.offsetSigma * context.referenceBackgroundSigma
+        if adj.gain != 1 || offset != 0 { st = st.affine(a: adj.gain, b: offset) }
+        return st
     }
 
     /// Steps 5–6 on the combined image, in place: colour post-processing and the RGB stars.
@@ -393,9 +459,9 @@ public enum Renderer {
                 let r = try PixelMath.evaluateToPlane(compiled.red, env: env)
                 let g = try PixelMath.evaluateToPlane(compiled.green, env: env)
                 let b = try PixelMath.evaluateToPlane(compiled.blue, env: env)
-                if let l = compiled.luminance { lum = try PixelMath.evaluateToPlane(l, env: env) }
                 // Expressions may return the very same plane object (e.g. "OIII"); copy to keep planes independent.
                 func own(_ p: PlanarImage) -> PlanarImage { planes.values.contains { $0 === p } ? p.copy() : p }
+                if let l = compiled.luminance { lum = own(try PixelMath.evaluateToPlane(l, env: env)) }
                 return RGBImage(r: own(r), g: own(g), b: own(b))
             } catch let e as PixelMathError { throw RenderError.pixelMath(e) }
         }

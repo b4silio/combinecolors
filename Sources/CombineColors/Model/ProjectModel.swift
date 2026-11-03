@@ -336,7 +336,8 @@ final class ProjectModel {
             self.renderError = nil
             self.lastRenderMillis = frame.millis
             switch frame.ranFrom {
-            case .combine?, nil: self.lastRenderNote = ""
+            case nil: self.lastRenderNote = ""
+            case .combine?: self.lastRenderNote = frame.reusedChannels > 0 ? "\(frame.reusedChannels) ch reused" : ""
             case .nothing?: self.lastRenderNote = "cached"
             case let st?: self.lastRenderNote = "from " + st.rawValue
             }

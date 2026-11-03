@@ -13,6 +13,8 @@ struct PreviewFrame {
     let millis: Double
     /// The first pipeline stage that ran (earlier ones came from the render cache); nil when uncached.
     let ranFrom: RenderCache.Stage?
+    /// Channels whose prepared planes the combine stage reused (when it ran).
+    let reusedChannels: Int
     let postStretch: [ResolvedStretch]?
     let channelStretch: [ChannelKind: ResolvedStretch]
     let settings: CombineSettings
@@ -120,7 +122,7 @@ final class RenderCoordinator {
             result = try Renderer.render(request)
         }
         guard let cg = RasterWriter.makeDisplayImage(rgb: result.image) else { throw RenderError.noOutput }
-        return PreviewFrame(cgImage: cg, rgb: result.image, level: level, rect: rect, millis: result.millis, ranFrom: result.ranFrom, postStretch: result.postStretch, channelStretch: result.channelStretch, settings: req.settings)
+        return PreviewFrame(cgImage: cg, rgb: result.image, level: level, rect: rect, millis: result.millis, ranFrom: result.ranFrom, reusedChannels: result.reusedChannels, postStretch: result.postStretch, channelStretch: result.channelStretch, settings: req.settings)
     }
 }
 

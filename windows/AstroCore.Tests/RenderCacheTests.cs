@@ -76,6 +76,53 @@ public class RenderCacheTests
     }
 
     [Fact]
+    public void OneChannelChangePreparesThatChannelOnly()
+    {
+        var srcs = Sources();
+        var s = new CombineSettings(); s.Select(Palettes.Palette("sho")!);
+        var ctx = RenderContext.Make(s.Normalization, srcs);
+        var analysis = Renderer.AnalysisSamples(srcs);
+        var cache = new RenderCache();
+        var planes = srcs.ToDictionary(kv => kv.Key, kv => kv.Value.Pyramid.Level(0));
+        void Check(CombineSettings st, int reused, string what)
+        {
+            var cached = cache.Render(new RenderRequest(planes, st.Clone(), ctx, analysis), Key(srcs, ctx));
+            var fresh = Renderer.Render(new RenderRequest(planes, st.Clone(), ctx, analysis));
+            AssertSame(cached.Image, fresh.Image, what);
+            Assert.Equal(RenderCache.Stage.Combine, cached.RanFrom);
+            Assert.True(reused == cached.ReusedChannels, $"{what}: reused {cached.ReusedChannels}, expected {reused}");
+        }
+        Check(s, 0, "first render prepares every channel");
+        var a = s.Adjust(ChannelKind.OIII).Clone(); a.Gain = 1.4f; s.SetAdjust(ChannelKind.OIII, a);
+        Check(s, 0, "gain of one channel with a linked stretch: the stretch of every channel moves");
+        s.Stretch.Linked = false;
+        Check(s, 0, "unlinked: every channel stretched on its own");
+        a = a.Clone(); a.Gain = 1.8f; s.SetAdjust(ChannelKind.OIII, a);
+        Check(s, 2, "gain of one channel, unlinked: that channel only");
+        s.Stretch.Linked = true;
+        a = a.Clone(); a.Weight = 0.7f; s.SetAdjust(ChannelKind.OIII, a);
+        Check(s, 0, "back to linked");
+        a = a.Clone(); a.Weight = 0.6f; s.SetAdjust(ChannelKind.OIII, a);
+        Check(s, 2, "weight of one channel (after the stretch): that channel only");
+        s.Luminance.Amount = 0.5f;
+        Check(s, 3, "luminance amount: every plane reused");
+        s.Stretch.TargetBackground = 0.3f;
+        Check(s, 0, "stretch: every plane prepared again");
+        s.StretchStage = StretchStage.PostCombine;
+        Check(s, 0, "post-combine: linear planes");
+        a = a.Clone(); a.Weight = 1.3f; s.SetAdjust(ChannelKind.OIII, a);
+        Check(s, 2, "post-combine weight of one channel");
+        s.Stretch.TargetBackground = 0.25f;
+        Check(s, 3, "post-combine stretch: the linear planes stay");
+        s.StretchStage = StretchStage.PreCombine;
+        s.Mode = CombineMode.PixelMath; s.PixelMath = new PixelMathProgram("SII", "Ha", "OIII", "Ha");
+        var ha = s.Adjust(ChannelKind.Ha).Clone(); ha.Weight = 1.5f; s.SetAdjust(ChannelKind.Ha, ha);
+        Check(s, 0, "pixel math with a Ha luminance");
+        a = a.Clone(); a.Weight = 0.9f; s.SetAdjust(ChannelKind.OIII, a);
+        Check(s, 2, "the stored Ha plane (reused) was not clamped by the first render's luminance");
+    }
+
+    [Fact]
     public void LiveCorrectionAndStripRendersBypassTheCache()
     {
         var srcs = Sources();

@@ -229,6 +229,23 @@ final class PostProcessTests: XCTestCase {
         XCTAssertGreaterThan(img.planes[0].maxAbsDifference(ref.planes[0]), 0.1)
     }
 
+    func testVectorisedLabInjectionMatchesTheScalarReference() {
+        // Random colours around and below the Lab threshold, a few negatives and values above 1.
+        let w = 1000, h = 37   // 37 000 px: several chunks, the last one partial
+        let img = RGBImage(width: w, height: h), ref = RGBImage(width: w, height: h)
+        let lum = PlanarImage(width: w, height: h)
+        var rng = Synth.LCG(state: 11)
+        for i in 0..<(w * h) {
+            let v: [Float] = (0..<4).map { _ in let u = rng.next(); return u < 0.1 ? u * 0.02 - 0.001 : (u > 0.95 ? 1.2 : u) }
+            img.r.pointer[i] = v[0]; img.g.pointer[i] = v[1]; img.b.pointer[i] = v[2]; lum.pointer[i] = v[3]
+            ref.r.pointer[i] = v[0]; ref.g.pointer[i] = v[1]; ref.b.pointer[i] = v[2]
+        }
+        PostProcess.injectLuminanceLab(img, lum: lum, amount: 0.7)
+        PostProcess.injectLuminanceLabScalar(ref, lum: lum, amount: 0.7)
+        for (p, q) in zip(img.planes, ref.planes) { XCTAssertLessThan(p.maxAbsDifference(q), 2e-4) }
+        XCTAssertGreaterThan(img.luma().mean(), 0.1)
+    }
+
     func testLuminanceInjection() {
         for method in LuminanceMethod.allCases {
             let img = sample()
