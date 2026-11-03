@@ -163,7 +163,7 @@ export at full resolution.
   change (`× 2^(strength · map)`, *Strength* in stops). *Darken* / *Brighten*
   (D, or hold ⌥ for the opposite), *Radius* (right-drag on the preview: the
   circle and "r = N px" follow the pointer, left shrinks and right grows, up to
-  20 % of the image), *Flow* and *Feather*, *Map* (off by default: the preview shows the result) shows the strokes as a red /
+  20 % of the image), *Flow* (0.01–0.2) and *Feather*, *Strength* (0–1.5 stops), *Map* (off by default: the preview shows the result) shows the strokes as a red /
   blue tint, *Original* compares, *Undo stroke* (⌘Z) and *Clear*. Painting is
   live: the map goes with every preview render (a few milliseconds per stroke
   segment), the channel is re-processed on Apply. The map is saved next to the
@@ -195,7 +195,7 @@ export at full resolution.
   (⇧⌘H / ⇧⌘V) mirror them. The resulting orientation is stored in the project
   and applied to channels added later.
 * **Preview**: scroll or pinch to zoom around the pointer, drag (or ⌘-scroll)
-  to pan, double-click toggles 1:1/fit, press-and-hold a channel thumbnail to see that
+  to pan, hold the space bar to pan inside any editor, double-click toggles 1:1/fit, press-and-hold a channel thumbnail to see that
   channel alone (keep the button down and move over the other slots to switch),
   pixel read-out of every channel and of the result under the cursor, a
   histogram under the channel column, a **preset row** under the palettes (Save

@@ -519,7 +519,7 @@ final class ProjectModel {
             if parts.count > 3, let shape = GradientShape(rawValue: parts[3]) { setGradientShape(shape) }
         } else if parts[0] == "dust" { beginDustEditing(k) }
         else if parts[0] == "corrections" { beginCorrectionEditing(k) }
-        // `-editorAction removeModel|clearRegions|adopt` runs that toolbar action 5 s later (screenshots of a state reached by a click).
+        // `-editorAction removeModel|clearRegions|adopt|paintTest|paintApply` runs that toolbar action 5 s later (screenshots of a state reached by a click).
         if let action = UserDefaults.standard.string(forKey: "editorAction") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
                 guard let self else { return }
@@ -527,9 +527,11 @@ final class ProjectModel {
                 case "removeModel": self.clearGradient()
                 case "clearRegions": self.clearGradientRegions()
                 case "adopt": self.adoptRefinedGradient()
-                case "paintTest":
-                    // Two strokes for screenshots: a darkening one top-left to centre, a brightening one at the right.
+                case "paintTest", "paintApply":
+                    // Two strokes for screenshots: a darkening one top-left to centre, a brightening one at the right
+                    // (paintApply also applies them, for the slot badge).
                     guard let size = self.imageSize else { break }
+                    if action == "paintApply" { DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.commitCorrectionEditing() } }
                     self.correctionBrushRadius = Double(max(size.width, size.height)) * 0.04
                     self.beginCorrectionStroke()
                     self.paintCorrection(from: CGPoint(x: size.width * 0.15, y: size.height * 0.2), to: CGPoint(x: size.width * 0.45, y: size.height * 0.5), invert: false)
@@ -1426,7 +1428,7 @@ extension ProjectModel {
         get { corrections.brushRadius * Double(imageSize.map { max($0.width, $0.height) } ?? 1000) }
         set { let long = Double(imageSize.map { max($0.width, $0.height) } ?? 1000); corrections.brushRadius = min(max(newValue / long, 0.003), 0.2) }
     }
-    var correctionBrushFlow: Double { get { corrections.brushFlow } set { corrections.brushFlow = min(max(newValue, 0.02), 1) } }
+    var correctionBrushFlow: Double { get { corrections.brushFlow } set { corrections.brushFlow = min(max(newValue, 0.01), 1) } }
     var correctionBrushFeather: Double { get { corrections.brushFeather } set { corrections.brushFeather = min(max(newValue, 0), 1) } }
     var correctionDarken: Bool { get { corrections.darken } set { corrections.darken = newValue } }
     var canUndoCorrection: Bool { !correctionUndo.isEmpty }

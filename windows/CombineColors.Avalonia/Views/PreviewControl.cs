@@ -66,6 +66,29 @@ public sealed class PreviewControl : Control
     Point? brushPoint;
     Point paintLast;
     bool brushResizing; Point brushResizeStart; double brushResizeRadius;
+
+    /// <summary>
+    /// While the space bar is held the preview is in pan mode whatever the editor: a left drag pans
+    /// instead of painting, adding spots, drawing guides or creating a crop, and the brush circle is hidden.
+    /// </summary>
+    bool spaceHeld;
+    public bool SpaceHeld
+    {
+        get => spaceHeld;
+        set
+        {
+            if (spaceHeld == value) return;
+            spaceHeld = value;
+            if (value)
+            {
+                // A stroke or gesture in progress ends here; the next press pans.
+                if (drag != DragKind.None && drag != DragKind.Pan) drag = DragKind.None;
+                if (!brushResizing) brushPoint = null;
+            }
+            UpdateCursor();
+            InvalidateVisual();
+        }
+    }
     public event Action? StrokeBegin;
     public event Action<Point, Point, bool>? Paint;
     public event Action<double>? BrushRadiusChanged;
@@ -215,7 +238,7 @@ public sealed class PreviewControl : Control
         RenderOptions.SetBitmapInterpolationMode(this, Zoom * Backing >= 2 ? BitmapInterpolationMode.None : BitmapInterpolationMode.MediumQuality);
     }
 
-    void UpdateCursor() => Cursor = new Cursor(cropEditing || dustEditing || gradientEditing || correctionEditing ? StandardCursorType.Cross : StandardCursorType.Arrow);
+    void UpdateCursor() => Cursor = new Cursor(spaceHeld ? StandardCursorType.Hand : cropEditing || dustEditing || gradientEditing || correctionEditing ? StandardCursorType.Cross : StandardCursorType.Arrow);
 
     // Rendering
 
@@ -603,6 +626,7 @@ public sealed class PreviewControl : Control
         if (!props.IsLeftButtonPressed) { base.OnPointerPressed(e); return; }
         Focus();
         var p = e.GetPosition(this);
+        if (spaceHeld) { drag = DragKind.Pan; dragLast = p; e.Pointer.Capture(this); e.Handled = true; return; }
         if (correctionEditing)
         {
             var ip = ImagePoint(p);
@@ -662,7 +686,7 @@ public sealed class PreviewControl : Control
         var ip = ImagePoint(p);
         Hover?.Invoke(ip);
         bool left = e.GetCurrentPoint(this).Properties.IsLeftButtonPressed;
-        if (correctionEditing)
+        if (correctionEditing && (!spaceHeld || brushResizing))
         {
             if (brushResizing)
             {

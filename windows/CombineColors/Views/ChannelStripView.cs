@@ -87,12 +87,22 @@ public sealed class ChannelStripView : DockPanel
             grid.Children.Add(new TextBlock { Text = $"+  Drop {kind.ShortName()}", FontSize = 10, Foreground = Brushes.Gray, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
         if (source != null)
         {
-            // The channel is identified by the frame colour and a small badge.
-            grid.Children.Add(new Border
+            // The channel is identified by the frame colour and a small badge; the corrections badge sits
+            // directly underneath it (same left edge). Dust count bottom-left, gradient bottom-right, menu top-right.
+            var tags = new StackPanel { Margin = new Thickness(4), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top, IsHitTestVisible = false };
+            tags.Children.Add(new Border
             {
-                Background = tint, CornerRadius = new CornerRadius(3), Padding = new Thickness(4, 0, 4, 1), Margin = new Thickness(4), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top, IsHitTestVisible = false,
+                Background = tint, CornerRadius = new CornerRadius(3), Padding = new Thickness(4, 0, 4, 1), HorizontalAlignment = HorizontalAlignment.Left,
                 Child = new TextBlock { Text = kind.ShortName(), FontSize = 9, FontWeight = FontWeights.Bold, Foreground = Brushes.White },
             });
+            if (model.HasCorrection(kind))
+                tags.Children.Add(new Border
+                {
+                    Background = new SolidColorBrush(Color.FromArgb(140, 0, 0, 0)), CornerRadius = new CornerRadius(3), Padding = new Thickness(4, 0, 4, 1), Margin = new Thickness(0, 2, 0, 0), HorizontalAlignment = HorizontalAlignment.Left,
+                    Child = new TextBlock { Text = "✎", FontSize = 9, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White },
+                    ToolTip = "Hand-painted corrections applied to this channel",
+                });
+            grid.Children.Add(tags);
             int n = model.DustSpots(kind).Count;
             if (n > 0)
                 grid.Children.Add(new Border
@@ -100,13 +110,6 @@ public sealed class ChannelStripView : DockPanel
                     Background = new SolidColorBrush(Color.FromArgb(140, 0, 0, 0)), CornerRadius = new CornerRadius(3), Padding = new Thickness(4, 0, 4, 1), Margin = new Thickness(4), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Bottom, IsHitTestVisible = false,
                     Child = new TextBlock { Text = $"◌ {n}", FontSize = 9, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White },
                     ToolTip = $"{n} dust spot{(n == 1 ? "" : "s")} healed on this channel",
-                });
-            if (model.HasCorrection(kind))
-                grid.Children.Add(new Border
-                {
-                    Background = new SolidColorBrush(Color.FromArgb(140, 0, 0, 0)), CornerRadius = new CornerRadius(3), Padding = new Thickness(4, 0, 4, 1), Margin = new Thickness(4), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false,
-                    Child = new TextBlock { Text = "✎", FontSize = 9, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White },
-                    ToolTip = "Hand-painted corrections applied to this channel",
                 });
             if (model.GradientSpecFor(kind) is GradientSpec gspec)
                 grid.Children.Add(new Border

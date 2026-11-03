@@ -119,13 +119,24 @@ struct ChannelSlotView: View {
         .frame(width: ChannelStripView.slotWidth, height: ChannelStripView.slotHeight)
         .overlay(alignment: .topLeading) {
             if source != nil {
-                Text(kind.shortName)
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 4).padding(.vertical, 1)
-                    .background(kind.tint.opacity(0.85), in: RoundedRectangle(cornerRadius: 3))
-                    .padding(4)
-                    .allowsHitTesting(false)
+                // Label, with the corrections badge underneath it (dust: bottom-left, gradient: bottom-right).
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(kind.shortName)
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 4).padding(.vertical, 1)
+                        .background(kind.tint.opacity(0.85), in: RoundedRectangle(cornerRadius: 3))
+                    if model.hasCorrection(kind) {
+                        Image(systemName: "paintbrush.pointed.fill")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4).padding(.vertical, 1)
+                            .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 3))
+                            .help("Hand-painted corrections applied to this channel")
+                    }
+                }
+                .padding(4)
+                .allowsHitTesting(false)
             }
         }
         .overlay(alignment: .bottomLeading) {
@@ -139,18 +150,6 @@ struct ChannelSlotView: View {
                     .padding(4)
                     .allowsHitTesting(false)
                     .help("\(n) dust spot\(n == 1 ? "" : "s") healed on this channel")
-            }
-        }
-        .overlay(alignment: .topLeading) {
-            if source != nil, model.hasCorrection(kind) {
-                Image(systemName: "paintbrush.pointed.fill")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 4).padding(.vertical, 1)
-                    .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 3))
-                    .padding(4)
-                    .allowsHitTesting(false)
-                    .help("Hand-painted corrections applied to this channel")
             }
         }
         .overlay(alignment: .bottomTrailing) {

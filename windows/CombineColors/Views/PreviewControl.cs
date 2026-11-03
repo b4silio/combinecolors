@@ -61,6 +61,29 @@ public sealed class PreviewControl : FrameworkElement
     Point? brushPoint;
     Point paintLast;
     bool brushResizing; Point brushResizeStart; double brushResizeRadius;
+
+    /// <summary>
+    /// While the space bar is held the preview is in pan mode whatever the editor: a left drag pans
+    /// instead of painting, adding spots, drawing guides or creating a crop, and the brush circle is hidden.
+    /// </summary>
+    bool spaceHeld;
+    public bool SpaceHeld
+    {
+        get => spaceHeld;
+        set
+        {
+            if (spaceHeld == value) return;
+            spaceHeld = value;
+            if (value)
+            {
+                // A stroke or gesture in progress ends here; the next press pans.
+                if (drag != DragKind.None && drag != DragKind.Pan) { drag = DragKind.None; ReleaseMouseCapture(); }
+                if (!brushResizing) brushPoint = null;
+            }
+            UpdateCursor();
+            InvalidateVisual();
+        }
+    }
     public event Action? StrokeBegin;
     public event Action<Point, Point, bool>? Paint;
     public event Action<double>? BrushRadiusChanged;
@@ -213,7 +236,7 @@ public sealed class PreviewControl : FrameworkElement
         RenderOptions.SetBitmapScalingMode(this, Zoom * Backing >= 2 ? BitmapScalingMode.NearestNeighbor : BitmapScalingMode.Linear);
     }
 
-    void UpdateCursor() => Cursor = cropEditing || dustEditing || gradientEditing || correctionEditing ? Cursors.Cross : Cursors.Arrow;
+    void UpdateCursor() => Cursor = spaceHeld ? Cursors.Hand : cropEditing || dustEditing || gradientEditing || correctionEditing ? Cursors.Cross : Cursors.Arrow;
 
     // Rendering
 
@@ -604,6 +627,7 @@ public sealed class PreviewControl : FrameworkElement
     {
         Focus();
         var p = e.GetPosition(this);
+        if (spaceHeld) { drag = DragKind.Pan; dragLast = p; CaptureMouse(); return; }
         if (correctionEditing)
         {
             var ip = ImagePoint(p);
@@ -661,7 +685,7 @@ public sealed class PreviewControl : FrameworkElement
         var p = e.GetPosition(this);
         var ip = ImagePoint(p);
         Hover?.Invoke(ip);
-        if (correctionEditing)
+        if (correctionEditing && (!spaceHeld || brushResizing))
         {
             if (brushResizing)
             {

@@ -4,12 +4,14 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Orientation = Avalonia.Layout.Orientation;
 using Avalonia.Media;
 using Stretch = Avalonia.Media.Stretch;
 using Avalonia.Platform;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using AstroCore;
 using PixelRect = AstroCore.PixelRect;
 using CombineColors.Model;
@@ -75,6 +77,7 @@ public sealed class MainWindow : Window
         Root.Children.Add(main);
 
         WirePreview();
+        WireSpacePan();
         model.Changed += OnChanged;
         model.FitRequested += () => Dispatcher.UIThread.Post(() => preview.Perform(ZoomAction.Fit));
         DropHelpers.Accept(this, OpenPaths);
@@ -280,6 +283,36 @@ public sealed class MainWindow : Window
             }
         };
         SyncPreview();
+    }
+
+    /// <summary>
+    /// Space bar held = temporary pan mode on the preview, whichever toolbar control has focus
+    /// (tunnelling handlers at the window level, before the focused control sees the key). Not when
+    /// a text box is being edited, so typing spaces still works; key repeats are ignored.
+    /// </summary>
+    bool spacePan;
+    void WireSpacePan()
+    {
+        AddHandler(KeyDownEvent, (_, e) =>
+        {
+            if (e.Key != Key.Space) return;
+            if (spacePan) { e.Handled = true; return; }
+            if (IsTextInputFocused()) return;
+            spacePan = true; preview.SpaceHeld = true; e.Handled = true;
+        }, RoutingStrategies.Tunnel);
+        AddHandler(KeyUpEvent, (_, e) =>
+        {
+            if (e.Key != Key.Space || !spacePan) return;
+            spacePan = false; preview.SpaceHeld = false; e.Handled = true;
+        }, RoutingStrategies.Tunnel);
+        Deactivated += (_, _) => { spacePan = false; preview.SpaceHeld = false; };
+    }
+
+    bool IsTextInputFocused()
+    {
+        for (var v = FocusManager?.GetFocusedElement() as Visual; v != null; v = v.GetVisualParent())
+            if (v is TextBox or AutoCompleteBox or ComboBox { IsEditable: true }) return true;
+        return false;
     }
 
     void SyncPreview()
@@ -529,11 +562,11 @@ public sealed class MainWindow : Window
         var row2 = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 4, 0, 0) };
         row2.Children.Add(new SliderRow("Radius", () => (float)model.CorrectionBrushRadius, v => model.CorrectionBrushRadius = v, 4, (float)maxRadius, (float)(maxRadius / 5), "0", true,
             "Brush radius in image pixels (right-drag on the preview: left shrinks, right grows; up to 20 % of the image)", "px", 58) { Width = 170 });
-        row2.Children.Add(new SliderRow("Flow", () => (float)model.CorrectionBrushFlow, v => model.CorrectionBrushFlow = v, 0.02f, 1, 0.15f, "0.00", false,
+        row2.Children.Add(new SliderRow("Flow", () => (float)model.CorrectionBrushFlow, v => model.CorrectionBrushFlow = v, 0.01f, 0.2f, 0.05f, "0.00", false,
             "Amount added by every dab: low for gentle, build-up strokes", null, 40) { Width = 150, Margin = new Thickness(6, 0, 0, 0) });
         row2.Children.Add(new SliderRow("Feather", () => (float)model.CorrectionBrushFeather, v => model.CorrectionBrushFeather = v, 0, 1, 0.7f, "0.00", false,
             "Fraction of the radius over which a dab fades out (0 = hard edge)", null, 48) { Width = 150, Margin = new Thickness(6, 0, 0, 0) });
-        row2.Children.Add(new SliderRow("Strength", () => (float)model.CorrectionStrength, v => model.CorrectionStrength = v, 0.1f, 4, 1, "0.0", false,
+        row2.Children.Add(new SliderRow("Strength", () => (float)model.CorrectionStrength, v => model.CorrectionStrength = v, 0, 1.5f, 1, "0.0", false,
             "Exposure range of the map in stops: a fully painted area is darkened or brightened by this many stops", "EV", 66) { Width = 170, Margin = new Thickness(6, 0, 0, 0) });
         panel.Children.Add(row2);
 

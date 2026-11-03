@@ -255,13 +255,13 @@ struct ContentView: View {
                 SliderRow(title: "Radius", value: radius, range: 4...maxRadius, defaultValue: maxRadius / 5, format: "%.0f", logarithmic: true,
                           help: "Brush radius in image pixels (right-drag on the preview: left shrinks, right grows; up to 20 % of the image)", note: "px", labelWidth: 58)
                     .frame(width: 170)
-                SliderRow(title: "Flow", value: flow, range: 0.02...1, defaultValue: 0.15, format: "%.2f",
+                SliderRow(title: "Flow", value: flow, range: 0.01...0.2, defaultValue: 0.05, format: "%.2f",
                           help: "Amount added by every dab: low for gentle, build-up strokes", labelWidth: 40)
                     .frame(width: 150)
                 SliderRow(title: "Feather", value: feather, range: 0...1, defaultValue: 0.7, format: "%.2f",
                           help: "Fraction of the radius over which a dab fades out (0 = hard edge)", labelWidth: 48)
                     .frame(width: 150)
-                SliderRow(title: "Strength", value: strength, range: 0.1...4, defaultValue: 1, format: "%.1f",
+                SliderRow(title: "Strength", value: strength, range: 0...1.5, defaultValue: 1, format: "%.2f",
                           help: "Exposure range of the map in stops: a fully painted area is darkened or brightened by this many stops", note: "EV", labelWidth: 66)
                     .frame(width: 170)
             }

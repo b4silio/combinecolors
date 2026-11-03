@@ -210,7 +210,7 @@ public struct CorrectionSettings: Codable, Equatable {
     /// Brush radius as a fraction of the image's long side (0.005…0.2).
     public var brushRadius: Double = 0.04
     /// Amount added per dab (0.02…1).
-    public var brushFlow: Double = 0.15
+    public var brushFlow: Double = 0.05
     /// Fraction of the radius over which the dab fades (0 hard … 1 soft).
     public var brushFeather: Double = 0.7
     public var darken: Bool = true

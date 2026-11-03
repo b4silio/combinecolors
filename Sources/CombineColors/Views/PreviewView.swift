@@ -114,9 +114,20 @@ final class ZoomPanNSView: NSView {
         case regionResize(UUID, Int)
     }
     private var drag: Drag = .none
+    /// Space bar held: every mode pans on a drag (brush, spots, guides and crop wait).
+    private var spaceHeld = false { didSet { if spaceHeld != oldValue { updateCursor(); updateBrushCursor() } } }
+    private var keyMonitor: Any? = nil
 
     override init(frame: NSRect) {
         super.init(frame: frame)
+        // The space bar is watched on the window, not only when the preview has focus, so the toolbar
+        // sliders may keep it; typing in a text field is left alone.
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
+            guard let self, event.keyCode == 49, event.window === self.window, !self.isHidden,
+                  !(self.window?.firstResponder is NSTextView) else { return event }
+            if event.type == .keyDown { if !event.isARepeat { self.spaceHeld = true } } else { self.spaceHeld = false }
+            return nil
+        }
         wantsLayer = true
         layer?.masksToBounds = true
         layer?.backgroundColor = NSColor(calibratedWhite: 0.11, alpha: 1).cgColor
@@ -192,6 +203,8 @@ final class ZoomPanNSView: NSView {
         imageLayer.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull(), "frame": NSNull()]
         for l in dimLayers + handleLayers + gradientHandles + regionHandles + [cropBorder, dustLayer, dustSelectedLayer, dustHandle, gradientLayer, gradientRefinedLayer, regionLayer, regionSelectedLayer, sampleLayer, sampleRejectedLayer, sampleSelectedLayer, correctionLayer, brushLayer, radiusLabel] { l.actions = ["bounds": NSNull(), "position": NSNull(), "frame": NSNull(), "path": NSNull(), "hidden": NSNull()] }
     }
+
+    deinit { if let k = keyMonitor { NSEvent.removeMonitor(k) } }
 
     required init?(coder: NSCoder) { fatalError() }
 
@@ -269,7 +282,7 @@ final class ZoomPanNSView: NSView {
     }
 
     private func updateBrushCursor() {
-        guard correctionEditing, let p = brushPoint else { brushLayer.isHidden = true; return }
+        guard correctionEditing, !spaceHeld, let p = brushPoint else { brushLayer.isHidden = true; return }
         let r = max(brushRadius * zoom, 2)
         brushLayer.path = CGPath(ellipseIn: toAppKit(CGRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r)), transform: nil)
         brushLayer.strokeColor = (brushDarken ? NSColor.systemRed : NSColor.systemBlue).withAlphaComponent(0.9).cgColor
@@ -284,7 +297,7 @@ final class ZoomPanNSView: NSView {
     }
 
     override func rightMouseDown(with event: NSEvent) {
-        guard correctionEditing else { super.rightMouseDown(with: event); return }
+        guard correctionEditing, !spaceHeld else { super.rightMouseDown(with: event); return }
         let p = topLeftPoint(event)
         brushPoint = p
         drag = .brushResize(start: p, radius: brushRadius)
@@ -413,7 +426,8 @@ final class ZoomPanNSView: NSView {
     private func updateCursor() { window?.invalidateCursorRects(for: self) }
 
     override func resetCursorRects() {
-        addCursorRect(bounds, cursor: cropEditing || dustEditing || gradientEditing || correctionEditing ? .crosshair : .openHand)
+        let editing = cropEditing || dustEditing || gradientEditing || correctionEditing
+        addCursorRect(bounds, cursor: editing && !spaceHeld ? .crosshair : .openHand)
     }
 
     // MARK: Gradient editor
@@ -723,6 +737,7 @@ final class ZoomPanNSView: NSView {
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         let p = topLeftPoint(event)
+        if spaceHeld { drag = .pan(p); return }
         if correctionEditing {
             let ip = imagePoint(p)
             brushPoint = p
