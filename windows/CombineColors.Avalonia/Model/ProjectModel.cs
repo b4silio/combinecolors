@@ -156,7 +156,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
     /// <summary>Bumped by every stroke so the views refresh (the map is a reference type).</summary>
     public int CorrectionVersion { get; private set; }
     readonly List<CorrectionMap> correctionUndo = new();
-    bool correctionShowMap = true;
+    bool correctionShowMap = false;
     /// <summary>Tint overlay of the map on the preview.</summary>
     public bool CorrectionShowMap { get => correctionShowMap; set { if (correctionShowMap == value) return; correctionShowMap = value; Notify(Change.Corrections); } }
     bool correctionBypass;

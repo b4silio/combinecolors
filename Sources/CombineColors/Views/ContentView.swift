@@ -247,7 +247,7 @@ struct ContentView: View {
                 Toggle(isOn: $model.correctionBypass) { Text("Original") }.toggleStyle(.button).keyboardShortcut("b", modifiers: [])
                     .help("Show the channel without the corrections, to compare (B)")
                 Toggle(isOn: $model.correctionShowMap) { Text("Map") }.toggleStyle(.button).keyboardShortcut("m", modifiers: [])
-                    .help("Show the painted map as a tint: red darkens, blue brightens (M)")
+                    .help("Show the painted map as a tint instead of the result: red darkens, blue brightens (M)")
                 Button("Apply") { model.commitCorrectionEditing() }.keyboardShortcut(.return, modifiers: [])
                 Button("Cancel") { model.cancelCorrectionEditing() }.keyboardShortcut(.escape, modifiers: [])
             }

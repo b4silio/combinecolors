@@ -8,7 +8,7 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 ## [1.8.0] – 2026-11-03
 
 - Background-sample gradient removal (Samples shape, à la DBE / GraXpert): automatic sky grid with nebula rejection, thin-plate spline or kriging surface with leave-one-out robust reweighting and cross-validated smoothing, click / drag / delete samples; Mac, Windows, Linux and the CLI
-- Manual corrections (channel menu › Manual Corrections…): paint a channel darker or brighter with a soft brush (right-drag sets the radius, ⌥ inverts, undo, map tint), applied live as an exposure change and kept next to the image as <image>.ccmask.png
+- Manual corrections (channel menu › Manual Corrections…): paint a channel darker or brighter with a soft brush (right-drag sets the radius, ⌥ inverts, undo; the preview shows the result, Map switches to the red / blue tint), applied live as an exposure change and kept next to the image as <image>.ccmask.png
 - RGB stars layer: a colour image can be kept whole (Keep as RGB (stars) when dropping it, Load RGB stars…, --stars-file) and blended on top; Screen / Lighten / Add, star brightness and contrast, Brightest stars to white
 - Formula read-out: the palette panel shows the combination as PixelMath lines with a copy button (tester request)
 

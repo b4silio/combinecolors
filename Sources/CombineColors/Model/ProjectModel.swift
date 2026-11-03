@@ -110,7 +110,7 @@ final class ProjectModel {
     private(set) var correctionVersion = 0
     private var correctionUndo: [CorrectionMap] = []
     /// Tint overlay of the map on the preview.
-    var correctionShowMap = true
+    var correctionShowMap = false
     /// Shows the edited channel without its corrections (before / after).
     var correctionBypass = false { didSet { if correctionBypass != oldValue, correctionEditing != nil { scheduleRender() } } }
 

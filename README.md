@@ -163,7 +163,7 @@ export at full resolution.
   change (`× 2^(strength · map)`, *Strength* in stops). *Darken* / *Brighten*
   (D, or hold ⌥ for the opposite), *Radius* (right-drag on the preview: the
   circle and "r = N px" follow the pointer, left shrinks and right grows, up to
-  20 % of the image), *Flow* and *Feather*, *Map* shows the strokes as a red /
+  20 % of the image), *Flow* and *Feather*, *Map* (off by default: the preview shows the result) shows the strokes as a red /
   blue tint, *Original* compares, *Undo stroke* (⌘Z) and *Clear*. Painting is
   live: the map goes with every preview render (a few milliseconds per stroke
   segment), the channel is re-processed on Apply. The map is saved next to the

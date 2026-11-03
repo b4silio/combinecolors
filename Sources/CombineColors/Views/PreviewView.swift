@@ -38,7 +38,7 @@ final class ZoomPanNSView: NSView {
     var correctionEditing = false { didSet { updateCorrectionOverlay(); updateCursor(); if !correctionEditing { brushLayer.isHidden = true; radiusLabel.isHidden = true } } }
     var correctionMap: CorrectionMap? = nil
     var correctionVersion = 0 { didSet { if correctionVersion != oldValue { correctionTint = nil; updateCorrectionOverlay() } } }
-    var correctionShowMap = true { didSet { updateCorrectionOverlay() } }
+    var correctionShowMap = false { didSet { updateCorrectionOverlay() } }
     /// Brush radius in image pixels, and its sense.
     var brushRadius: CGFloat = 50 { didSet { updateBrushCursor() } }
     var brushDarken = true { didSet { updateBrushCursor() } }
