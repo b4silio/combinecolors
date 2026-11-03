@@ -915,12 +915,23 @@ final class ProjectModel {
         renderGeneration += 1
         isRendering = true
         let shown = displayedSettings
+        // The corrections editor paints on the channel live: the draft goes with the render (a
+        // copy, the renderer runs while the next stroke lands), the committed map is bypassed by
+        // rendering the original-based plane with the draft only. The channel's source holds the
+        // committed map already, so the draft starts as that map and the source is swapped for the
+        // uncorrected one while editing (see beginCorrectionEditing). The editor renders with its
+        // own context (normalisation off), so the draft goes on both paths.
+        var correction: (map: CorrectionMap, strength: Float, kind: ChannelKind)? = nil
+        if let k = correctionEditing, let d = correctionDraft, !correctionBypass, !d.isEmpty {
+            correction = (d.copy(), Float(corrections.strength(for: k)), k)
+        }
         if shown.normalization != settings.normalization {
             // Different normalisation than the live context: render with a context of its own.
             let snapshotCtx = RenderContext.make(settings: shown.normalization, sources: sources)
-            let req = PreviewRequest(sources: sources, settings: shown, context: snapshotCtx, analysisSamples: analysisSamples, fixedPostStretch: nil,
+            var req = PreviewRequest(sources: sources, settings: shown, context: snapshotCtx, analysisSamples: analysisSamples, fixedPostStretch: nil,
                                      visibleRect: viewport.visibleRect.isEmpty ? nil : viewport.visibleRect,
                                      scale: viewport.scale, pixelBudget: highQualityPreview ? 12_000_000 : 3_000_000, generation: renderGeneration, stars: starsLayer)
+            req.correction = correction
             renderer.submit(req)
             return
         }
@@ -929,14 +940,7 @@ final class ProjectModel {
                                  fixedPostStretch: shown.stretchStage == .postCombine ? postStretchCache[key] : nil,
                                  visibleRect: viewport.visibleRect.isEmpty ? nil : viewport.visibleRect,
                                  scale: viewport.scale, pixelBudget: highQualityPreview ? 12_000_000 : 3_000_000, generation: renderGeneration, stars: starsLayer)
-        // The corrections editor paints on the channel live: the draft goes with the render (a
-        // copy, the renderer runs while the next stroke lands), the committed map is bypassed by
-        // rendering the original-based plane with the draft only. The channel's source holds the
-        // committed map already, so the draft starts as that map and the source is swapped for the
-        // uncorrected one while editing (see beginCorrectionEditing).
-        if let k = correctionEditing, let d = correctionDraft, !correctionBypass, !d.isEmpty {
-            req.correction = (d.copy(), Float(corrections.strength(for: k)), k)
-        }
+        req.correction = correction
         renderer.submit(req)
     }
 

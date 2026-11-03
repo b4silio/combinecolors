@@ -1065,19 +1065,20 @@ public sealed class ProjectModel : INotifyPropertyChanged
         var srcs = new Dictionary<ChannelKind, ChannelSource>(sources);
         Rect? visible = viewport.VisibleRect.IsEmpty || viewport.VisibleRect.Width <= 0 ? null : viewport.VisibleRect;
         int budget = HighQualityPreview ? 12_000_000 : 3_000_000;
+        // The corrections editor paints on the channel live: the draft goes with the render (a copy,
+        // the renderer runs while the next stroke lands); the source shows the uncorrected channel meanwhile.
+        // The editor renders with its own context (normalisation off), so the draft goes on both paths.
+        (CorrectionMap map, float strength, ChannelKind kind)? correction = null;
+        if (CorrectionEditing is ChannelKind ck && CorrectionDraft is CorrectionMap cd && !correctionBypass && !cd.IsEmpty)
+            correction = (cd.Copy(), (float)Corrections.StrengthFor(ck), ck);
         if (!shown.Normalization.Equals(settings.Normalization))
         {
             // Different normalisation than the live context: render with a context of its own.
             var snapshotCtx = RenderContext.Make(shown.Normalization, srcs);
-            renderer.Submit(new PreviewRequest { Sources = srcs, Settings = shown, Context = snapshotCtx, AnalysisSamples = AnalysisSamples, FixedPostStretch = null, VisibleRect = visible, Scale = viewport.Scale, PixelBudget = budget, Generation = renderGeneration, Stars = starsLayer });
+            renderer.Submit(new PreviewRequest { Sources = srcs, Settings = shown, Context = snapshotCtx, AnalysisSamples = AnalysisSamples, FixedPostStretch = null, VisibleRect = visible, Scale = viewport.Scale, PixelBudget = budget, Generation = renderGeneration, Stars = starsLayer, Correction = correction });
             return;
         }
         List<ResolvedStretch>? fixedStretch = shown.StretchStage == StretchStage.PostCombine && postStretchCache.TryGetValue(PostStretchKey(shown), out var ps) ? ps : null;
-        // The corrections editor paints on the channel live: the draft goes with the render (a copy,
-        // the renderer runs while the next stroke lands); the source shows the uncorrected channel meanwhile.
-        (CorrectionMap map, float strength, ChannelKind kind)? correction = null;
-        if (CorrectionEditing is ChannelKind ck && CorrectionDraft is CorrectionMap cd && !correctionBypass && !cd.IsEmpty)
-            correction = (cd.Copy(), (float)Corrections.StrengthFor(ck), ck);
         renderer.Submit(new PreviewRequest { Sources = srcs, Settings = shown, Context = ctx, AnalysisSamples = AnalysisSamples, FixedPostStretch = fixedStretch, VisibleRect = visible, Scale = viewport.Scale, PixelBudget = budget, Generation = renderGeneration, Stars = starsLayer, Correction = correction });
     }
 

@@ -617,6 +617,36 @@ extension ProjectModelTests {
     /// A peek left behind (the slot menu swallows the gesture end) must not override the edited
     /// channel, and switching channels re-previews the one shown (its draft may have changed
     /// through Copy to all while another channel was on screen).
+    /// The corrections editor renders with its own context (normalisation off): the live map must
+    /// still reach the preview, so a darkening stroke shows before Apply (and Original hides it).
+    func testCorrectionStrokeShowsLiveInTheEditor() async throws {
+        let m = try await loadedModel()
+        m.viewport = Viewport(visibleRect: CGRect(x: 0, y: 0, width: 200, height: 150), scale: 1)
+        m.beginCorrectionEditing(.ha)
+        XCTAssertEqual(m.correctionEditing, .ha)
+        await wait { !m.isLoading && m.frame?.settings.mode == .monochrome && m.frame?.rect.width == 200 }
+        func mean(_ f: PreviewFrame) -> Float {
+            var sum: Float = 0
+            for y in 60..<90 { for x in 85..<115 { sum += f.rgb.r[x, y] } }
+            return sum / 900
+        }
+        let before = m.frame!
+        m.correctionBrushRadius = 40
+        m.correctionBrushFlow = 1
+        m.correctionStrength = 3
+        m.correctionDarken = true
+        m.beginCorrectionStroke()
+        m.paintCorrection(from: CGPoint(x: 90, y: 75), to: CGPoint(x: 110, y: 75), invert: false)
+        await wait { m.frame!.cgImage !== before.cgImage }
+        let painted = m.frame!
+        XCTAssertLessThan(mean(painted), mean(before) * 0.7, "the stroke darkens the preview before Apply")
+        m.correctionBypass = true
+        await wait { m.frame!.cgImage !== painted.cgImage }
+        XCTAssertEqual(mean(m.frame!), mean(before), accuracy: 1e-4, "Original shows the channel without the draft")
+        m.cancelCorrectionEditing()
+        XCTAssertNil(m.correctionEditing)
+    }
+
     func testDustEditorOverridesStuckPeekAndRepreviewsOnSwitch() async throws {
         let m = try await loadedModel()
         m.peekChannel = .sii
