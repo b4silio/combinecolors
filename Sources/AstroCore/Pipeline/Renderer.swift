@@ -128,11 +128,15 @@ public enum Renderer {
         let main = try develop(plan, planes: req.planes, context: req.context, analysisPlanes: req.analysisPlanes, fixedPostStretch: req.fixedPostStretch,
                                stars: req.stars, correction: req.correction)
         let combined = main.image
-        // 7. Denoise and local contrast last (non point-wise; the strip renderer applies them on the whole image).
+        // 7. Denoise and local contrast (non point-wise; the strip renderer applies them on the whole
+        //    image), then the stars when they go in last.
         if req.applyDetail {
             let overview = try detailOverview(plan, req: req, postStretch: main.postStretch)
             Denoise.apply(combined, settings: plan.settings.denoise)
             PostProcess.detail(combined, settings: plan.settings.detail, scale: req.scale, overview: overview)
+            if plan.settings.stars.enabled, plan.settings.stars.stage == .last {
+                starsStage(combined, plan, planes: req.planes, context: req.context, stars: req.stars)
+            }
         }
         return RenderResult(image: combined, postStretch: main.postStretch, channelStretch: main.channelStretch, millis: Date().timeIntervalSince(t0) * 1000)
     }
@@ -355,15 +359,23 @@ public enum Renderer {
         PostProcess.apply(s.post, to: combined)
         PostProcess.grade(combined, settings: s.grading)
 
-        // 6. RGB stars: from the stars layer, else from the R, G and B channels.
-        if s.stars.enabled {
-            if let st = stars, st.planes.count == 3, st.planes[0].width == w, st.planes[0].height == h {
-                let img = starsImage(planes: st.planes.map { $0.copy() }, stats: st.stats, settings: s)
-                PostProcess.blendStars(combined, stars: img, settings: s.stars)
-            } else if let r = reqPlanes[.red], let g = reqPlanes[.green], let b = reqPlanes[.blue] {
-                let img = starsImage(r: r, g: g, b: b, settings: s, context: context)
-                PostProcess.blendStars(combined, stars: img, settings: s.stars)
-            }
+        // 6. RGB stars, when they go in before denoise and detail.
+        if s.stars.enabled, s.stars.stage == .beforeDetail {
+            starsStage(combined, plan, planes: reqPlanes, context: context, stars: stars)
+        }
+        combined.clamp01()
+    }
+
+    /// The RGB stars blended in, in place: from the stars layer, else from the R, G and B channels.
+    static func starsStage(_ combined: RGBImage, _ plan: Plan, planes reqPlanes: [ChannelKind: PlanarImage], context: RenderContext, stars: StarsInput?) {
+        let s = plan.settings
+        let w = combined.width, h = combined.height
+        if let st = stars, st.planes.count == 3, st.planes[0].width == w, st.planes[0].height == h {
+            let img = starsImage(planes: st.planes.map { $0.copy() }, stats: st.stats, settings: s)
+            PostProcess.blendStars(combined, stars: img, settings: s.stars)
+        } else if let r = reqPlanes[.red], let g = reqPlanes[.green], let b = reqPlanes[.blue] {
+            let img = starsImage(r: r, g: g, b: b, settings: s, context: context)
+            PostProcess.blendStars(combined, stars: img, settings: s.stars)
         }
         combined.clamp01()
     }
@@ -574,6 +586,23 @@ public enum Renderer {
         if isCancelled?() == true { return nil }
         Denoise.apply(out, settings: settings.denoise)
         PostProcess.detail(out, settings: settings.detail, scale: 1)
+        if settings.stars.enabled, settings.stars.stage == .last {
+            // The stars last, strip by strip again (point-wise, so the strips agree with a whole render).
+            let plan = try Plan(RenderRequest(planes: sources.mapValues { $0.image }, settings: settings, context: context))
+            y = 0
+            while y < h {
+                if isCancelled?() == true { return nil }
+                let hh = min(rows, h - y)
+                let strip = RGBImage(r: out.r.cropped(x: 0, y: y, width: w, height: hh), g: out.g.cropped(x: 0, y: y, width: w, height: hh), b: out.b.cropped(x: 0, y: y, width: w, height: hh))
+                var planes: [ChannelKind: PlanarImage] = [:]
+                for k in [ChannelKind.red, .green, .blue] { if let src = sources[k] { planes[k] = src.image.cropped(x: crop.x, y: crop.y + y, width: w, height: hh) } }
+                var input: StarsInput? = nil
+                if let st = stars, st.width == any.width, st.height == any.height { input = st.input(level: 0, x: crop.x, y: crop.y + y, width: w, height: hh) }
+                starsStage(strip, plan, planes: planes, context: context, stars: input)
+                for (src, dst) in zip(strip.planes, out.planes) { (dst.pointer + y * w).update(from: src.pointer, count: w * hh) }
+                y += hh
+            }
+        }
         return out
     }
 }

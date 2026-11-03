@@ -22,6 +22,26 @@ struct ChannelStripView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // The three channel editors; the open one is highlighted. While one is open a click on
+            // a slot shows that channel in it (no peek).
+            HStack(spacing: 2) {
+                ForEach(ProjectModel.CorrectionTool.allCases) { tool in
+                    let active = model.editingTool == tool
+                    Button { model.beginEditing(tool) } label: {
+                        VStack(spacing: 1) {
+                            Image(systemName: tool.symbol).font(.system(size: 11))
+                            Text(tool.title).font(.system(size: 9))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 3)
+                        .background(active ? Color.accentColor.opacity(0.35) : Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 4))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(model.sources.isEmpty)
+                    .help(tool.help + (active ? " (open)" : ""))
+                }
+            }
+            .padding(.horizontal, Self.padding).padding(.top, Self.padding)
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: Self.slotSpacing) {
                     ForEach(order) { kind in
@@ -42,10 +62,15 @@ struct ChannelStripView: View {
                 .gesture(
                     DragGesture(minimumDistance: 0, coordinateSpace: .local)
                         .onChanged { g in
+                            guard model.editingTool == nil else { return }
                             let k = slot(at: g.location)
                             if model.peekChannel != k { model.peekChannel = k }
                         }
-                        .onEnded { _ in model.peekChannel = nil }
+                        .onEnded { g in
+                            // While an editor is open a click switches it to that channel.
+                            if model.editingTool != nil, let k = slot(at: g.location) { model.switchEditingChannel(k) }
+                            model.peekChannel = nil
+                        }
                 )
             }
             Divider()
@@ -173,9 +198,6 @@ struct ChannelSlotView: View {
                         }
                     }
                     Divider()
-                    Button("Heal Dust Spots…") { model.beginDustEditing(kind) }
-                    Button("Remove Gradient…") { model.beginGradientEditing(kind) }
-                    Button("Manual Corrections…") { model.beginCorrectionEditing(kind) }
                     if model.hasCorrection(kind) { Button("Remove Corrections") { model.removeCorrection(kind) } }
                     Button("Save channel as FITS…") {
                         Panels.save(name: s.fileName.replacingOccurrences(of: ".fits", with: "") + "-\(kind.rawValue).fits", type: UTType("public.fits") ?? .data, message: "Save the channel (cropped if a crop is set).") { url in
@@ -194,6 +216,6 @@ struct ChannelSlotView: View {
                 .padding(3)
             }
         }
-        .help(source.map { "\(kind.displayName) — \($0.fileName)\n\($0.formatDescription)\nmedian \($0.stats.median.g4), background \($0.maskedStats.background.g4), noise \($0.stats.noise.g4), signal \($0.maskedStats.signalStrength.g4)σ\nPress and hold to see this channel full size; move over other slots to switch" } ?? "Drop a \(kind.displayName) image here")
+        .help(source.map { "\(kind.displayName) — \($0.fileName)\n\($0.formatDescription)\nmedian \($0.stats.median.g4), background \($0.maskedStats.background.g4), noise \($0.stats.noise.g4), signal \($0.maskedStats.signalStrength.g4)σ\nPress and hold to see this channel full size; move over other slots to switch. While an editor is open, a click shows this channel in it" } ?? "Drop a \(kind.displayName) image here")
     }
 }

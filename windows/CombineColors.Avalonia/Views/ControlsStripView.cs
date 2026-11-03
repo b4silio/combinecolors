@@ -506,6 +506,7 @@ public sealed class ControlsStripView : Border
             left.Children.Add(Ui.Separator());
             var right = p;
             right.Children.Add(M("Blend", x => x.Stars.Mode, (x, v) => x.Stars.Mode = v, StarsBlendModes.All, m => m.DisplayName(), "Screen: adds without clipping, soft on bright nebulae (default).\nLighten: the brighter of the two.\nAdd: sum, clipped."));
+            right.Children.Add(M("Blend at", x => x.Stars.Stage, (x, v) => x.Stars.Stage = v, StarsBlendStages.All, m => m.DisplayName(), "After denoise & detail: the stars are not denoised, sharpened or haloed (the starless workflow), and a star slider re-blends only.\nBefore: the stars go through denoise and detail with the nebula."));
             right.Children.Add(M("Star data", x => x.Stars.Stretch, (x, v) => x.Stars.Stretch = v, StarsStretchModes.All, m => m.DisplayName()));
             right.Children.Add(C("Mask by luminance", x => x.Stars.UseMask, (x, v) => x.Stars.UseMask = v, "Off for star-only images from StarNet/StarXTerminator."));
             if (st.UseMask)

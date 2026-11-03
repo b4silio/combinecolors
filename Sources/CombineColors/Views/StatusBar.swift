@@ -23,7 +23,7 @@ struct StatusBar: View {
             if model.frame != nil {
                 Text("L\(model.lastRenderLevel) · \(Int(model.lastRenderMillis)) ms" + (model.lastRenderNote.isEmpty ? "" : " · " + model.lastRenderNote) + (model.isRendering ? " ⟳" : ""))
                     .foregroundStyle(.secondary).lineLimit(1).frame(width: 150, alignment: .trailing)
-                    .help("Render time of the shown preview. “from denoise” / “from detail” / “from colour”: the stages before came from the render cache; “cached”: nothing had to be recomputed.")
+                    .help("Render time of the shown preview. “from colour” / “from denoise” / “from detail” / “from stars”: the stages before came from the render cache; “N ch reused”: the combination ran with those channels’ planes reused; “cached”: nothing had to be recomputed.")
             }
             Text(String(format: "%.0f%%", model.viewport.scale * 100)).foregroundStyle(.secondary).frame(width: 44, alignment: .trailing)
         }

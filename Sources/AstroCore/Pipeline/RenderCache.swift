@@ -25,28 +25,31 @@ public struct RenderInputKey: Hashable {
 /// * **developed** — the above plus colour (bands, global controls, grading) and stars;
 /// * **denoised** — the above plus denoise.
 ///
-/// Detail (local contrast, sharpening) runs on a copy of the last one every time. Moving a denoise
+/// Detail (local contrast, sharpening) runs on a copy of the last one; when the stars go in last
+/// its output is kept too (**detailed**) and a star slider re-blends only. Moving a denoise
 /// slider therefore costs denoise + detail, a colour slider costs colour + stars + denoise + detail,
 /// and only a change to the channels, the stretch or the combination runs the whole pipeline. Even
 /// then the single channels' prepared planes (normalised, stretched, adjusted) are kept per channel
 /// (`ChannelPlaneStore`): a gain or weight change on one channel prepares that channel only.
 ///
-/// The cache holds up to three images of the preview size (an intermediate behind a neutral stage is
+/// The cache holds up to four images of the preview size (an intermediate behind a neutral stage is
 /// the same object as the one before it, not a copy). Renders with a live correction, or without the
 /// detail stage, bypass it. Not thread safe: one render queue owns it. The result image of a render
 /// whose detail stage is neutral is the cached intermediate itself — read it, do not write to it.
 public final class RenderCache {
-    public enum Stage: String { case combine, colour, denoise, detail, nothing }
+    public enum Stage: String { case combine, colour, denoise, detail, stars, nothing }
 
     private var inputs: RenderInputKey? = nil
     private let channels = ChannelPlaneStore()
     private var combined: (settings: CombineSettings, developed: Renderer.Developed)? = nil
     private var developed: (settings: CombineSettings, image: RGBImage, overview: DetailOverview?)? = nil
     private var denoised: (settings: DenoiseSettings, image: RGBImage)? = nil
+    /// The detail stage's output, kept only when the stars go in after it (a star slider re-blends only).
+    private var detailed: (settings: DetailSettings, scale: Float, base: RGBImage, image: RGBImage)? = nil
 
     public init() {}
 
-    public func clear() { inputs = nil; channels.removeAll(); combined = nil; developed = nil; denoised = nil }
+    public func clear() { inputs = nil; channels.removeAll(); combined = nil; developed = nil; denoised = nil; detailed = nil }
 
     /// Settings as far as the combined stage sees them (later stages neutral).
     static func combineSettings(_ s: CombineSettings) -> CombineSettings {
@@ -55,10 +58,12 @@ public final class RenderCache {
         return c
     }
 
-    /// Settings as far as the developed stage sees them (denoise and detail neutral).
+    /// Settings as far as the developed stage sees them (denoise and detail neutral, and the stars
+    /// when they go in last).
     static func developSettings(_ s: CombineSettings) -> CombineSettings {
         var c = s
         c.denoise = DenoiseSettings(); c.detail = DetailSettings()
+        if s.stars.stage == .last { c.stars = StarsBlendSettings() }
         return c
     }
 
@@ -93,7 +98,7 @@ public final class RenderCache {
             let img = base.image.copy()
             Renderer.colourStage(img, plan, planes: req.planes, context: req.context, stars: req.stars)
             developed = (developSettings, img, nil)
-            denoised = nil
+            denoised = nil; detailed = nil
             if ranFrom == .nothing { ranFrom = .colour }
         }
         if !s.detail.isNeutral, developed!.overview == nil {
@@ -109,19 +114,35 @@ public final class RenderCache {
         } else {
             let img = developed!.image.copy()
             Denoise.apply(img, settings: s.denoise)
-            denoised = (s.denoise, img)
+            denoised = (s.denoise, img); detailed = nil
             afterDenoise = img
             if ranFrom == .nothing { ranFrom = .denoise }
         }
 
-        // 7b. Detail, on a copy: the cached intermediates stay as they are.
-        let out: RGBImage
+        // 7b. Detail, on a copy: the cached intermediates stay as they are. With the stars last the
+        //     output is kept, so that a star slider finds it.
+        let starsLast = s.stars.enabled && s.stars.stage == .last
+        let afterDetail: RGBImage
         if s.detail.isNeutral {
-            out = afterDenoise
+            afterDetail = afterDenoise
+        } else if starsLast, let d = detailed, d.settings == s.detail, d.scale == req.scale, d.base === afterDenoise {
+            afterDetail = d.image
         } else {
-            out = afterDenoise.copy()
-            PostProcess.detail(out, settings: s.detail, scale: req.scale, overview: developed!.overview)
+            let img = afterDenoise.copy()
+            PostProcess.detail(img, settings: s.detail, scale: req.scale, overview: developed!.overview)
+            detailed = starsLast ? (s.detail, req.scale, afterDenoise, img) : nil
+            afterDetail = img
             if ranFrom == .nothing { ranFrom = .detail }
+        }
+
+        // 7c. The stars last, on a copy.
+        let out: RGBImage
+        if starsLast {
+            out = afterDetail.copy()
+            Renderer.starsStage(out, plan, planes: req.planes, context: req.context, stars: req.stars)
+            if ranFrom == .nothing { ranFrom = .stars }
+        } else {
+            out = afterDetail
         }
         var res = RenderResult(image: out, postStretch: base.postStretch, channelStretch: base.channelStretch, millis: Date().timeIntervalSince(t0) * 1000)
         res.ranFrom = ranFrom

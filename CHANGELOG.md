@@ -5,6 +5,12 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 (`scripts/bump.sh`). The version lives in `VERSION` and is stamped into the app at build time;
 `scripts/release.sh` tags it and publishes the DMG as a GitHub release.
 
+## [1.12.0] – 2026-11-03
+
+- Stars are blended after denoise and detail by default (switchable in the RGB stars block): untouched by them, and a star slider re-blends only
+- Dust / Gradient / Manual buttons above the channel column open the editors; while one is open a click on a channel shows it there (the channel menus lost the three entries)
+- Fixed: the correction strength and brush defaults were not read back from projects and recent sets, and a recent set did not restore its stars layer
+
 ## [1.11.0] – 2026-11-03
 
 - Combine stage ×5 faster: the Lab luminance injection is vectorised (29 → 3 ms at the preview size) and each channel's prepared plane is kept, so a gain or weight change prepares that channel only; the status bar says how many channels were reused

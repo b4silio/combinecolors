@@ -790,10 +790,12 @@ final class ProjectModel {
                     self.crop = st.crop
                     self.dust = st.dust
                     self.gradient = st.gradient
+                    self.corrections = st.corrections
                     self.presets = st.presets
                     self.presetThumbnailCache = [:]
                 }
                 self.addChannels(its)
+                if let p = set.state?.starsFile { self.pendingStarsFile = URL(fileURLWithPath: p) }
             }
         }
     }
@@ -1246,6 +1248,61 @@ extension ProjectModel {
     var defaultDustRadius: Double { imageSize.map { max(12, min($0.width, $0.height) / 150) } ?? 20 }
 
     /// Opens the dust editor on a channel (the preview shows that channel alone, with the draft spots).
+    /// The three channel editors, as the tool buttons above the channel column offer them.
+    enum CorrectionTool: String, CaseIterable, Identifiable {
+        case dust, gradient, manual
+        var id: String { rawValue }
+        var title: String { switch self { case .dust: return "Dust"; case .gradient: return "Gradient"; case .manual: return "Manual" } }
+        var symbol: String { switch self { case .dust: return "circle.dotted"; case .gradient: return "circle.lefthalf.filled"; case .manual: return "paintbrush.pointed.fill" } }
+        var help: String {
+            switch self {
+            case .dust: return "Heal dust spots (donuts, motes) on the channels"
+            case .gradient: return "Remove a sky gradient from the channels"
+            case .manual: return "Paint corrections on the channels"
+            }
+        }
+    }
+
+    /// The editor that is open, if any.
+    var editingTool: CorrectionTool? {
+        if dustEditing != nil { return .dust }
+        if gradientEditing != nil { return .gradient }
+        if correctionEditing != nil { return .manual }
+        return nil
+    }
+
+    /// The channel an open editor shows.
+    var editingChannel: ChannelKind? { dustEditing ?? gradientEditing ?? correctionEditing }
+
+    /// Opens an editor on the channel being edited (another editor's work is applied first), else
+    /// on the peeked channel, else on the first loaded one.
+    func beginEditing(_ tool: CorrectionTool) {
+        guard editingTool != tool else { return }
+        let kind = editingChannel ?? peekChannel ?? ChannelKind.allCases.first { sources[$0] != nil }
+        guard let kind else { return }
+        switch editingTool {
+        case .dust?: commitDustEditing()
+        case .gradient?: commitGradientEditing()
+        case .manual?: commitCorrectionEditing()
+        case nil: break
+        }
+        switch tool {
+        case .dust: beginDustEditing(kind)
+        case .gradient: beginGradientEditing(kind)
+        case .manual: beginCorrectionEditing(kind)
+        }
+    }
+
+    /// Shows another channel in the open editor (a click on its slot while editing).
+    func switchEditingChannel(_ kind: ChannelKind) {
+        switch editingTool {
+        case .dust?: switchDustChannel(kind)
+        case .gradient?: switchGradientChannel(kind)
+        case .manual?: switchCorrectionChannel(kind)
+        case nil: break
+        }
+    }
+
     func beginDustEditing(_ kind: ChannelKind) {
         guard sources[kind] != nil else { return }
         if cropEditing { cancelCropEditing() }

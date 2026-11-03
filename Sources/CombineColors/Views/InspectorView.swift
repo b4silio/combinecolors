@@ -356,6 +356,8 @@ struct ControlsStripView: View {
             Divider().padding(.vertical, 8)
             MenuPicker(title: "Blend", selection: s.mode, options: StarsBlendMode.allCases) { $0.displayName }
                 .help("Screen: adds without clipping, soft on bright nebulae (default).\nLighten: the brighter of the two.\nAdd: sum, clipped.")
+            MenuPicker(title: "Blend at", selection: s.stage, options: StarsBlendStage.allCases) { $0.displayName }
+                .help("After denoise & detail: the stars are not denoised, sharpened or haloed (the starless workflow), and a star slider re-blends only.\nBefore: the stars go through denoise and detail with the nebula.")
             MenuPicker(title: "Star data", selection: s.stretch, options: StarsStretchMode.allCases) { $0.displayName }
             Toggle("Mask by luminance", isOn: s.useMask).toggleStyle(.checkbox).font(.caption).help("Off for star-only images from StarNet/StarXTerminator.")
             if model.settings.stars.useMask {

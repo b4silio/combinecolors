@@ -121,12 +121,32 @@ final class PipelineTests: XCTestCase {
         XCTAssertEqual(try render(lin).image.r.mean(), linBase * 3, accuracy: 0.05)
     }
 
+    func testStarsLastStayUntouchedByDenoiseAndDetail() throws {
+        var s = CombineSettings(); s.select(palette: Palettes.palette(id: "foraxx_sho")!)
+        s.denoise.amount = 0.5; s.detail.clarity = 0.6; s.detail.sharpen = 1
+        s.stars.enabled = true; s.stars.stage = .last
+        let ctx = RenderContext.make(settings: s.normalization, sources: sources)
+        let analysis = Renderer.analysisSamples(sources: sources)
+        let last = try Renderer.render(RenderRequest(planes: planes(), analysisPlanes: analysis, settings: s, context: ctx))
+        // The same as the starless render, denoised and detailed, with the stars screened on afterwards.
+        var starless = s; starless.stars.enabled = false
+        let manual = try Renderer.render(RenderRequest(planes: planes(), analysisPlanes: analysis, settings: starless, context: ctx)).image
+        let p = planes()
+        PostProcess.blendStars(manual, stars: Renderer.starsImage(r: p[.red]!, g: p[.green]!, b: p[.blue]!, settings: s, context: ctx), settings: s.stars)
+        for (a, b) in zip(last.image.planes, manual.planes) { XCTAssertLessThan(a.maxAbsDifference(b), 1e-5) }
+        // Before denoise and detail the stars go through both: a different picture.
+        var before = s; before.stars.stage = .beforeDetail
+        let early = try Renderer.render(RenderRequest(planes: planes(), analysisPlanes: analysis, settings: before, context: ctx))
+        XCTAssertGreaterThan(early.image.planes[0].maxAbsDifference(last.image.planes[0]), 1e-3)
+    }
+
     func testStripRenderMatchesWholeRender() throws {
-        for stage in StretchStage.allCases {
+        for (stage, starsStage) in StretchStage.allCases.flatMap { st in StarsBlendStage.allCases.map { (st, $0) } } {
             var s = CombineSettings(); s.select(palette: Palettes.palette(id: "foraxx_sho")!)
             s.stretchStage = stage
             s.luminance.enabled = true; s.luminance.preset = .haMostly
-            s.stars.enabled = true
+            s.stars.enabled = true; s.stars.stage = starsStage
+            s.denoise.amount = 0.3
             let ctx = RenderContext.make(settings: s.normalization, sources: sources)
             let whole = try Renderer.render(RenderRequest(planes: planes(), analysisPlanes: Renderer.analysisSamples(sources: sources), settings: s, context: ctx))
             var progress: [Double] = []
@@ -354,6 +374,7 @@ final class TolerantDecodingTests: XCTestCase {
          "crop": {"x": 1, "y": 2, "width": 30, "height": 40}}
         """
         let doc = try JSONDecoder().decode(ProjectDocument.self, from: Data(json.utf8))
+        XCTAssertEqual(doc.settings.stars.stage, .last)
         XCTAssertEqual(doc.channels.first?.kind, .ha)
         XCTAssertEqual(doc.settings.paletteID, "hoo")
         XCTAssertTrue(doc.settings.stars.enabled)

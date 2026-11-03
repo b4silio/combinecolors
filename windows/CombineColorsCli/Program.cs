@@ -127,6 +127,7 @@ switch (command)
         var starsBlend = EnumRaw.Parse<StarsBlendMode>(Option("--stars-blend") ?? "");
         float starsBrightness = F(Option("--stars-brightness"), 0), starsContrast = F(Option("--stars-contrast"), 0);
         bool starsWhite = Flag("--stars-white");
+        var starsStage = EnumRaw.Parse<StarsBlendStage>(Option("--stars-stage") ?? "");
         Func<string, float[]?> triple = name => Option(name)?.Split(',').Select(t => F(t.Trim(), 0)).ToArray();
         var balanceArgs = new[] { (ToneRange.Shadows, triple("--balance-shadows")), (ToneRange.Midtones, triple("--balance-midtones")), (ToneRange.Highlights, triple("--balance-highlights")) };
         bool noPreserveLuminosity = Flag("--no-preserve-luminosity");
@@ -302,6 +303,7 @@ switch (command)
         if (lum != null) ApplyLum(lum, settings);
         settings.Stars.Enabled = stars;
         if (starsBlend is StarsBlendMode sbm) settings.Stars.Mode = sbm;
+        if (starsStage is StarsBlendStage sst) settings.Stars.Stage = sst;
         settings.Stars.Brightness = starsBrightness; settings.Stars.Contrast = starsContrast; settings.Stars.Normalize = starsWhite;
         StarsLayer? starsLayer = null;
         if (starsFile != null)

@@ -437,9 +437,26 @@ public static class StarsStretchModes
     };
 }
 
+/// <summary>Where in the pipeline the stars go in.</summary>
+public enum StarsBlendStage
+{
+    /// <summary>After denoise and detail: the stars are not denoised, sharpened or haloed (the starless workflow); a star slider re-blends only.</summary>
+    Last,
+    /// <summary>With the colour stage, before denoise and detail (the stars go through both).</summary>
+    BeforeDetail,
+}
+
+public static class StarsBlendStages
+{
+    public static readonly StarsBlendStage[] All = [StarsBlendStage.Last, StarsBlendStage.BeforeDetail];
+    public static string DisplayName(this StarsBlendStage m) => m == StarsBlendStage.Last ? "After denoise & detail" : "Before denoise & detail";
+}
+
 public sealed partial class StarsBlendSettings : IEquatable<StarsBlendSettings>
 {
     public bool Enabled = false;
+    /// <summary>When the stars go in: last (untouched by denoise and detail) or before them.</summary>
+    public StarsBlendStage Stage = StarsBlendStage.Last;
     /// <summary>Whether the RGB star channels need stretching before blending.</summary>
     public StarsStretchMode Stretch = StarsStretchMode.Auto;
     public float Amount = 1;
@@ -459,9 +476,9 @@ public sealed partial class StarsBlendSettings : IEquatable<StarsBlendSettings>
 
     public StarsBlendSettings Clone() => (StarsBlendSettings)MemberwiseClone();
     public bool Equals(StarsBlendSettings? o) => o != null && Enabled == o.Enabled && Stretch == o.Stretch && Amount == o.Amount && Threshold == o.Threshold && Softness == o.Softness && Mode == o.Mode && UseMask == o.UseMask && Saturation == o.Saturation
-        && Brightness == o.Brightness && Contrast == o.Contrast && Normalize == o.Normalize;
+        && Brightness == o.Brightness && Contrast == o.Contrast && Normalize == o.Normalize && Stage == o.Stage;
     public override bool Equals(object? obj) => Equals(obj as StarsBlendSettings);
-    public override int GetHashCode() => HashCode.Combine(HashCode.Combine(Enabled, Stretch, Amount, Threshold, Softness, Mode, UseMask, Saturation), Brightness, Contrast, Normalize);
+    public override int GetHashCode() => HashCode.Combine(HashCode.Combine(Enabled, Stretch, Amount, Threshold, Softness, Mode, UseMask, Saturation), Brightness, Contrast, Normalize, Stage);
 }
 
 /// <summary>Linear mixing matrix: for every channel, its weights into R, G, B.</summary>

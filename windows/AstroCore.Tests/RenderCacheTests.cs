@@ -123,6 +123,42 @@ public class RenderCacheTests
     }
 
     [Fact]
+    public void StarsLastReblendOnly()
+    {
+        var srcs = Sources();
+        srcs[ChannelKind.Red] = Synth.Source(ChannelKind.Red, 0.6f, 20, 160, 120);
+        srcs[ChannelKind.Green] = Synth.Source(ChannelKind.Green, 0.6f, 21, 160, 120);
+        srcs[ChannelKind.Blue] = Synth.Source(ChannelKind.Blue, 0.6f, 22, 160, 120);
+        var s = new CombineSettings(); s.Select(Palettes.Palette("sho")!);
+        s.Denoise.Amount = 0.4f; s.Detail.Clarity = 0.5f;
+        s.Stars.Enabled = true; s.Stars.Stage = StarsBlendStage.Last;
+        var ctx = RenderContext.Make(s.Normalization, srcs);
+        var analysis = Renderer.AnalysisSamples(srcs);
+        var cache = new RenderCache();
+        var planes = srcs.ToDictionary(kv => kv.Key, kv => kv.Value.Pyramid.Level(0));
+        void Check(CombineSettings st, RenderCache.Stage expect, string what)
+        {
+            var cached = cache.Render(new RenderRequest(planes, st.Clone(), ctx, analysis), Key(srcs, ctx));
+            var fresh = Renderer.Render(new RenderRequest(planes, st.Clone(), ctx, analysis));
+            AssertSame(cached.Image, fresh.Image, what);
+            Assert.True(expect == cached.RanFrom, $"{what}: ran from {cached.RanFrom}, expected {expect}");
+        }
+        Check(s, RenderCache.Stage.Combine, "first render");
+        s.Stars.Amount = 0.6f;
+        Check(s, RenderCache.Stage.Stars, "star amount: re-blend on the kept detail output");
+        s.Stars.Brightness = 0.5f;
+        Check(s, RenderCache.Stage.Stars, "star brightness");
+        s.Detail.Sharpen = 0.7f;
+        Check(s, RenderCache.Stage.Detail, "detail: detail + stars");
+        s.Denoise.Amount = 0.2f;
+        Check(s, RenderCache.Stage.Denoise, "denoise: denoise + detail + stars");
+        s.Stars.Stage = StarsBlendStage.BeforeDetail;
+        Check(s, RenderCache.Stage.Colour, "stars before detail: part of the developed image");
+        s.Stars.Amount = 0.3f;
+        Check(s, RenderCache.Stage.Colour, "a star slider then re-runs from the colour stage");
+    }
+
+    [Fact]
     public void LiveCorrectionAndStripRendersBypassTheCache()
     {
         var srcs = Sources();

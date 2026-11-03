@@ -126,14 +126,35 @@ public class PipelineTests
     }
 
     [Fact]
+    public void StarsLastStayUntouchedByDenoiseAndDetail()
+    {
+        var s = new CombineSettings(); s.Select(Palettes.Palette("foraxx_sho")!);
+        s.Denoise.Amount = 0.5f; s.Detail.Clarity = 0.6f; s.Detail.Sharpen = 1;
+        s.Stars.Enabled = true; s.Stars.Stage = StarsBlendStage.Last;
+        var ctx = RenderContext.Make(s.Normalization, sources);
+        var analysis = Renderer.AnalysisSamples(sources);
+        var last = Renderer.Render(new RenderRequest(Planes(), s, ctx, analysis));
+        var starless = s.Clone(); starless.Stars.Enabled = false;
+        var manual = Renderer.Render(new RenderRequest(Planes(), starless, ctx, analysis)).Image;
+        var p = Planes();
+        PostProcess.BlendStars(manual, Renderer.StarsImage(p[ChannelKind.Red], p[ChannelKind.Green], p[ChannelKind.Blue], s, ctx), s.Stars);
+        foreach (var (a, b) in last.Image.Planes.Zip(manual.Planes)) Assert.True(a.MaxAbsDifference(b) < 1e-5f);
+        var before = s.Clone(); before.Stars.Stage = StarsBlendStage.BeforeDetail;
+        var early = Renderer.Render(new RenderRequest(Planes(), before, ctx, analysis));
+        Assert.True(early.Image.Planes[0].MaxAbsDifference(last.Image.Planes[0]) > 1e-3f);
+    }
+
+    [Fact]
     public void StripRenderMatchesWholeRender()
     {
         foreach (var stage in StretchStages.All)
+        foreach (var starsStage in StarsBlendStages.All)
         {
             var s = new CombineSettings(); s.Select(Palettes.Palette("foraxx_sho")!);
             s.StretchStage = stage;
             s.Luminance.Enabled = true; s.Luminance.Preset = LuminancePreset.HaMostly;
-            s.Stars.Enabled = true;
+            s.Stars.Enabled = true; s.Stars.Stage = starsStage;
+            s.Denoise.Amount = 0.3f;
             var ctx = RenderContext.Make(s.Normalization, sources);
             var whole = Renderer.Render(new RenderRequest(Planes(), s, ctx, Renderer.AnalysisSamples(sources)));
             var progress = new List<double>();

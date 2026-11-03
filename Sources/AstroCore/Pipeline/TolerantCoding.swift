@@ -95,6 +95,7 @@ extension StarsBlendSettings {
         threshold = c.value("threshold", d.threshold); softness = c.value("softness", d.softness); mode = c.value("mode", d.mode)
         useMask = c.value("useMask", d.useMask); saturation = c.value("saturation", d.saturation)
         brightness = c.value("brightness", d.brightness); contrast = c.value("contrast", d.contrast); normalize = c.value("normalize", d.normalize)
+        stage = c.value("stage", d.stage)
     }
 }
 
@@ -197,6 +198,7 @@ extension ProjectDocument {
         flipped = c.value("flipped", d.flipped)
         dust = c.value("dust", d.dust)
         gradient = c.value("gradient", d.gradient)
+        corrections = c.value("corrections", d.corrections)
     }
 }
 

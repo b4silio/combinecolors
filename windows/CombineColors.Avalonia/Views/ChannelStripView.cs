@@ -28,6 +28,8 @@ public sealed class ChannelStripView : DockPanel
     readonly HistogramView histogram = new() { Width = SlotWidth, Height = 64, Margin = new Thickness(Pad) };
     readonly Dictionary<ChannelKind, Border> slotViews = new();
     bool peeking;
+    /// <summary>The three channel editors; the open one is highlighted.</summary>
+    readonly StackPanel tools = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(Pad, Pad, Pad, 0) };
     IPointer? captured;
 
     public ChannelStripView(ProjectModel model, Window owner)
@@ -38,6 +40,8 @@ public sealed class ChannelStripView : DockPanel
         DockPanel.SetDock(histogram, Dock.Bottom);
         Children.Add(histogram);
         var sep = new Separator(); DockPanel.SetDock(sep, Dock.Bottom); Children.Add(sep);
+        DockPanel.SetDock(tools, Dock.Top);
+        Children.Add(tools);
         var scroller = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = slots };
         Children.Add(scroller);
         // One gesture for the whole column so that a held press can move between slots.
@@ -54,14 +58,38 @@ public sealed class ChannelStripView : DockPanel
         switch (what)
         {
             case Change.Sources: case Change.SlotThumbnails: case Change.Dust: case Change.Peek: case Change.Crop: Rebuild(); break;
+            case Change.Gradient: case Change.Corrections: RebuildTools(); break;
             case Change.Frame: histogram.Histogram = model.Histogram; break;
         }
     }
 
     IEnumerable<ChannelKind> Order() => ChannelKinds.All.Where(k => model.Sources.ContainsKey(k)).Concat(ChannelKinds.All.Where(k => !model.Sources.ContainsKey(k)));
 
+    static readonly (ProjectModel.CorrectionTool tool, string title, string help)[] ToolButtons =
+    [
+        (ProjectModel.CorrectionTool.Dust, "Dust", "Heal dust spots (donuts, motes) on the channels"),
+        (ProjectModel.CorrectionTool.Gradient, "Gradient", "Remove a sky gradient from the channels"),
+        (ProjectModel.CorrectionTool.Manual, "Manual", "Paint corrections on the channels"),
+    ];
+
+    /// <summary>The editor buttons: the open one is highlighted. While one is open a click on a slot shows that channel in it (no peek).</summary>
+    void RebuildTools()
+    {
+        tools.Children.Clear();
+        foreach (var (tool, title, help) in ToolButtons)
+        {
+            bool active = model.EditingTool == tool;
+            var b = Ui.SmallButton(title, () => model.BeginEditing(tool), help + (active ? " (open)" : ""));
+            b.Width = (SlotWidth - 8) / 3; b.Margin = new Thickness(0, 0, 4, 0); b.Padding = new Thickness(2, 1, 2, 1);
+            b.IsEnabled = model.Sources.Count > 0;
+            if (active) b.Background = new SolidColorBrush(Color.FromArgb(110, 0, 122, 255));
+            tools.Children.Add(b);
+        }
+    }
+
     void Rebuild()
     {
+        RebuildTools();
         slots.Children.Clear();
         slotViews.Clear();
         foreach (var kind in Order())
@@ -167,9 +195,6 @@ public sealed class ChannelStripView : DockPanel
         }
         menu.Items.Add(move);
         menu.Items.Add(new Separator());
-        var heal = new MenuItem { Header = "Heal Dust Spots…" }; heal.Click += (_, _) => model.BeginDustEditing(kind); menu.Items.Add(heal);
-        var gradient = new MenuItem { Header = "Remove Gradient…" }; gradient.Click += (_, _) => model.BeginGradientEditing(kind); menu.Items.Add(gradient);
-        var corrections = new MenuItem { Header = "Manual Corrections…" }; corrections.Click += (_, _) => model.BeginCorrectionEditing(kind); menu.Items.Add(corrections);
         if (model.HasCorrection(kind)) { var rc = new MenuItem { Header = "Remove Corrections" }; rc.Click += (_, _) => model.RemoveCorrection(kind); menu.Items.Add(rc); }
         var save = new MenuItem { Header = "Save channel as FITS…" };
         save.Click += async (_, _) =>
@@ -200,6 +225,8 @@ public sealed class ChannelStripView : DockPanel
         if (!e.GetCurrentPoint(slots).Properties.IsLeftButtonPressed) return;
         var k = SlotAt(e.Source as Visual);
         if (k == null) return;
+        // While an editor is open a click shows that channel in it.
+        if (model.EditingTool != null) { model.SwitchEditingChannel(k.Value); return; }
         peeking = true;
         model.PeekChannel = k;
         captured = e.Pointer;

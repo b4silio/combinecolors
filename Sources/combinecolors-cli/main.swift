@@ -29,6 +29,7 @@ import AstroCore
 //      --stars                blend RGB stars (from the R, G, B channels, or from --stars-file)
 //      --stars-file <image>   RGB image kept whole and blended as stars;  --stars-blend screen | lighten | add
 //                             --stars-brightness <stops>;  --stars-contrast <-1..1>;  --stars-white (brightest stars to white)
+//      --stars-stage last | beforeDetail   blend the stars after denoise & detail (default) or before them
 //      --format <fmt>         png8 | png16 | tiff16 | tiff32 | fits32 | jpeg (default png8)
 //      --project <file.json>  load CombineSettings from a saved project / settings file
 //      --assign <file>=<kind> force a channel assignment (kind: L R G B Ha OIII SII Hb)
@@ -122,6 +123,7 @@ case "render":
     let starsBrightness = Float(option("--stars-brightness") ?? "0") ?? 0
     let starsContrast = Float(option("--stars-contrast") ?? "0") ?? 0
     let starsWhite = flag("--stars-white")
+    let starsStage = option("--stars-stage").flatMap { StarsBlendStage(rawValue: $0) }
     let formatArg = option("--format") ?? "png8"
     let projectArg = option("--project")
     let cropArg = option("--crop")
@@ -266,6 +268,7 @@ case "render":
     if let l = lum { applyLum(l, &settings) }
     settings.stars.enabled = stars
     if let b = starsBlend { settings.stars.mode = b }
+    if let st = starsStage { settings.stars.stage = st }
     settings.stars.brightness = starsBrightness; settings.stars.contrast = starsContrast; settings.stars.normalize = starsWhite
     var starsLayer: StarsLayer? = nil
     if let p = starsFile {

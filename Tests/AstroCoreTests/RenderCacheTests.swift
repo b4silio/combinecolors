@@ -117,6 +117,37 @@ final class RenderCacheTests: XCTestCase {
         try check(s, reused: 2, "the stored Ha plane (reused) was not clamped by the first render's luminance")
     }
 
+    func testStarsLastReblendOnly() throws {
+        var srcs = sources()
+        for (i, k) in [ChannelKind.red, .green, .blue].enumerated() { srcs[k] = Synth.source(k, scale: 0.6, seed: UInt64(20 + i), width: 160, height: 120) }
+        var s = CombineSettings(); s.select(palette: Palettes.palette(id: "sho")!)
+        s.denoise.amount = 0.4; s.detail.clarity = 0.5
+        s.stars.enabled = true; s.stars.stage = .last
+        let ctx = RenderContext.make(settings: s.normalization, sources: srcs)
+        let analysis = Renderer.analysisSamples(sources: srcs)
+        let cache = RenderCache()
+        let planes = srcs.mapValues { $0.pyramid.level(0) }
+        func check(_ s: CombineSettings, expect: RenderCache.Stage, _ what: String) throws {
+            let cached = try cache.render(RenderRequest(planes: planes, analysisPlanes: analysis, settings: s, context: ctx), inputs: key(srcs, ctx: ctx))
+            let fresh = try Renderer.render(RenderRequest(planes: planes, analysisPlanes: analysis, settings: s, context: ctx))
+            assertSame(cached.image, fresh.image, what)
+            XCTAssertEqual(cached.ranFrom, expect, what)
+        }
+        try check(s, expect: .combine, "first render")
+        s.stars.amount = 0.6
+        try check(s, expect: .stars, "star amount: re-blend on the kept detail output")
+        s.stars.brightness = 0.5
+        try check(s, expect: .stars, "star brightness")
+        s.detail.sharpen = 0.7
+        try check(s, expect: .detail, "detail: detail + stars")
+        s.denoise.amount = 0.2
+        try check(s, expect: .denoise, "denoise: denoise + detail + stars")
+        s.stars.stage = .beforeDetail
+        try check(s, expect: .colour, "stars before detail: part of the developed image")
+        s.stars.amount = 0.3
+        try check(s, expect: .colour, "a star slider then re-runs from the colour stage")
+    }
+
     func testLiveCorrectionAndStripRendersBypassTheCache() throws {
         let srcs = sources()
         var s = CombineSettings(); s.select(palette: Palettes.palette(id: "sho")!)

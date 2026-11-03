@@ -334,8 +334,27 @@ public enum StarsStretchMode: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// Where in the pipeline the stars go in.
+public enum StarsBlendStage: String, Codable, CaseIterable, Identifiable {
+    /// After denoise and detail: the stars are not denoised, sharpened or haloed (the starless
+    /// workflow: process the nebula, put the stars back last). Also the fast one: a star slider
+    /// re-blends only.
+    case last
+    /// With the colour stage, before denoise and detail (the stars go through both).
+    case beforeDetail
+    public var id: String { rawValue }
+    public var displayName: String {
+        switch self {
+        case .last: return "After denoise & detail"
+        case .beforeDetail: return "Before denoise & detail"
+        }
+    }
+}
+
 public struct StarsBlendSettings: Codable, Equatable, Hashable {
     public var enabled: Bool = false
+    /// When the stars go in: last (untouched by denoise and detail) or before them.
+    public var stage: StarsBlendStage = .last
     /// Whether the RGB star channels need stretching before blending.
     public var stretch: StarsStretchMode = .auto
     public var amount: Float = 1

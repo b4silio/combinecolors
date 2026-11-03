@@ -949,10 +949,12 @@ public sealed class ProjectModel : INotifyPropertyChanged
                     Crop = st.Crop;
                     Dust = st.Dust.Clone();
                     Gradient = st.Gradient.Clone();
+                    Corrections = st.Corrections.Clone();
                     Presets = st.Presets.Select(p => p.Clone()).ToList();
                     presetThumbnailCache.Clear();
-                    Notify(Change.Presets); Notify(Change.Dust); Notify(Change.Gradient);
+                    Notify(Change.Presets); Notify(Change.Dust); Notify(Change.Gradient); Notify(Change.Corrections);
                 }
+                if (set.State?.StarsFile is string sf) pendingStarsFile = sf;
                 AddChannels(items);
             });
         });
@@ -1388,6 +1390,49 @@ public sealed class ProjectModel : INotifyPropertyChanged
     public double DefaultDustRadius => ImageSize is Size s ? Math.Max(12, Math.Min(s.Width, s.Height) / 150) : 20;
 
     /// <summary>Opens the dust editor on a channel (the preview shows that channel alone, with the draft spots).</summary>
+    /// <summary>The three channel editors, as the tool buttons above the channel column offer them.</summary>
+    public enum CorrectionTool { Dust, Gradient, Manual }
+
+    /// <summary>The editor that is open, if any.</summary>
+    public CorrectionTool? EditingTool => DustEditing != null ? CorrectionTool.Dust : GradientEditing != null ? CorrectionTool.Gradient : CorrectionEditing != null ? CorrectionTool.Manual : null;
+
+    /// <summary>The channel an open editor shows.</summary>
+    public ChannelKind? EditingChannel => DustEditing ?? GradientEditing ?? CorrectionEditing;
+
+    /// <summary>
+    /// Opens an editor on the channel being edited (another editor's work is applied first), else on
+    /// the peeked channel, else on the first loaded one.
+    /// </summary>
+    public void BeginEditing(CorrectionTool tool)
+    {
+        if (EditingTool == tool) return;
+        var kind = EditingChannel ?? PeekChannel ?? ChannelKinds.All.Cast<ChannelKind?>().FirstOrDefault(k => Sources.ContainsKey(k!.Value));
+        if (kind is not ChannelKind k) return;
+        switch (EditingTool)
+        {
+            case CorrectionTool.Dust: CommitDustEditing(); break;
+            case CorrectionTool.Gradient: CommitGradientEditing(); break;
+            case CorrectionTool.Manual: CommitCorrectionEditing(); break;
+        }
+        switch (tool)
+        {
+            case CorrectionTool.Dust: BeginDustEditing(k); break;
+            case CorrectionTool.Gradient: BeginGradientEditing(k); break;
+            case CorrectionTool.Manual: BeginCorrectionEditing(k); break;
+        }
+    }
+
+    /// <summary>Shows another channel in the open editor (a click on its slot while editing).</summary>
+    public void SwitchEditingChannel(ChannelKind kind)
+    {
+        switch (EditingTool)
+        {
+            case CorrectionTool.Dust: SwitchDustChannel(kind); break;
+            case CorrectionTool.Gradient: SwitchGradientChannel(kind); break;
+            case CorrectionTool.Manual: SwitchCorrectionChannel(kind); break;
+        }
+    }
+
     public void BeginDustEditing(ChannelKind kind)
     {
         if (!sources.ContainsKey(kind)) return;

@@ -143,12 +143,14 @@ public static class Renderer
         var plan = new Plan(req);
         var main = Develop(plan, req.Planes, req.Context, req.AnalysisPlanes, req.FixedPostStretch, req.Stars, req.Correction);
         var combined = main.Image;
-        // 7. Denoise and local contrast last (non point-wise; the strip renderer applies them on the whole image).
+        // 7. Denoise and local contrast (non point-wise; the strip renderer applies them on the whole
+        //    image), then the stars when they go in last.
         if (req.ApplyDetail)
         {
             var overview = DetailOverview(plan, req, main.PostStretch);
             Denoise.Apply(combined, plan.Settings.Denoise);
             PostProcess.Detail(combined, plan.Settings.Detail, req.Scale, overview);
+            if (plan.Settings.Stars.Enabled && plan.Settings.Stars.Stage == StarsBlendStage.Last) StarsStage(combined, plan, req.Planes, req.Context, req.Stars);
         }
         return new RenderResult { Image = combined, PostStretch = main.PostStretch, ChannelStretch = main.ChannelStretch, Millis = t0.Elapsed.TotalMilliseconds };
     }
@@ -396,19 +398,25 @@ public static class Renderer
         PostProcess.Apply(s.Post, combined);
         PostProcess.Grade(combined, s.Grading);
 
-        // 6. RGB stars: from the stars layer, else from the R, G and B channels.
-        if (s.Stars.Enabled)
+        // 6. RGB stars, when they go in before denoise and detail.
+        if (s.Stars.Enabled && s.Stars.Stage == StarsBlendStage.BeforeDetail) StarsStage(combined, plan, reqPlanes, context, stars);
+        combined.Clamp01();
+    }
+
+    /// <summary>The RGB stars blended in, in place: from the stars layer, else from the R, G and B channels.</summary>
+    internal static void StarsStage(RGBImage combined, Plan plan, Dictionary<ChannelKind, PlanarImage> reqPlanes, RenderContext context, StarsInput? stars)
+    {
+        var s = plan.Settings;
+        int w = combined.Width, h = combined.Height;
+        if (stars != null && stars.Planes.Count == 3 && stars.Planes[0].Width == w && stars.Planes[0].Height == h)
         {
-            if (stars != null && stars.Planes.Count == 3 && stars.Planes[0].Width == w && stars.Planes[0].Height == h)
-            {
-                var img = StarsImage(stars.Planes.Select(p => p.Copy()).ToList(), stars.Stats, s);
-                PostProcess.BlendStars(combined, img, s.Stars);
-            }
-            else if (reqPlanes.TryGetValue(ChannelKind.Red, out var rr) && reqPlanes.TryGetValue(ChannelKind.Green, out var gg) && reqPlanes.TryGetValue(ChannelKind.Blue, out var bb))
-            {
-                var img = StarsImage(rr, gg, bb, s, context);
-                PostProcess.BlendStars(combined, img, s.Stars);
-            }
+            var img = StarsImage(stars.Planes.Select(p => p.Copy()).ToList(), stars.Stats, s);
+            PostProcess.BlendStars(combined, img, s.Stars);
+        }
+        else if (reqPlanes.TryGetValue(ChannelKind.Red, out var rr) && reqPlanes.TryGetValue(ChannelKind.Green, out var gg) && reqPlanes.TryGetValue(ChannelKind.Blue, out var bb))
+        {
+            var img = StarsImage(rr, gg, bb, s, context);
+            PostProcess.BlendStars(combined, img, s.Stars);
         }
         combined.Clamp01();
     }
@@ -552,7 +560,7 @@ public static class Renderer
         return Statistics.Sample(p, o).sample;
     }
 
-    static RGBImage StarsImage(PlanarImage r, PlanarImage g, PlanarImage b, CombineSettings s, RenderContext context)
+    internal static RGBImage StarsImage(PlanarImage r, PlanarImage g, PlanarImage b, CombineSettings s, RenderContext context)
     {
         var planes = new List<PlanarImage>();
         var stats = new List<ChannelStats>();
@@ -653,6 +661,26 @@ public static class Renderer
         if (isCancelled?.Invoke() == true) return null;
         Denoise.Apply(out_, settings.Denoise);
         PostProcess.Detail(out_, settings.Detail, 1);
+        if (settings.Stars.Enabled && settings.Stars.Stage == StarsBlendStage.Last)
+        {
+            // The stars last, strip by strip again (point-wise, so the strips agree with a whole render).
+            var plan = new Plan(new RenderRequest(sources.ToDictionary(kv => kv.Key, kv => kv.Value.Image), settings, context));
+            y = 0;
+            while (y < h)
+            {
+                if (isCancelled?.Invoke() == true) return null;
+                int hh = Math.Min(rows, h - y);
+                var strip = new RGBImage(out_.R.Cropped(0, y, w, hh), out_.G.Cropped(0, y, w, hh), out_.B.Cropped(0, y, w, hh));
+                var planes = new Dictionary<ChannelKind, PlanarImage>();
+                foreach (var k in new[] { ChannelKind.Red, ChannelKind.Green, ChannelKind.Blue }) if (sources.TryGetValue(k, out var src)) planes[k] = src.Image.Cropped(crop.X, crop.Y + y, w, hh);
+                StarsInput? input = null;
+                if (stars != null && stars.Width == any.Width && stars.Height == any.Height) input = stars.Input(0, crop.X, crop.Y + y, w, hh);
+                StarsStage(strip, plan, planes, context, input);
+                var sp = strip.Planes; var dp = out_.Planes;
+                for (int c = 0; c < 3; c++) Array.Copy(sp[c].Data, 0, dp[c].Data, y * w, w * hh);
+                y += hh;
+            }
+        }
         return out_;
     }
 }

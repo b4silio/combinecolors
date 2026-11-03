@@ -300,6 +300,7 @@ public sealed partial class StarsBlendSettings : IJsonSettings
         ["threshold"] = SettingsJson.V(Threshold), ["softness"] = SettingsJson.V(Softness), ["mode"] = SettingsJson.V(Mode),
         ["useMask"] = SettingsJson.V(UseMask), ["saturation"] = SettingsJson.V(Saturation),
         ["brightness"] = SettingsJson.V(Brightness), ["contrast"] = SettingsJson.V(Contrast), ["normalize"] = SettingsJson.V(Normalize),
+        ["stage"] = SettingsJson.V(Stage),
     };
 
     public static StarsBlendSettings FromJson(JsonObject? c)
@@ -311,6 +312,7 @@ public sealed partial class StarsBlendSettings : IJsonSettings
             Threshold = SettingsJson.F(c, "threshold", d.Threshold), Softness = SettingsJson.F(c, "softness", d.Softness), Mode = SettingsJson.E(c, "mode", d.Mode),
             UseMask = SettingsJson.B(c, "useMask", d.UseMask), Saturation = SettingsJson.F(c, "saturation", d.Saturation),
             Brightness = SettingsJson.F(c, "brightness", d.Brightness), Contrast = SettingsJson.F(c, "contrast", d.Contrast), Normalize = SettingsJson.B(c, "normalize", d.Normalize),
+            Stage = SettingsJson.E(c, "stage", d.Stage),
         };
     }
 }
