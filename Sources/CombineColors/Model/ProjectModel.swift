@@ -120,6 +120,15 @@ final class ProjectModel {
     /// Whether the RGB stars block has something to blend: a stars layer or R, G and B channels.
     var hasStars: Bool { starsLayer != nil || (sources[.red] != nil && sources[.green] != nil && sources[.blue] != nil) }
 
+    // MARK: Star removal (StarNet2)
+    /// The StarNet2 program: found, downloaded, license accepted (preferences in `defaults`).
+    let starNet: StarNetSetup
+    /// Set by the menu / the channel column to show the star removal sheet.
+    var starRemovalRequested = false
+    /// Progress of a running star removal (nil: none running).
+    var starRemovalProgress: StarRemovalProgress? = nil
+    var starRemovalCancellation: StarNetCancellation? = nil
+
     // MARK: Dust spots
     /// Loaded (oriented) planes before dust healing; the same instance as the channel image when a
     /// channel has no spots.
@@ -174,7 +183,8 @@ final class ProjectModel {
     private var postStretchCache: [PostStretchKey: [ResolvedStretch]] = [:]
     private var contextGeneration = 0
     private var stretchHintShown = false
-    private var statusHint: String? = nil
+    /// Extra note appended to the status line after the next context rebuild.
+    var statusHint: String? = nil
 
     // MARK: Preview
     private(set) var frame: PreviewFrame? = nil
@@ -324,6 +334,7 @@ final class ProjectModel {
         assert(defaults !== UserDefaults.standard || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil,
                "use an isolated UserDefaults suite in tests")
         self.defaults = defaults
+        starNet = StarNetSetup(defaults: defaults)
         recentStore = RecentSetsStore(defaults: defaults)
         recentSets = recentStore.load()
         hiddenPaletteIDs = Set(defaults.stringArray(forKey: "hiddenPalettes") ?? [])
@@ -518,6 +529,8 @@ final class ProjectModel {
     /// Developer switch for screenshots: `-openEditor gradient:Ha[:background]` (or `dust:Ha`) opens
     /// that editor once the channel is loaded.
     private func openEditorFromLaunchArguments() {
+        // `-openStarRemoval YES` opens the star removal sheet (screenshots of its steps).
+        if !launchEditorOpened, UserDefaults.standard.bool(forKey: "openStarRemoval") { launchEditorOpened = true; starRemovalRequested = true; return }
         guard !launchEditorOpened, let v = UserDefaults.standard.string(forKey: "openEditor") else { return }
         let parts = v.split(separator: ":").map(String.init)
         guard parts.count >= 2, let k = ChannelKind(rawValue: parts[1]) ?? ChannelKind.fromPixelMathIdentifier(parts[1]), sources[k] != nil else { return }

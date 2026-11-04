@@ -17,6 +17,23 @@ export at full resolution.
   Channel slots are filled automatically from the FITS `FILTER` keyword (also
   inside XISF files) or the file name (`Hydrogen-alpha`, `O3`, `SII`, `_R`,
   `Lum`, …); unknown files ask.
+* **Star removal with StarNet2** (*Remove Stars…* above the channel column, or
+  Tools ▸ Remove Stars with StarNet2): runs the free [StarNet2](https://starnetastro.com/cli-tools/starnet/)
+  command-line program by Mikita Misiura on the channel files, writes
+  `<name>_bg` (starless) and `<name>_stars` next to each one and switches the
+  channels to the `_bg` files (dust spots, gradient models, crop and painted
+  corrections carry over; the originals are untouched and come back through
+  File ▸ Open Recent Set). StarNet2 is **not bundled**: the first time, the
+  window downloads the official package for this Mac from starnetastro.com
+  (checked against the SHA-256 of the site's release feed) into
+  `~/Library/Application Support/CombineColors/StarNet2` — no Terminal, no
+  password — and shows its license for acceptance; an existing install (the
+  `.pkg` in `/usr/local/bin`, or any `starnet2` / downloaded ZIP chosen by hand)
+  works too. Linear data go through StarNet2's own linear mode with the
+  project's Auto STF values (or, under *Options*, through the project's stretch,
+  inverted afterwards), so the results stay linear; already-stretched data are
+  processed as they are. On Apple Silicon the CoreML build uses the GPU: ≈ 55 s
+  for a 40-megapixel frame on an M4 Pro.
 * **Dual-band splitting** (separate pre-processing step): a one-shot-colour
   image taken through an Hα/OIII (or SII/Hβ) filter is split into two
   monochrome channels with adjustable R/G/B weights and cross-talk correction;
@@ -293,6 +310,9 @@ release with the changelog section as notes.
    drag on empty space to reach the others. Everything updates live; double-click a slider label to reset
    it; ⌘Z undoes. *Save preset* keeps a look in the row under the palettes to
    compare later.
+   *Remove Stars…* (above the channel column) runs StarNet2 on the channel
+   files and switches them to the starless `_bg` versions; the first use guides
+   through downloading StarNet2 and accepting its license.
 5. **Export** (⌘E, File menu or toolbar) at full resolution; *HQ* in the
    preview toolbar renders the preview with more pixels.
 6. **Save the project** (⌘S) to come back later.
@@ -325,6 +345,11 @@ B: OIII
 ```
 
 `--max 0` renders at full resolution; `--project` reuses a saved project's settings.
+
+```bash
+# Star removal with an installed StarNet2 (writes stack-Ha_bg.fits and stack-Ha_stars.fits)
+.build/release/combinecolors-cli starnet --starnet ~/Library/Application\ Support/CombineColors/StarNet2/2.6.2/starnet2 stack-Ha.fits
+```
 
 ## How the preview stays faithful to the export
 
@@ -407,6 +432,7 @@ Sources/AstroCore            processing library (no UI)
   IO/                        FITS reader/writer, ImageIO raster reader/writer, loader, channel detection
   Processing/                Stretch, Normalization, Palettes, PostProcess, DualBand
   PixelMath/                 lexer, parser, vectorised evaluator, programs
+  StarNet/                   StarNet2 integration: finding / running the program, star removal of a file
   Pipeline/                  CombineSettings, ChannelSource, Renderer, ProjectDocument
 Sources/CombineColors        SwiftUI app (model, coordinators, views)
 Sources/combinecolors-cli    headless renderer
@@ -419,9 +445,9 @@ See `PLAN.md` for the phase plan and the test matrix.
 
 ## Limitations / ideas
 
-* No star removal: the RGB star blend uses a luminance mask on the RGB
-  channels; a StarNet/StarXTerminator stars-only image works best (disable the
-  mask).
+* Star removal needs StarNet2 (downloaded on first use); the RGB star blend
+  takes an RGB stars-only image, the per-channel `_stars` files are not yet
+  combined into one. The Windows / Linux builds do not have star removal yet.
 * Gradients are not corrected; the normalisation assumes a flat sky.
 * Only the primary HDU of a FITS file is read; compressed FITS (`.fz`) is not
   supported, nor are Zstandard-compressed or distributed XISF files.

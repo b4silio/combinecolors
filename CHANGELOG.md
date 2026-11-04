@@ -5,6 +5,10 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 (`scripts/bump.sh`). The version lives in `VERSION` and is stamped into the app at build time;
 `scripts/release.sh` tags it and publishes the DMG as a GitHub release.
 
+## [1.13.0] – 2026-11-04
+
+- Star removal with StarNet2: Remove Stars… downloads the official StarNet2 package on first use (license shown and accepted in the app), runs it on the channel files, writes <name>_bg and <name>_stars and switches the channels to the starless files; linear data stay linear (StarNet2 linear mode with the project's Auto STF values, or the project's stretch undone afterwards); CLI starnet command
+
 ## [1.12.1] – 2026-11-03
 
 - Manual corrections: flow shown as a percentage (0.5–10 %, default 2 %) and the default strength is 0.5 EV

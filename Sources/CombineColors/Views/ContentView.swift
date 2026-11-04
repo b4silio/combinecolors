@@ -53,6 +53,7 @@ struct ContentView: View {
         .sheet(isPresented: $showMatrixEditor) { MatrixEditorView(model: model) }
         .sheet(isPresented: $showPixelMath) { PixelMathEditorView(model: model) }
         .sheet(isPresented: $model.exportRequested) { ExportSheet(model: model) }
+        .sheet(isPresented: $model.starRemovalRequested) { StarRemovalSheet(model: model) }
         .sheet(item: $model.pendingColorFile) { pending in
             ColorFileSheet(model: model, pending: pending)
         }

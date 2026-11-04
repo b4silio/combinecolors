@@ -45,10 +45,16 @@ import AstroCore
 //                             applied too);  --gradient-mode subtract | divide;  --gradient-residual none | plane | quadratic
 //                             --gradient-sectors <1|4|8|12>;  --gradient-smooth <bins>;  --gradient-norefine (keep the geometry as given)
 //                             --gradient-protect cx,cy,a,b  region left out of the estimate (repeatable, every channel)
+//   combinecolors-cli starnet --starnet <path/to/starnet2> [options] <files…>
+//      removes the stars with StarNet2 (separate program, starnetastro.com) and writes <name>_bg and
+//      <name>_stars next to each file (or in --out <dir>)
+//      --method starnetLinear | appStretch   StarNet2's linear mode (default) or the stretch below, undone afterwards
+//      --stretch <method>     autoSTF | arcsinh | ghs | log | mtf (for appStretch);  --target <0..1>  --shadows <MADN>
+//      --upsample             StarNet2's intermediate 2x upsampling (slower)
 
 var args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else {
-    print("usage: combinecolors-cli (info|render|palettes) …"); exit(1)
+    print("usage: combinecolors-cli (info|render|palettes|starnet) …"); exit(1)
 }
 args.removeFirst()
 
@@ -336,6 +342,36 @@ case "render":
             try RasterWriter.write(planes: image.planes, to: url, format: format)
         } catch { print("\(palette.id): \(error.localizedDescription)") }
     }
+
+case "starnet":
+    guard let exe = option("--starnet") else { print("--starnet <path to the starnet2 executable> is required"); exit(1) }
+    let tool = StarNetTool(executable: URL(fileURLWithPath: exe))
+    var opts = StarRemovalOptions()
+    if let m = option("--method") { guard let mm = StarRemovalMethod(rawValue: m) else { print("unknown method \(m)"); exit(1) }; opts.method = mm }
+    if let m = option("--stretch") { guard let sm = StretchMethod(rawValue: m) else { print("unknown stretch \(m)"); exit(1) }; opts.stretch.method = sm }
+    if let t = option("--target").flatMap(Float.init) { opts.stretch.targetBackground = t }
+    if let c = option("--shadows").flatMap(Float.init) { opts.stretch.shadowsClipping = c }
+    opts.upsample = flag("--upsample")
+    let folder = option("--out").map { URL(fileURLWithPath: $0, isDirectory: true) }
+    if let folder { try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true) }
+    do {
+        let info = try tool.info()
+        print("StarNet2 \(info.version) (\(info.backend))")
+    } catch { print(error.localizedDescription); exit(1) }
+    var failures = 0
+    for path in args {
+        let url = URL(fileURLWithPath: path)
+        let t0 = Date()
+        var last = -1
+        do {
+            let r = try StarRemoval.processFile(url, options: opts, tool: tool, folder: folder) { p in
+                let pct = Int(p * 100)
+                if pct / 10 != last / 10 { last = pct; FileHandle.standardError.write("  \(url.lastPathComponent): \(pct) %\n".data(using: .utf8)!) }
+            }
+            print("\(url.lastPathComponent): \(r.processing.displayName) -> \(r.starless.lastPathComponent), \(r.stars.lastPathComponent) in \(Int(Date().timeIntervalSince(t0))) s")
+        } catch { failures += 1; print("\(url.lastPathComponent): \(error.localizedDescription)") }
+    }
+    if failures > 0 { exit(2) }
 
 default:
     print("unknown command \(command)"); exit(1)

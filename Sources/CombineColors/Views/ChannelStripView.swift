@@ -42,6 +42,18 @@ struct ChannelStripView: View {
                 }
             }
             .padding(.horizontal, Self.padding).padding(.top, Self.padding)
+            // Star removal (StarNet2) replaces the channels by their starless versions.
+            Button { model.starRemovalRequested = true } label: {
+                Label("Remove Stars…", systemImage: "star.slash")
+                    .font(.system(size: 10))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 3)
+                    .background(model.isRemovingStars ? Color.accentColor.opacity(0.35) : Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 4))
+            }
+            .buttonStyle(.plain)
+            .disabled(model.sources.isEmpty)
+            .help("Remove the stars of the channels with StarNet2 (a free program, downloaded once): writes _bg and _stars files and switches the channels to the _bg ones")
+            .padding(.horizontal, Self.padding).padding(.top, 3)
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: Self.slotSpacing) {
                     ForEach(order) { kind in

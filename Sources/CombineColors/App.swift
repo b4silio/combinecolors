@@ -52,6 +52,9 @@ struct CombineColorsApp: App {
             CommandGroup(after: .pasteboard) {
                 Button("Copy Preview Image") { model.copyPreviewToPasteboard() }.keyboardShortcut("c", modifiers: [.command, .shift]).disabled(model.frame == nil)
             }
+            CommandMenu("Tools") {
+                Button("Remove Stars with StarNet2…") { model.starRemovalRequested = true }
+            }
             CommandMenu("View") {
                 Button("Fit to Window") { model.fitRequest += 1 }.keyboardShortcut("0")
                 Toggle("High Quality Preview", isOn: Binding(get: { model.highQualityPreview }, set: { model.highQualityPreview = $0 }))
@@ -87,7 +90,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
+        // A screenshot instance must not take the keyboard: keys meant for another app would press its buttons.
+        if !AppDelegate.screenshotMode { NSApp.activate(ignoringOtherApps: true) }
         let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
         let urls = args.map { URL(fileURLWithPath: $0) }.filter { FileManager.default.fileExists(atPath: $0.path) }
         if !urls.isEmpty { AppDelegate.deliver(urls) }
@@ -99,19 +103,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let path = UserDefaults.standard.string(forKey: "screenshot"), !path.isEmpty {
             let delay = max(1, UserDefaults.standard.double(forKey: "screenshotDelay") == 0 ? 8 : UserDefaults.standard.double(forKey: "screenshotDelay"))
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                if let w = NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }), let v = w.contentView,
-                   let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) {
-                    v.cacheDisplay(in: v.bounds, to: rep)
-                    try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                guard let main = NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }) else { NSApp.terminate(nil); exit(0) }
+                // An open sheet (e.g. `-openStarRemoval YES`) is captured instead of the window under it. Its
+                // material background is not captured, so it is drawn in the light appearance (dark text on white).
+                let target = main.attachedSheet ?? main
+                if target !== main { target.appearance = NSAppearance(named: .aqua) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + (target === main ? 0 : 0.8)) {
+                    if let v = target.contentView, let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) {
+                        v.cacheDisplay(in: v.bounds, to: rep)
+                        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                    }
+                    NSApp.terminate(nil)
+                    exit(0)   // terminate is refused while a sheet is open
                 }
-                NSApp.terminate(nil)
             }
         }
     }
 
+    static var screenshotMode: Bool { !(UserDefaults.standard.string(forKey: "screenshot") ?? "").isEmpty }
+
     static func ensureWindow() {
         guard !NSApp.windows.contains(where: { $0.isVisible && $0.canBecomeMain }) else { return }
-        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: NSWorkspace.OpenConfiguration())
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = !screenshotMode
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config)
     }
 
     func application(_ application: NSApplication, open urls: [URL]) { AppDelegate.deliver(urls) }
