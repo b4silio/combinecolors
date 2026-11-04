@@ -184,50 +184,73 @@ public enum BackgroundSamples {
         let noise = max(s.noise, 1e-12)
         let scatterLimit = max(3 * noise, Statistics.percentile(sorted: candidates.map(\.m.scatter).sorted(), q: 0.5) * 2.5)
         let skewLimit: Float = 0.35
-        // Sky model: a plane fitted by asymmetric least squares (Eilers & Boelens): residuals above
-        // the plane weigh 0.02, residuals below weigh 1, so the plane settles on the lower envelope of
-        // the candidates — nebulosity only ever lies above the sky. A plane, not a quadratic: a
-        // quadratic bends into a nebula in the middle of the frame and rejects the sky around it.
-        // Light pollution is close to planar; what the plane cannot follow (a glow in one corner)
-        // is left to the tolerance and the user's own samples.
+        // Sky model, fitted by asymmetric least squares (Eilers & Boelens): residuals above the model
+        // weigh 0.02, residuals below weigh 1, so it settles on the lower envelope of the candidates —
+        // nebulosity only ever lies above the sky. The simplest model that explains the sky is used:
+        // a plane (light pollution), then a plane with radial terms (r², r⁴ from the frame centre:
+        // vignetting of frames without flats, whose centre stands far above the corners — a plane
+        // alone kept only the corner samples there), then with an elliptical / tilted quadratic part.
+        // A richer model is taken only when it keeps clearly more samples as sky (≥ 1.25× and at
+        // least 15 % of the grid more): a full quadratic bends into a central nebula when it is not
+        // needed. A glow in one corner is left to the tolerance and the user's own samples.
         var use = [Bool](repeating: true, count: candidates.count)
         let xs = candidates.map { Float($0.x) }, ys = candidates.map { Float($0.y) }, vs = candidates.map { $0.m.value }
         let fw = Float(s.width), fh = Float(s.height)
-        func plane(_ c: [Float], _ i: Int) -> Float { c[0] + c[1] * (ys[i] / fh) + c[2] * (xs[i] / fw) }
-        var coef: [Float]? = nil
-        var weights = [Double](repeating: 1, count: candidates.count)
-        for _ in 0..<12 {
-            guard let c = weightedPlane(x: xs, y: ys, v: vs, w: weights, width: fw, height: fh) else { break }
-            coef = c
-            var changed = false
-            for i in 0..<candidates.count {
-                let r = vs[i] - plane(c, i)
-                let nw: Double = r > 0 ? 0.02 : 1
-                if nw != weights[i] { changed = true; weights[i] = nw }
+        func envelope(terms: Int) -> (coef: [Float], keep: [Bool])? {
+            var coef: [Float]? = nil
+            var weights = [Double](repeating: 1, count: candidates.count)
+            for _ in 0..<16 {
+                guard let c = weightedSkyModel(x: xs, y: ys, v: vs, w: weights, width: fw, height: fh, terms: terms) else { break }
+                coef = c
+                var changed = false
+                for i in 0..<candidates.count {
+                    let r = vs[i] - skyModel(c, x: xs[i] / fw, y: ys[i] / fh)
+                    let nw: Double = r > 0 ? 0.02 : 1
+                    if nw != weights[i] { changed = true; weights[i] = nw }
+                }
+                if !changed { break }
             }
-            if !changed { break }
-        }
-        if var c = coef {
+            guard var c = coef else { return nil }
             // The envelope sits at a low quantile of the sky noise: re-centre it on the sky samples'
             // median residual, then keep what lies within the tolerance above it.
-            var res = [Float](repeating: 0, count: candidates.count)
-            for i in 0..<candidates.count { res[i] = vs[i] - plane(c, i) }
+            var res = (0..<candidates.count).map { vs[$0] - skyModel(c, x: xs[$0] / fw, y: ys[$0] / fh) }
             let near = res.filter { abs($0) <= 3 * noise }.sorted()
             if near.count >= 4 {
                 let shift = Statistics.percentile(sorted: near, q: 0.5)
                 c[0] += shift
                 for i in 0..<res.count { res[i] -= shift }
             }
-            coef = c
-            let keep = Float(tolerance) * noise
-            for i in 0..<candidates.count { use[i] = res[i] <= keep && res[i] >= -4 * keep }
+            // The tolerance is in units of the sky's scatter about the model: the sample noise when
+            // the model fits the sky (light pollution), the model's own misfit when it cannot follow
+            // the sky exactly (strong, off-centre vignetting of frames without flats, dust shadows).
+            // That misfit is read from the lower half of the residuals (the sky side; nebulosity only
+            // adds above), as the distance from the 16th percentile to the median.
+            let sortedRes = res.sorted()
+            let misfit = Statistics.percentile(sorted: sortedRes, q: 0.5) - Statistics.percentile(sorted: sortedRes, q: 0.16)
+            // Below 5 noises the model is taken as fitting (light pollution with a little glow keeps
+            // the strict noise scale that leaves nebula skirts out).
+            let scale = misfit > 5 * noise ? misfit : noise
+            let keep = Float(tolerance) * scale
+            return (c, res.map { $0 <= keep && $0 >= -4 * keep })
         }
-        let degree = 1
+        var chosen: (coef: [Float], keep: [Bool])? = nil
+        for terms in [3, 5, 7] where candidates.count > terms * 2 {
+            guard let e = envelope(terms: terms) else { continue }
+            let kept = e.keep.filter { $0 }.count
+            if let c = chosen {
+                let before = c.keep.filter { $0 }.count
+                guard Double(kept) >= 1.25 * Double(before), kept - before >= max(3, candidates.count * 15 / 100) else { continue }
+            }
+            chosen = e
+        }
+        let coef = chosen?.coef
+        if let k = chosen?.keep { use = k }
+        func model(_ c: [Float], _ i: Int) -> Float { skyModel(c, x: xs[i] / fw, y: ys[i] / fh) }
         // Spatial consistency: a sample above the median of its eight nearest neighbours by more
         // than the tolerance (after the trend) is not sky either — the hole a nebula leaves in the
         // grid cannot be bridged by samples on its skirts.
         if let c = coef {
-            let res = (0..<candidates.count).map { i in Double(vs[i] - GradientRemoval.polynomial(c, degree: degree, nx: xs[i] / Float(s.width), ny: ys[i] / Float(s.height))) }
+            let res = (0..<candidates.count).map { i in Double(vs[i] - model(c, i)) }
             let nb = neighbourMedians(x: candidates.map(\.x), y: candidates.map(\.y), d: res)
             let diffs = (0..<candidates.count).map { res[$0] - nb[$0] }
             let dev = diffs.map { abs($0) }.sorted()
@@ -522,6 +545,39 @@ public enum BackgroundSamples {
             }
             return x
         }
+    }
+
+    /// The grid's sky model at normalised coordinates: plane (3 terms), + r² and r⁴ from the frame
+    /// centre (5), + the elliptical and tilted quadratic terms (7). `c.count` selects the model.
+    @inline(__always) static func skyModel(_ c: [Float], x: Float, y: Float) -> Float {
+        var v = c[0] + c[1] * y + c[2] * x
+        if c.count >= 5 {
+            let dx = x - 0.5, dy = y - 0.5, r2 = dx * dx + dy * dy
+            v += c[3] * r2 + c[4] * r2 * r2
+            if c.count >= 7 { v += c[5] * (dx * dx - dy * dy) + c[6] * dx * dy }
+        }
+        return v
+    }
+
+    static func skyBasis(x nx: Double, y ny: Double, terms: Int) -> [Double] {
+        var row = [1.0, ny, nx]
+        if terms >= 5 {
+            let dx = nx - 0.5, dy = ny - 0.5, r2 = dx * dx + dy * dy
+            row += [r2, r2 * r2]
+            if terms >= 7 { row += [dx * dx - dy * dy, dx * dy] }
+        }
+        return row
+    }
+
+    /// Weighted least-squares fit of `skyModel` with 3, 5 or 7 terms.
+    static func weightedSkyModel(x: [Float], y: [Float], v: [Float], w: [Double], width: Float, height: Float, terms: Int) -> [Float]? {
+        let n = terms
+        var a = [Double](repeating: 0, count: n * n), b = [Double](repeating: 0, count: n)
+        for i in 0..<v.count {
+            let row = skyBasis(x: Double(x[i] / width), y: Double(y[i] / height), terms: n), z = Double(v[i]), wi = w[i]
+            for p in 0..<n { b[p] += wi * row[p] * z; for q in 0..<n { a[p * n + q] += wi * row[p] * row[q] } }
+        }
+        return GradientRemoval.solve(a, b, n: n)
     }
 
     /// Weighted least-squares plane c0 + c1·(y/h) + c2·(x/w) (the polynomial's coefficient order).

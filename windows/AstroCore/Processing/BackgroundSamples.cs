@@ -203,50 +203,72 @@ public static class BackgroundSamples
         var scatters = candidates.Select(c => c.m.Scatter).ToArray(); Array.Sort(scatters);
         float scatterLimit = Math.Max(3 * noise, Statistics.Percentile(scatters, 0.5) * 2.5f);
         const float skewLimit = 0.35f;
-        // Sky model: a plane fitted by asymmetric least squares (residuals above weigh 0.02, below 1).
+        // Sky model by asymmetric least squares (residuals above weigh 0.02, below 1): the simplest of
+        // plane / plane + r² + r⁴ / + elliptical and tilted quadratic terms that explains the sky
+        // (a richer one only when it keeps ≥ 1.25× and ≥ 15 % of the grid more samples: vignetting of
+        // frames without flats, where a plane kept only the corners). The tolerance unit is the sample
+        // noise, or the model's misfit (median − 16th percentile of the residuals) above 5 noises.
         int nc = candidates.Count;
         var use = new bool[nc]; Array.Fill(use, true);
         var xs = candidates.Select(c => (float)c.x).ToArray(); var ys = candidates.Select(c => (float)c.y).ToArray(); var vs = candidates.Select(c => c.m.Value).ToArray();
         float fw = s.Width, fh = s.Height;
-        float Plane(float[] c, int i) => c[0] + c[1] * (ys[i] / fh) + c[2] * (xs[i] / fw);
-        float[]? coef = null;
-        var weights = new double[nc]; Array.Fill(weights, 1.0);
-        for (int round = 0; round < 12; round++)
+        float Model(float[] c, int i) => SkyModel(c, xs[i] / fw, ys[i] / fh);
+        (float[] coef, bool[] keep)? Envelope(int terms)
         {
-            var c = WeightedPlane(xs, ys, vs, weights, fw, fh);
-            if (c == null) break;
-            coef = c;
-            bool changed = false;
-            for (int i = 0; i < nc; i++)
+            float[]? coef = null;
+            var weights = new double[nc]; Array.Fill(weights, 1.0);
+            for (int round = 0; round < 16; round++)
             {
-                float r = vs[i] - Plane(c, i);
-                double nw = r > 0 ? 0.02 : 1;
-                if (nw != weights[i]) { changed = true; weights[i] = nw; }
+                var c = WeightedSkyModel(xs, ys, vs, weights, fw, fh, terms);
+                if (c == null) break;
+                coef = c;
+                bool changed = false;
+                for (int i = 0; i < nc; i++)
+                {
+                    float r = vs[i] - Model(c, i);
+                    double nw = r > 0 ? 0.02 : 1;
+                    if (nw != weights[i]) { changed = true; weights[i] = nw; }
+                }
+                if (!changed) break;
             }
-            if (!changed) break;
-        }
-        if (coef != null)
-        {
-            var c = coef;
+            if (coef == null) return null;
             var res = new float[nc];
-            for (int i = 0; i < nc; i++) res[i] = vs[i] - Plane(c, i);
+            for (int i = 0; i < nc; i++) res[i] = vs[i] - Model(coef, i);
             var near = res.Where(t => Math.Abs(t) <= 3 * noise).ToArray(); Array.Sort(near);
             if (near.Length >= 4)
             {
                 float sh = Statistics.Percentile(near, 0.5);
-                c[0] += sh;
+                coef[0] += sh;
                 for (int i = 0; i < nc; i++) res[i] -= sh;
             }
-            coef = c;
-            float keep = (float)tolerance * noise;
-            for (int i = 0; i < nc; i++) use[i] = res[i] <= keep && res[i] >= -4 * keep;
+            var sorted = (float[])res.Clone(); Array.Sort(sorted);
+            float misfit = Statistics.Percentile(sorted, 0.5) - Statistics.Percentile(sorted, 0.16);
+            float scale = misfit > 5 * noise ? misfit : noise;
+            float keep = (float)tolerance * scale;
+            return (coef, res.Select(r => r <= keep && r >= -4 * keep).ToArray());
         }
+        (float[] coef, bool[] keep)? chosen = null;
+        foreach (int terms in new[] { 3, 5, 7 })
+        {
+            if (nc <= terms * 2) continue;
+            var e = Envelope(terms);
+            if (e == null) continue;
+            int kept = e.Value.keep.Count(k => k);
+            if (chosen != null)
+            {
+                int before = chosen.Value.keep.Count(k => k);
+                if (kept < 1.25 * before || kept - before < Math.Max(3, nc * 15 / 100)) continue;
+            }
+            chosen = e;
+        }
+        float[]? coef = chosen?.coef;
+        if (chosen != null) use = chosen.Value.keep;
         // Spatial consistency against the eight nearest neighbours (after the trend).
         if (coef != null)
         {
             var c = coef;
             var res = new double[nc];
-            for (int i = 0; i < nc; i++) res[i] = vs[i] - GradientRemoval.Polynomial(c, 1, xs[i] / fw, ys[i] / fh);
+            for (int i = 0; i < nc; i++) res[i] = vs[i] - Model(c, i);
             var nb = NeighbourMedians(candidates.Select(t => t.x).ToArray(), candidates.Select(t => t.y).ToArray(), res);
             var diffs = new double[nc];
             for (int i = 0; i < nc; i++) diffs[i] = res[i] - nb[i];
@@ -546,6 +568,41 @@ public static class BackgroundSamples
             for (int i = n - 1; i >= 0; i--) { double s = x[i]; for (int j = i + 1; j < n; j++) s -= m[i * n + j] * x[j]; x[i] = s / m[i * n + i]; }
             return x;
         }
+    }
+
+    /// <summary>The grid's sky model at normalised coordinates: plane (3 terms), + r² and r⁴ from the frame
+    /// centre (5), + the elliptical and tilted quadratic terms (7); c.Length selects the model.</summary>
+    internal static float SkyModel(float[] c, float x, float y)
+    {
+        float v = c[0] + c[1] * y + c[2] * x;
+        if (c.Length >= 5)
+        {
+            float dx = x - 0.5f, dy = y - 0.5f, r2 = dx * dx + dy * dy;
+            v += c[3] * r2 + c[4] * r2 * r2;
+            if (c.Length >= 7) v += c[5] * (dx * dx - dy * dy) + c[6] * dx * dy;
+        }
+        return v;
+    }
+
+    internal static float[]? WeightedSkyModel(float[] x, float[] y, float[] v, double[] w, float width, float height, int terms)
+    {
+        int n = terms;
+        var a = new double[n * n]; var b = new double[n];
+        var row = new double[n];
+        for (int i = 0; i < v.Length; i++)
+        {
+            double nx = x[i] / width, ny = y[i] / height;
+            row[0] = 1; row[1] = ny; row[2] = nx;
+            if (n >= 5)
+            {
+                double dx = nx - 0.5, dy = ny - 0.5, r2 = dx * dx + dy * dy;
+                row[3] = r2; row[4] = r2 * r2;
+                if (n >= 7) { row[5] = dx * dx - dy * dy; row[6] = dx * dy; }
+            }
+            double z = v[i], wi = w[i];
+            for (int p = 0; p < n; p++) { b[p] += wi * row[p] * z; for (int q = 0; q < n; q++) a[p * n + q] += wi * row[p] * row[q]; }
+        }
+        return GradientRemoval.Solve(a, b, n);
     }
 
     /// <summary>Weighted least-squares plane c0 + c1·(y/h) + c2·(x/w) (the polynomial's coefficient order).</summary>

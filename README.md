@@ -81,7 +81,8 @@ export at full resolution.
 * **Colour bands** (Camera Raw style selective colour): hue, saturation and
   lightness per band — reds, oranges, yellows, greens, teals, blues, magentas;
   *Softness* feathers the bands into their neighbours.
-* **Denoise**: luminance noise reduction by starlet wavelet thresholding (the
+* **Denoise** (the last finishing stage, after Detail, so it also cleans what
+  sharpening and local contrast bring out): luminance noise reduction by starlet wavelet thresholding (the
   classic astronomical method), non-local means, a guided filter or BM3D
   (block matching + collaborative 3-D filtering, the strongest classical
   denoiser), with the noise level measured from the image, protection of
@@ -100,7 +101,7 @@ export at full resolution.
   highlights and shadows (bright / dark tones with black, mid-tone and white
   fixed), black / white point and gamma — one per-channel curve.
   **Balance** (Photoshop-style, applied after Colour and before Contrast,
-  Denoise and Detail; a switch shows one tool at a time): *Color Balance* (±50) with cyan–red, magenta–green and yellow–blue sliders for the
+  Detail and Denoise; a switch shows one tool at a time): *Color Balance* (±50) with cyan–red, magenta–green and yellow–blue sliders for the
   shadows, midtones and highlights (overlapping lightness masks, *Preserve luminosity*), and
   *Selective Color* for the whites, neutrals and blacks (cyan, magenta, yellow and black ink,
   *Relative* or *Absolute*; the hue ranges are the Colour bands block). **Detail**: local contrast at five scales — micro-structures (0.2 % of the
@@ -325,7 +326,8 @@ release with the changelog section as notes.
    colour, contrast, balance, denoise or detail); the *Default* button left of
    *Save preset* brings back the palette's default look.
 4. **Tune** in the strip of blocks under the preview (Channels, Stretch,
-   Normalisation, Luminance, Colour bands, Colour, Balance, Contrast, Denoise, Detail, Combine stars):
+   Normalisation, Luminance, Colour bands, Colour, Balance, Contrast, Detail, Denoise, Combine stars —
+   the order in which they run):
    click a block's vertical title to collapse or expand it, its ↺ icon (top
    right) resets it, scroll sideways or
    drag on empty space to reach the others. Everything updates live; double-click a slider label to reset

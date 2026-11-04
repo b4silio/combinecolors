@@ -47,8 +47,9 @@ struct CombineColorsApp: App {
                 Divider()
                 Button("Export Combined Image…") { model.exportRequested = true }.keyboardShortcut("e").disabled(model.sources.isEmpty)
                 Divider()
-                Button("Close Image") { model.closeImage() }
-                    .disabled((model.sources.isEmpty && !model.hasStars && model.projectURL == nil) || model.isRemovingStars)
+                // ⌘W closes the image, never the app (always enabled: a disabled item would let ⌘W
+                // reach the window's Close, which quits).
+                Button("Close Image") { model.closeImage() }.keyboardShortcut("w")
             }
             CommandGroup(after: .pasteboard) {
                 Button("Copy Preview Image") { model.copyPreviewToPasteboard() }.keyboardShortcut("c", modifiers: [.command, .shift]).disabled(model.frame == nil)
@@ -104,6 +105,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let args = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
         let urls = args.map { URL(fileURLWithPath: $0) }.filter { FileManager.default.fileExists(atPath: $0.path) }
         if !urls.isEmpty { AppDelegate.deliver(urls) }
+        // Developer switch: `-dumpMenu YES` lists the File menu's key equivalents on stderr.
+        if UserDefaults.standard.bool(forKey: "dumpMenu") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                for top in NSApp.mainMenu?.items ?? [] {
+                    for it in top.submenu?.items ?? [] where !it.keyEquivalent.isEmpty {
+                        FileHandle.standardError.write("\(top.title) | \(it.title) | \(it.keyEquivalentModifierMask.rawValue) \(it.keyEquivalent)\n".data(using: .utf8)!)
+                    }
+                }
+                exit(0)
+            }
+        }
         // When files are given at launch AppKit treats them as documents and SwiftUI skips the
         // WindowGroup window (there is no DocumentGroup). A reopen request makes SwiftUI create it.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { AppDelegate.ensureWindow() }

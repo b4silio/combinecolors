@@ -88,6 +88,24 @@ final class BackgroundSamplesTests: XCTestCase {
         XCTAssertNotNil(BackgroundSamples.measure(samples: ps, x: 300, y: 100, radius: radius))
     }
 
+    /// Frames without flats: the centre stands far above the corners (strong, off-centre vignetting).
+    /// A plane envelope kept only the corner samples (user report 2026-11-04, M78 without flats);
+    /// the grid must cover the frame and still leave the nebula out.
+    func testGridCoversAVignettedFrame() {
+        let (flat, _, _) = scene(nebula: (330, 120, 40, 0.004))
+        let vignetted = add(flat) { x, y in
+            let dx = Float(x) / Float(Self.w) - 0.42, dy = Float(y) / Float(Self.h) - 0.5
+            let r2 = dx * dx + dy * dy
+            return 0.012 * (1 - 3.2 * r2 + 1.5 * r2 * r2)      // ≈ 40 noise between centre and corners
+        }
+        let s = GradientRemoval.samples(image: vignetted)
+        let radius = BackgroundSamples.defaultRadius(width: Self.w, height: Self.h)
+        let grid = BackgroundSamples.grid(samples: s, perRow: 12, radius: radius, tolerance: 2.5)
+        XCTAssertGreaterThan(grid.count, 50, "the vignetted sky is covered, not only the corners")
+        XCTAssertTrue(grid.contains { hypot($0.x - 200, $0.y - 180) < 70 }, "samples near the bright centre")
+        XCTAssertFalse(grid.contains { hypot($0.x - 330, $0.y - 120) < 45 }, "none on the nebula")
+    }
+
     func testSplineAndKrigingRecoverASmoothGradientAndKeepTheNebula() {
         let (flat, neb, stars) = scene()
         let shaded = add(flat) { x, y in self.background(x, y) }

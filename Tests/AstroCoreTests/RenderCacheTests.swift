@@ -41,7 +41,7 @@ final class RenderCacheTests: XCTestCase {
             XCTAssertEqual(cached.ranFrom, expect, what)
         }
         try check(s, expect: .combine, "first render runs everything")
-        try check(s, expect: .detail, "same settings: only the detail copy runs")
+        try check(s, expect: .nothing, "same settings: detail and denoise outputs are both kept")
         s.detail.sharpen = 0.8
         try check(s, expect: .detail, "detail change")
         s.denoise.amount = 0.6
@@ -135,13 +135,13 @@ final class RenderCacheTests: XCTestCase {
         }
         try check(s, expect: .combine, "first render")
         s.stars.amount = 0.6
-        try check(s, expect: .stars, "star amount: re-blend on the kept detail output")
+        try check(s, expect: .stars, "star amount: re-blend on the kept denoise output")
         s.stars.brightness = 0.5
         try check(s, expect: .stars, "star brightness")
         s.detail.sharpen = 0.7
         try check(s, expect: .detail, "detail: detail + stars")
         s.denoise.amount = 0.2
-        try check(s, expect: .denoise, "denoise: denoise + detail + stars")
+        try check(s, expect: .denoise, "denoise (after detail): denoise + stars only")
         s.stars.stage = .beforeDetail
         try check(s, expect: .colour, "stars before detail: part of the developed image")
         s.stars.amount = 0.3

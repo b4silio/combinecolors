@@ -132,8 +132,9 @@ public enum Renderer {
         //    image), then the stars when they go in last.
         if req.applyDetail {
             let overview = try detailOverview(plan, req: req, postStretch: main.postStretch)
-            Denoise.apply(combined, settings: plan.settings.denoise, scale: req.scale)
+            // Detail, then denoise (which also cleans what the detail stage brought out).
             PostProcess.detail(combined, settings: plan.settings.detail, scale: req.scale, overview: overview)
+            Denoise.apply(combined, settings: plan.settings.denoise, scale: req.scale)
             if plan.settings.stars.enabled, plan.settings.stars.stage == .last {
                 starsStage(combined, plan, planes: req.planes, context: req.context, stars: req.stars)
             }
@@ -596,8 +597,8 @@ public enum Renderer {
             progress?(Double(y) / Double(h))
         }
         if isCancelled?() == true { return nil }
-        Denoise.apply(out, settings: settings.denoise)
         PostProcess.detail(out, settings: settings.detail, scale: 1)
+        Denoise.apply(out, settings: settings.denoise)
         if settings.stars.enabled, settings.stars.stage == .last {
             // The stars last, strip by strip again (point-wise, so the strips agree with a whole render).
             let plan = try Plan(RenderRequest(planes: sources.mapValues { $0.image }, settings: settings, context: context))

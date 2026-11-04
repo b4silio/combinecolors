@@ -5,6 +5,12 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 (`scripts/bump.sh`). The version lives in `VERSION` and is stamped into the app at build time;
 `scripts/release.sh` tags it and publishes the DMG as a GitHub release.
 
+## [1.15.0] – 2026-11-04
+
+- Detail runs before Denoise (blocks and pipeline in the same order; the render cache keeps both outputs, so a denoise slider re-runs the denoise only)
+- ⌘W closes the image (File ▸ Close Image) instead of the window and the app
+- Fix: the gradient sample grid covers vignetted frames without flats (it kept only the corner samples): the sky envelope adds radial / quadratic terms when a plane cannot explain the sky, and the tolerance follows the model's misfit when it is far above the noise
+
 ## [1.14.0] – 2026-11-04
 
 - Background and Stars tabs: two sets of channels with their own settings; the Combine stars block (formerly RGB stars) blends the Stars tab rendered with its settings; Remove Stars fills both tabs, Load RGB stars fills the Stars tab without switching; projects and recent sets keep both tabs
