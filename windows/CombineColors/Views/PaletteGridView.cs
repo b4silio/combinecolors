@@ -55,12 +55,8 @@ public sealed class PaletteGridView : DockPanel
         left.Children.Add(Ui.SmallButton("Pixel Math…", () => PixelMathRequested?.Invoke()));
         left.Children.Add(hiddenCount);
         row2.Children.Add(left);
-        var reset = Ui.SmallButton("Reset all", () =>
-        {
-            var s = new CombineSettings();
-            if (model.CurrentPalette is Palette pal) s.Select(pal);
-            model.Settings = s;
-        }, "Reset all settings to the defaults for the current palette (the crop and presets stay).");
+        var reset = Ui.SmallButton("Reset all", model.ResetAllProcessing,
+            "Removes all processing: no stretch, normalisation, luminance injection, colour, contrast, balance, denoise or detail. The palette, channels, crop, presets and the stars combination stay. The Default button next to Save preset brings back the default look.");
         reset.HorizontalAlignment = HorizontalAlignment.Right; reset.Margin = new Thickness(0);
         row2.Children.Add(reset);
         header.Children.Add(row2);

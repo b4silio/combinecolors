@@ -40,6 +40,12 @@ public sealed class PreviewRequest
     public StarsLayer? Stars;
     /// <summary>Live hand-painted correction of one channel (the corrections editor).</summary>
     public (CorrectionMap map, float strength, ChannelKind kind, float? pedestal)? Correction;
+    /// <summary>
+    /// Stars tab with the combination on: the rendered Background tab the result is blended onto,
+    /// with the Background tab's settings (its Combine stars block).
+    /// </summary>
+    public StarsLayer? Background;
+    public CombineSettings? BackgroundSettings;
 }
 
 /// <summary>Serial, latest-wins background renderer.</summary>
@@ -134,11 +140,29 @@ public sealed class RenderCoordinator
                                         overview: overview?.planes, overviewRect: overview?.rect);
         if (req.Settings.Stars.Enabled && req.Stars is StarsLayer st && st.Width == fullW && st.Height == fullH) request.Stars = st.Input(level, x0, y0, cw, ch);
         if (req.Correction is (CorrectionMap cmap, float cstr, ChannelKind ckind, var cped)) request.Correction = new CorrectionInput(cmap, cstr, ckind, new SampleRect(x0 * inv, y0 * inv, cw * inv, ch * inv), cped);
-        var result = Renderer.Render(request);
-        var bmp = RasterWriter.MakeDisplayImage(result.Image);
+        RenderResult result;
+        if (cache != null)
+        {
+            var key = new RenderInputKey(req.Sources.ToDictionary(kv => kv.Key, kv => kv.Value.Id), request.Stars == null ? null : req.Stars?.Id, req.Context.Id, level, x0, y0, cw, ch);
+            result = cache.Render(request, key);
+        }
+        else result = Renderer.Render(request);
+        var shown = result.Image;
+        if (req.Background is StarsLayer bg && req.BackgroundSettings is CombineSettings bs && bg.Width == fullW && bg.Height == fullH)
+        {
+            var bgPlanes = bg.Input(level, x0, y0, cw, ch).Planes;
+            if (bgPlanes.Count == 3 && bgPlanes[0].Width == cw && bgPlanes[0].Height == ch)
+            {
+                var img = new RGBImage(bgPlanes[0].Copy(), bgPlanes[1].Copy(), bgPlanes[2].Copy());
+                var stats = result.Image.Planes.Select(p => Statistics.Compute(p)).ToList();
+                Renderer.BlendProcessedStars(img, result.Image, stats, bs);
+                shown = img;
+            }
+        }
+        var bmp = RasterWriter.MakeDisplayImage(shown);
         return new PreviewFrame
         {
-            Bitmap = bmp, Rgb = result.Image, Level = level, Rect = rect, Millis = result.Millis, RanFrom = result.RanFrom, ReusedChannels = result.ReusedChannels, PostStretch = result.PostStretch,
+            Bitmap = bmp, Rgb = shown, Level = level, Rect = rect, Millis = result.Millis, RanFrom = result.RanFrom, ReusedChannels = result.ReusedChannels, PostStretch = result.PostStretch,
             ChannelStretch = result.ChannelStretch, Settings = req.Settings,
         };
     }

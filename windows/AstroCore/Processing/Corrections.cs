@@ -91,6 +91,33 @@ public sealed class CorrectionMap
     }
 
     /// <summary>A stroke segment: dabs every quarter radius from a to b (both image points).</summary>
+    /// <summary>
+    /// A stroke segment with even spacing across segments: a dab every quarter radius of <i>path</i>,
+    /// however the mouse events cut the path. <paramref name="carry"/> is the distance travelled since the last dab
+    /// (start a stroke with <see cref="StrokeStart"/> so its first point gets a dab). Without it, a
+    /// slow drag (one tiny segment per mouse event, each ending in a dab) piled up hundreds of dabs
+    /// on the same pixels and the flow looked far stronger than set.
+    /// </summary>
+    public void Stroke(double ax, double ay, double bx, double by, double radius, float amount, float hardness, ref double carry)
+    {
+        double step = Math.Max(radius / 4, 0.5);
+        double d = Math.Sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay));
+        double pos = step - carry;          // distance along this segment to the next dab
+        if (pos < 0) pos = 0;
+        double? last = null;
+        while (pos <= d)
+        {
+            double t = d > 0 ? pos / d : 0;
+            Dab(ax + (bx - ax) * t, ay + (by - ay) * t, radius, amount, hardness);
+            last = pos;
+            pos += step;
+        }
+        carry = last is double l ? d - l : carry + d;
+    }
+
+    /// <summary>The carry that starts a stroke: its first point gets a dab.</summary>
+    public static double StrokeStart(double radius) => Math.Max(radius / 4, 0.5);
+
     public void Stroke(double ax, double ay, double bx, double by, double radius, float amount, float hardness)
     {
         double d = Math.Sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay));

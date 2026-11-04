@@ -148,7 +148,7 @@ public static class Renderer
         if (req.ApplyDetail)
         {
             var overview = DetailOverview(plan, req, main.PostStretch);
-            Denoise.Apply(combined, plan.Settings.Denoise);
+            Denoise.Apply(combined, plan.Settings.Denoise, req.Scale);
             PostProcess.Detail(combined, plan.Settings.Detail, req.Scale, overview);
             if (plan.Settings.Stars.Enabled && plan.Settings.Stars.Stage == StarsBlendStage.Last) StarsStage(combined, plan, req.Planes, req.Context, req.Stars);
         }
@@ -391,12 +391,14 @@ public static class Renderer
     {
         var s = plan.Settings;
         int w = combined.Width, h = combined.Height;
-        // 5. Colour post-processing: selective colour bands, the global controls, then the
-        //    Photoshop-style grading (Color Balance, Selective Color on whites / neutrals / blacks).
+        // 5. Colour post-processing in the order of the blocks: selective colour bands, the colour
+        //    controls, the Photoshop-style grading (Color Balance, Selective Color on whites /
+        //    neutrals / blacks), then the tone controls (Contrast).
         combined.Clamp01();
         PostProcess.ColorBands(combined, s.ColorBands);
         PostProcess.Apply(s.Post, combined);
         PostProcess.Grade(combined, s.Grading);
+        PostProcess.ApplyTone(s.Tone, s.Post, combined);
 
         // 6. RGB stars, when they go in before denoise and detail.
         if (s.Stars.Enabled && s.Stars.Stage == StarsBlendStage.BeforeDetail) StarsStage(combined, plan, reqPlanes, context, stars);
@@ -410,7 +412,7 @@ public static class Renderer
         int w = combined.Width, h = combined.Height;
         if (stars != null && stars.Planes.Count == 3 && stars.Planes[0].Width == w && stars.Planes[0].Height == h)
         {
-            var img = StarsImage(stars.Planes.Select(p => p.Copy()).ToList(), stars.Stats, s);
+            var img = StarsImage(stars.Planes.Select(p => p.Copy()).ToList(), stars.Stats, s, stars.Processed);
             PostProcess.BlendStars(combined, img, s.Stars);
         }
         else if (reqPlanes.TryGetValue(ChannelKind.Red, out var rr) && reqPlanes.TryGetValue(ChannelKind.Green, out var gg) && reqPlanes.TryGetValue(ChannelKind.Blue, out var bb))
@@ -560,6 +562,18 @@ public static class Renderer
         return Statistics.Sample(p, o).sample;
     }
 
+    /// <summary>
+    /// A rendered (processed) stars image blended onto <paramref name="background"/> in place, as the Combine stars
+    /// block does it: brightness, contrast, white point, saturation, mask and blend mode of <c>s.Stars</c>.
+    /// <paramref name="stats"/> are the stars image's statistics (for the white point).
+    /// </summary>
+    public static void BlendProcessedStars(RGBImage background, RGBImage stars, IReadOnlyList<ChannelStats> stats, CombineSettings s)
+    {
+        var img = StarsImage(stars.Planes.Select(p => p.Copy()).ToList(), stats, s, processed: true);
+        PostProcess.BlendStars(background, img, s.Stars);
+        background.Clamp01();
+    }
+
     internal static RGBImage StarsImage(PlanarImage r, PlanarImage g, PlanarImage b, CombineSettings s, RenderContext context)
     {
         var planes = new List<PlanarImage>();
@@ -578,7 +592,7 @@ public static class Renderer
     /// The star layer ready to blend: stretched when linear, scaled to white when asked, then the
     /// brightness (stops) and contrast (spread around the mid-tone). The planes are consumed.
     /// </summary>
-    static RGBImage StarsImage(IReadOnlyList<PlanarImage> planes, IReadOnlyList<ChannelStats> stats, CombineSettings s)
+    static RGBImage StarsImage(IReadOnlyList<PlanarImage> planes, IReadOnlyList<ChannelStats> stats, CombineSettings s, bool processed = false)
     {
         // Already-stretched star images (bright stars reach high values) must not be stretched again.
         bool looksStretched = stats.Max(st => st.Percentile(0.999)) > 0.15f;
@@ -588,6 +602,7 @@ public static class Renderer
             StarsStretchMode.None => false,
             _ => true,
         };
+        if (processed) doStretch = false;
         // The layer's brightest level (whole-image statistics, so a crop agrees with the export).
         float peak = stats.Max(st => st.Percentile(0.9999));
         if (doStretch)

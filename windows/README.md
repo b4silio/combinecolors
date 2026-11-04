@@ -17,13 +17,15 @@ windows/
     Processing/         Stretch, Normalization, Palettes, PostProcess, Denoise, Bm3d, DualBand, DustRemoval, GradientRemoval,
                         GpuDenoise (D3D11, Windows) / GpuDenoise.Portable (stub)
     PixelMath/          lexer, parser, vectorised evaluator, programs
+    StarNet/            StarNet2 integration: finding / downloading / running the program, star removal of a file
     Pipeline/           CombineSettings, Json (tolerant project format), ChannelSource, Renderer, ProjectDocument
   CombineColors/        WPF app (Model: ProjectModel, RenderCoordinator, Preferences, RecentSets; Views)
   CombineColors.Avalonia/ Avalonia UI app for Linux (also runs on macOS / Windows): same Model and Views,
                         built in code against Avalonia instead of WPF (see "Linux" below)
   CombineColorsCli/     headless renderer (combinecolors-cli), same options as the Mac CLI; net9.0 + net9.0-windows
   AstroCore.Tests/      xUnit port of the AstroCore test suite (real-data tests use C:\_Astrophotography when present)
-  CombineColors.Tests/  model-level app tests (loading, crop, rotation, presets, dust spots, gradient removal, recent sets)
+  CombineColors.Tests/  model-level app tests (loading, crop, rotation, presets, dust spots, gradient removal, recent sets,
+                        Background / Stars tabs)
   scripts/release.ps1   tags, pushes, builds the zip and attaches it to the GitHub release (gh CLI)
   scripts/publish.ps1   self-contained build → build\CombineColors-<version>-win-x64.zip
   scripts/publish-linux.sh  self-contained Linux build (x64 + arm64) → build/CombineColors-<version>-linux-<arch>.tar.gz
@@ -61,7 +63,21 @@ The CLI mirrors the Mac one:
 .\CombineColorsCli\bin\Release\net9.0-windows\combinecolors-cli.exe palettes
 .\CombineColorsCli\bin\Release\net9.0-windows\combinecolors-cli.exe info stack-Ha.fits
 .\CombineColorsCli\bin\Release\net9.0-windows\combinecolors-cli.exe render --out out --palette all --crop auto --norm backgroundSignal --linked --max 2000000 Soul_Core-*.fits
+# Star removal with StarNet2 (writes stack-Ha_bg.fits and stack-Ha_stars.fits next to the file, or in --out <dir>)
+.\CombineColorsCli\bin\Release\net9.0-windows\combinecolors-cli.exe starnet --download stack-Ha.fits
 ```
+
+`starnet` runs the free [StarNet2](https://starnetastro.com/cli-tools/starnet/) command-line program
+(by Mikita Misiura, never bundled) on each file: linear data through StarNet2's linear mode with the
+Auto STF values (`--target`, `--shadows`), or `--method appStretch --stretch <method>` to stretch here
+and invert the stretch afterwards; already-stretched data are processed as they are. Without
+`--starnet <path\to\starnet2.exe>` it takes the program the app uses (remembered in
+`%LOCALAPPDATA%\CombineColors\starnet.json`), then `%LOCALAPPDATA%\CombineColors\StarNet2`,
+`Program Files\StarNet2\bin` (the official installer) and the `PATH`. `--download` fetches the
+official portable package for this platform from the starnetastro.com release feed (SHA-256
+checked) into `%LOCALAPPDATA%\CombineColors\StarNet2\<version>` (`--install-root <dir>` elsewhere,
+not remembered); `--install <zip>` unpacks a package downloaded by hand. Using StarNet2 means
+accepting its license (`LICENSE.txt` in the package, path printed by the command).
 
 Run `CombineColors.exe --prefs <file>` to keep an instance's preferences (recent sets with their
 saved presets and dust spots, hidden palettes, collapsed blocks…) apart from the user's, which
@@ -80,9 +96,9 @@ live in `%LOCALAPPDATA%\CombineColors\preferences.json`.
   PNG and JPEG go through the Windows Imaging Component. Export writes uncompressed TIFF, PNG and
   JPEG through the same paths.
 * **Keyboard**: ⌘ becomes Ctrl (Ctrl+O add images, Ctrl+Shift+O open project, Ctrl+S / Ctrl+Shift+S
-  save, Ctrl+E export, Ctrl+Shift+C copy preview, Ctrl+0 fit, Ctrl+1 actual size, Ctrl+R rotate,
-  Ctrl+Shift+H / V flips, Ctrl+Z / Ctrl+Y undo / redo). In the preview: wheel zooms around the
-  pointer, drag pans, Ctrl / Shift + wheel pans, double-click toggles fit / 1:1, Return / Esc apply
+  save, Ctrl+W close image, Ctrl+E export, Ctrl+Shift+C copy preview, Ctrl+1 / Ctrl+2 Background / Stars tab,
+  Ctrl+0 fit, Ctrl+R rotate, Ctrl+Shift+H / V flips, Ctrl+Z / Ctrl+Y undo / redo). In the preview: wheel zooms around the
+  pointer, drag pans, Ctrl / Shift + wheel pans, 0 fit, 1 actual size, double-click fits first and goes to 1:1 from the fitted view, Return / Esc apply
   or cancel crop, dust and gradient editing, B toggles the "Original" view (M the gradient editor's "Background" view, P its
   Protect mode), Delete removes the selected spot or protected region.
 * The interface is dark only (the .NET 9 Fluent theme in dark mode, independent of the Windows
@@ -101,7 +117,10 @@ is the same `AstroCore`, built for plain `net9.0`:
 * **GPU denoise** is Windows only (Direct3D 11); on Linux non-local means and BM3D run on the CPU
   (`GpuDenoise.Portable.cs` is the stub that makes the callers take the CPU paths).
 * **Not yet on Linux**: copying the preview to the clipboard (Avalonia has no portable image
-  clipboard), native menus (the menu bar lives inside the window), app icon packaging.
+  clipboard), native menus (the menu bar lives inside the window), app icon packaging. The Windows app's
+  Background / Stars tabs, star removal window (the CLI `starnet` command works), Contrast block, band
+  softness and hot-pixel sliders have not reached the Linux front-end yet; projects that use them still
+  open there (the Stars tab is ignored).
 * **HiDPI / 4K screens**: Avalonia scales the interface from `Xft.dpi` or the `AVALONIA_*` / `QT_*`
   scale variables; without any of them a 4K monitor would get scale 1 and 11 px text. The app
   therefore asks the X server for the screen's pixel and physical size before starting and sets

@@ -15,7 +15,7 @@ namespace AstroCore;
 /// The noise level σ is estimated from the finest wavelet scale (median absolute deviation), so
 /// the strength adapts to the preview level and to the export resolution.
 /// </summary>
-public static class Denoise
+public static partial class Denoise
 {
     /// <summary>B3-spline kernel of the starlet transform.</summary>
     static readonly float[] B3 = [1f / 16, 4f / 16, 6f / 16, 4f / 16, 1f / 16];
@@ -171,9 +171,13 @@ public static class Denoise
     // Entry point
 
     /// <summary>Applies the configured noise reduction to <paramref name="img"/> in place.</summary>
-    public static void Apply(RGBImage img, DenoiseSettings d)
+    public static void Apply(RGBImage img, DenoiseSettings d, float scale = 1)
     {
         if (d.IsNeutral) return;
+        // Hot pixels are single full-resolution pixels: below 1:1 they are averaged away anyway
+        // (and small stars become single pixels), so the filter runs at full resolution only.
+        if (d.HotPixels > 0 && scale >= 0.99f) RemoveHotPixels(img, d.HotPixels);
+        if (d.Amount <= 0 && d.Color <= 0) return;
         int n = img.Width * img.Height, w = img.Width;
         var y = img.Luma();
         float sigma = NoiseSigma(y);
@@ -250,5 +254,50 @@ public static class Denoise
             }
         }
         img.Clamp01();
+    }
+}
+
+public static partial class Denoise
+{
+    /// <summary>
+    /// Replaces isolated single-pixel peaks, channel by channel, by the median of their 8
+    /// neighbours. A pixel counts as hot when it stands above <i>every</i> neighbour by more than k·σ
+    /// (σ: the channel's noise, k from 12 at amount 0 down to 3 at amount 1) and that step is most
+    /// of its height above the neighbourhood median — a star core is wider than one pixel, so its
+    /// brightest neighbour stays close to it and the core is kept.
+    /// </summary>
+    public static void RemoveHotPixels(RGBImage img, float amount)
+    {
+        int w = img.Width, h = img.Height;
+        if (amount <= 0 || w < 3 || h < 3) return;
+        float a = MathF.Min(MathF.Max(amount, 0), 1);
+        float k = 12 - 9 * a;
+        float isolation = 0.92f - 0.12f * a;
+        foreach (var plane in img.Planes)
+        {
+            float sigma = NoiseSigma(plane);
+            if (!(sigma > 0)) continue;
+            float threshold = k * sigma;
+            var s = (float[])plane.Data.Clone();
+            var o = plane.Data;
+            Parallel.For(1, h - 1, y =>
+            {
+                Span<float> nb = stackalloc float[8];
+                for (int x = 1; x < w - 1; x++)
+                {
+                    int i = y * w + x;
+                    float v = s[i];
+                    int up = i - w, dn = i + w;
+                    float m = MathF.Max(MathF.Max(MathF.Max(s[up - 1], s[up]), MathF.Max(s[up + 1], s[i - 1])), MathF.Max(MathF.Max(s[i + 1], s[dn - 1]), MathF.Max(s[dn], s[dn + 1])));
+                    if (!(v - m > threshold)) continue;
+                    nb[0] = s[up - 1]; nb[1] = s[up]; nb[2] = s[up + 1]; nb[3] = s[i - 1];
+                    nb[4] = s[i + 1]; nb[5] = s[dn - 1]; nb[6] = s[dn]; nb[7] = s[dn + 1];
+                    nb.Sort();
+                    float med = (nb[3] + nb[4]) / 2;
+                    if (!(v - med > 0) || !((v - m) / (v - med) > isolation)) continue;
+                    o[i] = med;
+                }
+            });
+        }
     }
 }

@@ -22,6 +22,17 @@ public sealed partial class SettingsPreset : IEquatable<SettingsPreset>
     public override int GetHashCode() => HashCode.Combine(Id, Name);
 }
 
+/// <summary>One set of channels with its own settings (the Stars tab of a project).</summary>
+public sealed partial class LayerDocument
+{
+    public List<ProjectDocument.ChannelRef> Channels = new();
+    public CombineSettings Settings = new();
+    public DustSettings Dust = new();
+    public GradientSettings Gradient = new();
+    public CorrectionSettings Corrections = new();
+    public List<SettingsPreset> Presets = new();
+}
+
 /// <summary>Saved project: channel file paths + settings.</summary>
 public sealed partial class ProjectDocument
 {
@@ -51,6 +62,11 @@ public sealed partial class ProjectDocument
     public GradientSettings Gradient = new();
     /// <summary>Strength of the hand-painted corrections per channel and the brush defaults (the maps are sidecar files).</summary>
     public CorrectionSettings Corrections = new();
+    /// <summary>
+    /// The Stars tab: star channels processed on their own and combined with the background
+    /// (the fields above) by the "Combine stars" block. Crop and orientation are shared.
+    /// </summary>
+    public LayerDocument? StarsLayer = null;
 
     public Orientation Orientation
     {

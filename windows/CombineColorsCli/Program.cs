@@ -15,6 +15,7 @@ using AstroCore;
 //      --linked               linked stretch
 //      --max <pixels>         preview pixel budget (default 2000000); 0 = full resolution
 //      --scnr <0..1>          green removal amount
+//      --exposure <EV>  --brightness <-1..1>  --contrast <-1..1>  --highlights <-1..1>  --shadows <-1..1>   Contrast block
 //      --sat <factor>         saturation
 //      --hue <deg>            hue shift
 //      --balance-shadows <cr,mg,yb>   Photoshop-style colour balance of the shadows (−100..100 each: cyan–red, magenta–green, yellow–blue);
@@ -45,9 +46,18 @@ using AstroCore;
 //                             remove a gradient from a channel guided by the drawn shape (repeatable; a project's models are
 //                             applied too);  --gradient-mode subtract | divide;  --gradient-residual none | plane | quadratic
 //                             --gradient-sectors <1|4|8|12>;  --gradient-smooth <bins>;  --gradient-norefine;  --gradient-protect cx,cy,a,b
+//   combinecolors-cli starnet [--starnet <path\to\starnet2.exe>] [options] <files…>
+//      removes the stars with StarNet2 (separate program, starnetastro.com) and writes <name>_bg and
+//      <name>_stars next to each file (or in --out <dir>). Without --starnet the program the app uses is taken
+//      (remembered path, %LOCALAPPDATA%\CombineColors\StarNet2, Program Files\StarNet2\bin, PATH)
+//      --download             download the official package when none is found (SHA-256 checked) into
+//                             %LOCALAPPDATA%\CombineColors\StarNet2, or --install-root <dir>;  --install <zip>  unpack one by hand
+//      --method starnetLinear | appStretch   StarNet2's linear mode (default) or the stretch below, undone afterwards
+//      --stretch <method>     autoSTF | arcsinh | ghs | log | mtf (for appStretch);  --target <0..1>  --shadows <MADN>
+//      --upsample             StarNet2's intermediate 2x upsampling (slower)
 
 var args_ = new List<string>(args);
-if (args_.Count == 0) { Console.WriteLine("usage: combinecolors-cli (info|render|palettes) …"); return 1; }
+if (args_.Count == 0) { Console.WriteLine("usage: combinecolors-cli (info|render|palettes|starnet) …"); return 1; }
 var command = args_[0];
 args_.RemoveAt(0);
 
@@ -115,6 +125,11 @@ switch (command)
         bool linked = Flag("--linked");
         int maxPixels = int.TryParse(Option("--max") ?? "2000000", out var mp) ? mp : 2_000_000;
         float scnr = F(Option("--scnr"), 0), sat = F(Option("--sat"), 1), hue = F(Option("--hue"), 0);
+        var tone = new ToneSettings
+        {
+            Exposure = F(Option("--exposure"), 0), Brightness = F(Option("--brightness"), 0), Contrast = F(Option("--contrast"), 0),
+            Highlights = F(Option("--highlights"), 0), Shadows = F(Option("--shadows"), 0),
+        };
         float texture = F(Option("--texture"), 0), clarity = F(Option("--clarity"), 0), dehaze = F(Option("--dehaze"), 0);
         float micro = F(Option("--micro"), 0), lowFrequency = F(Option("--lowfreq"), 0);
         float sharpen = F(Option("--sharpen"), 0), sharpenRadius = F(Option("--sharpen-radius"), 1.5f), sharpenMasking = F(Option("--sharpen-masking"), 0);
@@ -290,6 +305,7 @@ switch (command)
         if (stretchArg != null && EnumRaw.Parse<StretchMethod>(stretchArg) is StretchMethod sm) settings.Stretch.Method = sm;
         settings.Stretch.Linked = linked;
         settings.Post.ScnrGreen = scnr;
+        if (!tone.IsNeutral) settings.Tone = tone;
         settings.Post.Saturation = sat;
         settings.Post.HueShift = hue;
         settings.Detail.Texture = texture; settings.Detail.Clarity = clarity; settings.Detail.Dehaze = dehaze;
@@ -386,7 +402,88 @@ switch (command)
         return 0;
     }
 
+    case "starnet":
+    {
+        var exeArg = Option("--starnet");
+        var installRoot = Option("--install-root");
+        var installZip = Option("--install");
+        bool download = Flag("--download");
+        var opts = new StarRemovalOptions();
+        if (Option("--method") is string m)
+        {
+            if (EnumRaw.Parse<StarRemovalMethod>(m) is not StarRemovalMethod mm) { Console.WriteLine($"unknown method {m}"); return 1; }
+            opts.Method = mm;
+        }
+        if (Option("--stretch") is string sm)
+        {
+            if (EnumRaw.Parse<StretchMethod>(sm) is not StretchMethod sme) { Console.WriteLine($"unknown stretch {sm}"); return 1; }
+            opts.Stretch.Method = sme;
+        }
+        opts.Stretch.TargetBackground = F(Option("--target"), opts.Stretch.TargetBackground);
+        opts.Stretch.ShadowsClipping = F(Option("--shadows"), opts.Stretch.ShadowsClipping);
+        opts.Upsample = Flag("--upsample");
+        var folder = Option("--out");
+        if (folder != null) Directory.CreateDirectory(folder);
+
+        // A scratch install root is not remembered for the app.
+        var setup = new StarNetSetup(installRoot != null ? StarNetPreferences.InMemory() : null, installRoot);
+        StarNetInstallation? found;
+        try
+        {
+            if (exeArg != null) found = setup.Choose(exeArg);
+            else if (installZip != null) found = setup.Install(installZip);
+            else found = setup.Locate();
+            if (found == null && download)
+            {
+                var release = StarNetSetup.FetchLatestAsync().GetAwaiter().GetResult() ?? StarNetRelease.Fallback();
+                Console.WriteLine($"downloading {release.FileName} ({(release.SizeBytes ?? 0) / 1_000_000} MB) into {setup.InstallRoot}…");
+                int lastTenth = -1;
+                var t = Stopwatch.StartNew();
+                var report = new SyncProgress<StarNetDownloadProgress>(p =>
+                {
+                    int tenth = (int)(p.Fraction * 10);
+                    if (tenth != lastTenth) { lastTenth = tenth; Console.Error.WriteLine($"  download: {tenth * 10} %"); }
+                });
+                found = setup.DownloadAndInstallAsync(release, report).GetAwaiter().GetResult();
+                Console.WriteLine($"installed {found.Executable} in {(int)t.Elapsed.TotalSeconds} s");
+            }
+        }
+        catch (StarNetError e) { Console.WriteLine(e.Message); return 1; }
+        if (found == null)
+        {
+            Console.WriteLine($"StarNet2 was not found: pass --starnet <path to {StarNet.ExecutableName}>, or --download to get it from {StarNet.Website}");
+            return 1;
+        }
+        Console.WriteLine($"StarNet2 {found.Info.Version} ({found.Info.Backend}): {found.Executable}");
+        if (found.LicenseFile is string lic) Console.WriteLine($"license: {lic}");
+
+        int failures = 0;
+        foreach (var path in args_)
+        {
+            var t0 = Stopwatch.StartNew();
+            var name = Path.GetFileName(path);
+            int last = -10;
+            try
+            {
+                var r = StarRemoval.ProcessFile(path, opts, found.Tool, folder, p =>
+                {
+                    int pct = (int)(p * 100);
+                    if (pct / 10 != last / 10) { last = pct; Console.Error.WriteLine($"  {name}: {pct} %"); }
+                });
+                Console.WriteLine($"{name}: {r.Processing.DisplayName()} -> {Path.GetFileName(r.Starless)}, {Path.GetFileName(r.Stars)} in {(int)t0.Elapsed.TotalSeconds} s");
+            }
+            catch (Exception e) { failures++; Console.WriteLine($"{name}: {e.Message}"); }
+        }
+        return failures > 0 ? 2 : 0;
+    }
+
     default:
         Console.WriteLine($"unknown command {command}");
         return 1;
+}
+
+/// <summary>IProgress that reports on the calling thread (Progress&lt;T&gt; would post to the thread pool, out of order).</summary>
+sealed class SyncProgress<T>(Action<T> report) : IProgress<T>
+{
+    public void Report(T value) => report(value);
 }

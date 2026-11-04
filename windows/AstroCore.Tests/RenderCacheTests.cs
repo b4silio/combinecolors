@@ -45,7 +45,7 @@ public class RenderCacheTests
             Assert.Equal(expect, cached.RanFrom);
         }
         Check(s, RenderCache.Stage.Combine, "first render runs everything");
-        Check(s, RenderCache.Stage.Detail, "same settings: only the detail copy runs");
+        Check(s, RenderCache.Stage.Nothing, "same settings: denoise and detail outputs are both kept");
         s.Detail.Sharpen = 0.8f;
         Check(s, RenderCache.Stage.Detail, "detail change");
         s.Denoise.Amount = 0.6f;

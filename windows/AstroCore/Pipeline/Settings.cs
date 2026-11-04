@@ -196,6 +196,30 @@ public sealed partial class LuminanceSettings : IEquatable<LuminanceSettings>
     public override int GetHashCode() => HashCode.Combine(Enabled, Preset, CustomExpression, Amount, Method);
 }
 
+/// <summary>
+/// The Contrast block (with <c>PostSettings.BlackPoint / WhitePoint / Gamma</c>): tone controls on the
+/// stretched image, per channel, after the colour controls and the Balance block.
+/// </summary>
+public sealed partial class ToneSettings : IEquatable<ToneSettings>
+{
+    /// <summary>Gain in stops (−3…3).</summary>
+    public float Exposure = 0;
+    /// <summary>Mid-tones up / down (−1…1), black and white stay.</summary>
+    public float Brightness = 0;
+    /// <summary>S-curve around the mid-tone (−1…1; negative flattens).</summary>
+    public float Contrast = 0;
+    /// <summary>Bright tones up / down (−1…1), white and the mid-tone stay.</summary>
+    public float Highlights = 0;
+    /// <summary>Dark tones up / down (−1…1), black and the mid-tone stay.</summary>
+    public float Shadows = 0;
+    public bool IsNeutral => Exposure == 0 && Brightness == 0 && Contrast == 0 && Highlights == 0 && Shadows == 0;
+
+    public ToneSettings Clone() => (ToneSettings)MemberwiseClone();
+    public bool Equals(ToneSettings? o) => o != null && Exposure == o.Exposure && Brightness == o.Brightness && Contrast == o.Contrast && Highlights == o.Highlights && Shadows == o.Shadows;
+    public override bool Equals(object? obj) => Equals(obj as ToneSettings);
+    public override int GetHashCode() => HashCode.Combine(Exposure, Brightness, Contrast, Highlights, Shadows);
+}
+
 public sealed partial class PostSettings : IEquatable<PostSettings>
 {
     public float Saturation = 1;
@@ -205,6 +229,10 @@ public sealed partial class PostSettings : IEquatable<PostSettings>
     public float BlackPoint = 0;
     public float WhitePoint = 1;
     public float Vibrance = 0;       // boosts low-saturation pixels only
+
+    /// <summary>The colour part (the Colour block); black / white point and gamma belong to the Contrast block.</summary>
+    public bool ColourIsNeutral => Saturation == 1 && ScnrGreen == 0 && HueShift == 0 && Vibrance == 0;
+    public bool LevelsAreNeutral => Gamma == 1 && BlackPoint == 0 && WhitePoint == 1;
 
     public PostSettings Clone() => (PostSettings)MemberwiseClone();
     public bool Equals(PostSettings? o) => o != null && Saturation == o.Saturation && ScnrGreen == o.ScnrGreen && HueShift == o.HueShift && Gamma == o.Gamma && BlackPoint == o.BlackPoint && WhitePoint == o.WhitePoint && Vibrance == o.Vibrance;
@@ -254,13 +282,18 @@ public sealed partial class ColorBandAdjust : IEquatable<ColorBandAdjust>
 public sealed partial class ColorBandsSettings : IEquatable<ColorBandsSettings>
 {
     public Dictionary<ColorBand, ColorBandAdjust> Bands = new();
+    /// <summary>
+    /// 0…1 feathering of the bands: 0 = each band fades out linearly at its neighbours' centres,
+    /// 1 = bands reach twice as far with a smooth (S-shaped) fall-off, so edits blend across colours.
+    /// </summary>
+    public float Softness = 0;
     public ColorBandAdjust Adjust(ColorBand b) => Bands.TryGetValue(b, out var a) ? a : new ColorBandAdjust();
     public void Set(ColorBand b, ColorBandAdjust a) { if (a.IsNeutral) Bands.Remove(b); else Bands[b] = a; }
     public bool IsNeutral => Bands.Values.All(v => v.IsNeutral);
 
     public ColorBandsSettings Clone()
     {
-        var c = new ColorBandsSettings();
+        var c = new ColorBandsSettings { Softness = Softness };
         foreach (var (k, v) in Bands) c.Bands[k] = v.Clone();
         return c;
     }
@@ -416,12 +449,17 @@ public sealed partial class DenoiseSettings : IEquatable<DenoiseSettings>
     public float ProtectBright = 0.5f;
     /// <summary>0…1 chroma (colour mottling) smoothing.</summary>
     public float Color = 0;
-    public bool IsNeutral => Amount == 0 && Color == 0;
+    /// <summary>
+    /// 0…1: single-pixel outliers (hot pixels, often brought out by strong colour edits) replaced
+    /// by their neighbours' median; 0 = off. Full-resolution renders only (1:1 preview, export).
+    /// </summary>
+    public float HotPixels = 0;
+    public bool IsNeutral => Amount == 0 && Color == 0 && HotPixels == 0;
 
     public DenoiseSettings Clone() => (DenoiseSettings)MemberwiseClone();
-    public bool Equals(DenoiseSettings? o) => o != null && Method == o.Method && Amount == o.Amount && Layers == o.Layers && Search == o.Search && Radius == o.Radius && BlockSearch == o.BlockSearch && ProtectBright == o.ProtectBright && Color == o.Color;
+    public bool Equals(DenoiseSettings? o) => o != null && Method == o.Method && Amount == o.Amount && Layers == o.Layers && Search == o.Search && Radius == o.Radius && BlockSearch == o.BlockSearch && ProtectBright == o.ProtectBright && Color == o.Color && HotPixels == o.HotPixels;
     public override bool Equals(object? obj) => Equals(obj as DenoiseSettings);
-    public override int GetHashCode() => HashCode.Combine(Method, Amount, Layers, Search, Radius, BlockSearch, ProtectBright, Color);
+    public override int GetHashCode() => HashCode.Combine(HashCode.Combine(Method, Amount, Layers, Search, Radius, BlockSearch, ProtectBright, Color), HotPixels);
 }
 
 public enum StarsStretchMode { Auto, None, AutoSTF }
@@ -536,6 +574,7 @@ public sealed partial class CombineSettings : IEquatable<CombineSettings>
     public ColorBandsSettings ColorBands = new();
     public PostSettings Post = new();
     public ColorGradingSettings Grading = new();
+    public ToneSettings Tone = new();
     public DetailSettings Detail = new();
     public DenoiseSettings Denoise = new();
     public StarsBlendSettings Stars = new();
@@ -608,7 +647,7 @@ public sealed partial class CombineSettings : IEquatable<CombineSettings>
             Mode = Mode, PaletteID = PaletteID, Matrix = Matrix.Clone(), PixelMath = PixelMath.Clone(),
             MonoChannels = MonoChannels == null ? null : new HashSet<ChannelKind>(MonoChannels),
             Normalization = Normalization.Clone(), Stretch = Stretch.Clone(), StretchStage = StretchStage, Luminance = Luminance.Clone(),
-            ColorBands = ColorBands.Clone(), Post = Post.Clone(), Grading = Grading.Clone(), Detail = Detail.Clone(), Denoise = Denoise.Clone(), Stars = Stars.Clone(),
+            ColorBands = ColorBands.Clone(), Post = Post.Clone(), Grading = Grading.Clone(), Tone = Tone.Clone(), Detail = Detail.Clone(), Denoise = Denoise.Clone(), Stars = Stars.Clone(),
         };
         foreach (var (k, v) in Channels) c.Channels[k] = v.Clone();
         return c;

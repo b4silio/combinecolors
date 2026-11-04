@@ -62,7 +62,8 @@ public static class Synth
 
     public static string TempPath(string name)
     {
-        var dir = Path.Combine(Path.GetTempPath(), "CombineColorsTests");
+        // One folder per test process: the net9.0 and net9.0-windows runs go in parallel and would share files.
+        var dir = Path.Combine(Path.GetTempPath(), "CombineColorsTests", Environment.ProcessId.ToString());
         Directory.CreateDirectory(dir);
         return Path.Combine(dir, name);
     }

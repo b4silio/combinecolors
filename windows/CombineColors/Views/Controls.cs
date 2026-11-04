@@ -234,6 +234,9 @@ public sealed class ControlBlock : Border
     public string Title { get; }
     public event Action<bool>? ExpandedChanged;
 
+    readonly Button resetButton;
+    Func<bool>? resetEnabled;
+
     public ControlBlock(string title, double width)
     {
         Title = title;
@@ -250,6 +253,15 @@ public sealed class ControlBlock : Border
         Grid.SetColumn(titleButton, 0); grid.Children.Add(titleButton);
         scroller = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Width = width, Content = Content };
         Grid.SetColumn(scroller, 1); grid.Children.Add(scroller);
+        // The block's reset (icon at the top right), shown once <see cref="SetReset"/> gives it an action.
+        resetButton = new Button
+        {
+            Content = new TextBlock { Text = "↺", FontSize = 11, FontFamily = new FontFamily("Segoe UI Symbol") }, Padding = new Thickness(3, 0, 3, 0), MinHeight = 0, MinWidth = 0,
+            Background = Brushes.Transparent, BorderThickness = new Thickness(0), Focusable = false, Cursor = Cursors.Hand,
+            HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 1, 14, 0), Visibility = Visibility.Collapsed,
+        };
+        resetButton.Click += (_, _) => resetAction?.Invoke();
+        Grid.SetColumn(resetButton, 1); grid.Children.Add(resetButton);
         Child = grid;
         UpdateLook();
     }
@@ -260,16 +272,38 @@ public sealed class ControlBlock : Border
         set { expanded = value; UpdateLook(); }
     }
 
+    Action? resetAction;
+
+    /// <summary>The block's reset: enabled while <paramref name="enabled"/> says the block is not neutral.</summary>
+    public void SetReset(string help, Func<bool> enabled, Action action)
+    {
+        resetAction = action; resetEnabled = enabled;
+        resetButton.ToolTip = help;
+        Content.Margin = new Thickness(6, 16, 6, 5);
+        RefreshReset();
+    }
+
+    void RefreshReset()
+    {
+        if (resetEnabled == null) return;
+        resetButton.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed;
+        bool on = resetEnabled();
+        resetButton.IsEnabled = on;
+        resetButton.Opacity = on ? 1 : 0.35;
+    }
+
     void UpdateLook()
     {
         scroller.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed;
         titleButton.Foreground = expanded ? (Brush)Application.Current.Resources["AccentBrush"] : Brushes.Gray;
         titleButton.Background = expanded ? new SolidColorBrush(Color.FromArgb(50, 10, 110, 209)) : new SolidColorBrush(Color.FromArgb(20, 255, 255, 255));
         titleButton.ToolTip = expanded ? $"Collapse {Title}" : $"Expand {Title}";
+        RefreshReset();
     }
 
     public void RefreshAll()
     {
+        RefreshReset();
         foreach (var c in Content.Children) RefreshTree(c);
     }
 

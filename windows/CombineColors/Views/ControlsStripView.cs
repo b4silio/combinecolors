@@ -48,9 +48,44 @@ public sealed class ControlsStripView : Border
         scroller.PreviewMouseLeftButtonUp += (_, _) => { dragStart = null; if (scroller.IsMouseCaptured) scroller.ReleaseMouseCapture(); };
         Child = scroller;
         Add("channels", "Channels", 250); Add("stretch", "Stretch", 262); Add("normalisation", "Normalisation", 290); Add("luminance", "Luminance", 250);
-        Add("bands", "Colour bands", 226); Add("colour", "Colour", 250); Add("balance", "Balance", 262); Add("denoise", "Denoise", 330); Add("detail", "Detail", 262); Add("stars", "RGB stars", 250);
+        Add("bands", "Colour bands", 226); Add("colour", "Colour", 250); Add("balance", "Balance", 262); Add("contrast", "Contrast", 250);
+        Add("denoise", "Denoise", 330); Add("detail", "Detail", 262); Add("stars", "Combine stars", 250);
+        balanceMode = model.Preferences.GetString("balanceMode") == "selective" ? "selective" : "balance";
+        SetResets();
         model.Changed += OnChanged;
         Rebuild();
+    }
+
+    string balanceMode;
+
+    /// <summary>A block reset on the shown tab's settings.</summary>
+    void Reset(string id, string what, Func<CombineSettings, bool> neutral, Action<CombineSettings> apply)
+        => blockById[id].SetReset("Reset " + what, () => !neutral(model.Settings), () => model.UpdateSettings(apply));
+
+    void SetResets()
+    {
+        Reset("channels", "the channel weights and gains", s => s.Channels.Values.All(a => a.IsNeutral), s => s.Channels.Clear());
+        Reset("stretch", "the stretch", s => s.Stretch.Equals(new StretchSettings()) && s.StretchStage == StretchStage.PreCombine, s => { s.Stretch = new StretchSettings(); s.StretchStage = StretchStage.PreCombine; });
+        Reset("normalisation", "the normalisation", s => s.Normalization.Equals(new NormalizationSettings()), s => s.Normalization = new NormalizationSettings());
+        Reset("luminance", "the luminance injection", s => s.Luminance.Equals(new LuminanceSettings()), s => s.Luminance = new LuminanceSettings());
+        Reset("bands", "every colour band and the softness", s => s.ColorBands.Equals(new ColorBandsSettings()), s => s.ColorBands = new ColorBandsSettings());
+        Reset("colour", "saturation, vibrance, SCNR and hue", s => s.Post.ColourIsNeutral, s => { s.Post.Saturation = 1; s.Post.Vibrance = 0; s.Post.ScnrGreen = 0; s.Post.HueShift = 0; });
+        Reset("balance", "the colour balance and the selective colour", s => s.Grading.Equals(new ColorGradingSettings()), s => s.Grading = new ColorGradingSettings());
+        Reset("contrast", "exposure, brightness, contrast, highlights, shadows, black / white point and gamma", s => s.Tone.IsNeutral && s.Post.LevelsAreNeutral,
+            s => { s.Tone = new ToneSettings(); s.Post.BlackPoint = 0; s.Post.WhitePoint = 1; s.Post.Gamma = 1; });
+        Reset("denoise", "the noise reduction", s => s.Denoise.Equals(new DenoiseSettings()), s => s.Denoise = new DenoiseSettings());
+        Reset("detail", "local contrast and sharpening", s => s.Detail.Equals(new DetailSettings()), s => s.Detail = new DetailSettings());
+        // The Combine stars reset keeps the combination on or off (only the blend parameters reset;
+        // the luminance mask goes off, as for any stars-only tab).
+        blockById["stars"].SetReset("Reset the blend (amount, brightness, contrast, saturation, mode, mask)", () => !model.CombineStars.Equals(NeutralStars()),
+            () => { var n = NeutralStars(); model.UpdateCombineStars(s => CopyStars(n, s)); });
+    }
+
+    StarsBlendSettings NeutralStars() => new() { Enabled = model.CombineStars.Enabled, UseMask = false };
+
+    static void CopyStars(StarsBlendSettings from, StarsBlendSettings to)
+    {
+        foreach (var f in typeof(StarsBlendSettings).GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)) f.SetValue(to, f.GetValue(from));
     }
 
     void Add(string id, string title, double width)
@@ -94,7 +129,7 @@ public sealed class ControlsStripView : Border
             case Change.Settings:
                 if (Signature() != structure) Rebuild(); else RefreshAll();
                 break;
-            case Change.Sources: case Change.Context: case Change.Stars: Rebuild(); break;
+            case Change.Sources: case Change.Context: case Change.Stars: case Change.Layer: Rebuild(); break;
         }
     }
 
@@ -110,7 +145,8 @@ public sealed class ControlsStripView : Border
             s.Normalization.Method.ToString(), s.Luminance.Enabled.ToString(), s.Luminance.Preset.ToString(), s.Luminance.ResolvedExpression(avail) ?? "-",
             s.Denoise.Method.ToString(), s.Stars.Enabled.ToString(), s.Stars.UseMask.ToString(), s.Mode.ToString(), s.PixelMath.HasLuminance.ToString(),
             model.Context?.Reference?.ToString() ?? "-", s.ColorBands.IsNeutral.ToString(), s.Detail.Equals(new DetailSettings()).ToString(), s.Denoise.Equals(new DenoiseSettings()).ToString(),
-            bandComponent.ToString(), balanceTone.ToString(), selectiveRange.ToString(), s.Grading.Relative.ToString(),
+            bandComponent.ToString(), balanceTone.ToString(), selectiveRange.ToString(), s.Grading.Relative.ToString(), balanceMode, s.Grading.BalanceIsNeutral.ToString(), s.Grading.SelectiveIsNeutral.ToString(),
+            model.ActiveLayer.ToString(), model.HasStars.ToString(), model.CombineStars.Enabled.ToString(), model.CombineStars.UseMask.ToString(), model.StarsCompositeBusy.ToString(), model.BackgroundCompositeBusy.ToString(),
             string.Join(",", ToneRanges.All.Select(t => s.Grading.GetBalance(t).IsNeutral)), string.Join(",", SelectiveRanges.All.Select(r => s.Grading.GetSelective(r).IsNeutral)),
         };
         parts.AddRange(avail.Select(k => k + ":" + s.Adjust(k).IsNeutral));
@@ -124,9 +160,9 @@ public sealed class ControlsStripView : Border
     {
         structure = Signature();
         Build("channels", ChannelsSection); Build("stretch", StretchSection); Build("normalisation", NormalizationSection); Build("luminance", LuminanceSection);
-        Build("bands", ColorBandsSection); Build("colour", ColourSection); Build("balance", BalanceSection); Build("denoise", DenoiseSection); Build("detail", DetailSection); Build("stars", StarsSection);
-        // Stays collapsed while no R, G and B channels are loaded (nothing to blend).
-        blockById["stars"].Expanded = !collapsed.Contains("stars");
+        Build("bands", ColorBandsSection); Build("colour", ColourSection); Build("balance", BalanceSection); Build("contrast", ContrastSection);
+        Build("denoise", DenoiseSection); Build("detail", DetailSection); Build("stars", StarsSection);
+        RefreshAll();
     }
 
     void Build(string id, Action<StackPanel> builder)
@@ -313,9 +349,6 @@ public sealed class ControlsStripView : Border
         var seg = Ui.Segmented(new[] { ColorBandComponent.Hue, ColorBandComponent.Saturation, ColorBandComponent.Lightness }, c => c switch { ColorBandComponent.Hue => "Hue", ColorBandComponent.Saturation => "Sat", _ => "Light" },
             () => bandComponent, v => { bandComponent = v; model.Preferences.Set("colorBandComponent", v.ToString()); Rebuild(); }, out _, 10);
         head.Children.Add(seg);
-        var reset = Ui.IconButton("↺", () => model.UpdateSettings(x => x.ColorBands = new ColorBandsSettings()), "Reset all bands");
-        reset.IsEnabled = !model.Settings.ColorBands.IsNeutral; reset.HorizontalAlignment = HorizontalAlignment.Right; reset.Margin = new Thickness(0);
-        head.Children.Add(reset);
         p.Children.Add(head);
         foreach (var band in ColorBands.All)
         {
@@ -334,6 +367,8 @@ public sealed class ControlsStripView : Border
             row.Children.Add(slider);
             p.Children.Add(row);
         }
+        p.Children.Add(S("Softness", x => x.ColorBands.Softness, (x, v) => x.ColorBands.Softness = v, 0, 1, 0,
+            help: "Feathers the bands: each one reaches further into its neighbours (up to twice as far) with a smooth fall-off, and fades in more gradually from grey, so an edit blends across colour edges instead of stopping at them."));
     }
 
     static Color HsvColor(double h, double s, double v)
@@ -348,22 +383,31 @@ public sealed class ControlsStripView : Border
     void ColourSection(StackPanel p)
     {
         p.Children.Add(S("Saturation", x => x.Post.Saturation, (x, v) => x.Post.Saturation = v, 0, 3, 1));
-        p.Children.Add(S("Vibrance", x => x.Post.Vibrance, (x, v) => x.Post.Vibrance = v, -1, 2, 0));
+        p.Children.Add(S("Vibrance", x => x.Post.Vibrance, (x, v) => x.Post.Vibrance = v, -1, 2, 0, help: "Saturation boost that acts mostly on the less saturated colours."));
         p.Children.Add(S("SCNR green", x => x.Post.ScnrGreen, (x, v) => x.Post.ScnrGreen = v, 0, 1, 0, help: "Average-neutral green removal."));
         p.Children.Add(S("Hue shift", x => x.Post.HueShift, (x, v) => x.Post.HueShift = v, -180, 180, 0, "0"));
-        p.Children.Add(S("Black point", x => x.Post.BlackPoint, (x, v) => x.Post.BlackPoint = v, 0, 0.5f, 0, "0.000"));
-        p.Children.Add(S("White point", x => x.Post.WhitePoint, (x, v) => x.Post.WhitePoint = v, 0.5f, 1, 1, "0.000"));
-        p.Children.Add(S("Gamma", x => x.Post.Gamma, (x, v) => x.Post.Gamma = v, 0.3f, 3, 1, log: true));
-        p.Children.Add(Ui.Row(
-            Ui.SmallButton("Reset colour", () => model.UpdateSettings(x => x.Post = new PostSettings())),
-            Ui.SmallButton("Classic SHO look", () => model.UpdateSettings(x => { x.Post.ScnrGreen = 0.8f; x.Post.Saturation = 1.3f; x.Post.HueShift = -10; }), "SCNR 0.8, saturation 1.3, hue −10°")));
+    }
+
+    // Contrast (tone, after Balance)
+
+    void ContrastSection(StackPanel p)
+    {
+        const double lw = 76;
+        p.Children.Add(S("Exposure", x => x.Tone.Exposure, (x, v) => x.Tone.Exposure = v, -3, 3, 0, help: "Gain in stops on the stretched image (clipped at white).", note: "EV", labelWidth: lw));
+        p.Children.Add(S("Brightness", x => x.Tone.Brightness, (x, v) => x.Tone.Brightness = v, -1, 1, 0, help: "Lifts (positive) or lowers the mid-tones; black and white stay.", labelWidth: lw));
+        p.Children.Add(S("Contrast", x => x.Tone.Contrast, (x, v) => x.Tone.Contrast = v, -1, 1, 0, help: "S-curve around the mid-tone: darker darks and brighter brights; negative flattens.", labelWidth: lw));
+        p.Children.Add(S("Highlights", x => x.Tone.Highlights, (x, v) => x.Tone.Highlights = v, -1, 1, 0, help: "Brightens (positive) or recovers (negative) the bright tones; white and the mid-tone stay.", labelWidth: lw));
+        p.Children.Add(S("Shadows", x => x.Tone.Shadows, (x, v) => x.Tone.Shadows = v, -1, 1, 0, help: "Opens up (positive) or deepens (negative) the dark tones; black and the mid-tone stay.", labelWidth: lw));
+        p.Children.Add(S("Black point", x => x.Post.BlackPoint, (x, v) => x.Post.BlackPoint = v, 0, 0.5f, 0, "0.000", labelWidth: lw));
+        p.Children.Add(S("White point", x => x.Post.WhitePoint, (x, v) => x.Post.WhitePoint = v, 0.5f, 1, 1, "0.000", labelWidth: lw));
+        p.Children.Add(S("Gamma", x => x.Post.Gamma, (x, v) => x.Post.Gamma = v, 0.3f, 3, 1, log: true, labelWidth: lw));
     }
 
     // Balance (Color Balance + Selective Color)
 
-    /// <summary>A −100…100 slider over a −1…1 field of the selected tone range.</summary>
+    /// <summary>A slider over a −1…1 field of the selected tone range, shown in percent.</summary>
     SliderRow Balance(string title, ToneRange tone, Func<ToneBalance, float> get, Action<ToneBalance, float> set, string help, double labelWidth)
-        => S(title, x => MathF.Round(get(x.Grading.GetBalance(tone)) * 100, MidpointRounding.AwayFromZero), (x, v) => { var a = x.Grading.GetBalance(tone).Clone(); set(a, v / 100); x.Grading.SetBalance(tone, a); }, -100, 100, 0, "0", help: help, labelWidth: labelWidth);
+        => S(title, x => MathF.Round(get(x.Grading.GetBalance(tone)) * 100, MidpointRounding.AwayFromZero), (x, v) => { var a = x.Grading.GetBalance(tone).Clone(); set(a, v / 100); x.Grading.SetBalance(tone, a); }, -50, 50, 0, "0", help: help, labelWidth: labelWidth);
 
     SliderRow Selective(string title, SelectiveRange range, Func<SelectiveAdjust, float> get, Action<SelectiveAdjust, float> set, string help, double labelWidth)
         => S(title, x => MathF.Round(get(x.Grading.GetSelective(range)) * 100, MidpointRounding.AwayFromZero), (x, v) => { var a = x.Grading.GetSelective(range).Clone(); set(a, v / 100); x.Grading.SetSelective(range, a); }, -100, 100, 0, "0", help: help, labelWidth: labelWidth);
@@ -373,44 +417,40 @@ public sealed class ControlsStripView : Border
         const double lw = 92;
         var g = model.Settings.Grading;
         var tone = balanceTone; var range = selectiveRange;
-        var head = new DockPanel();
-        var resetBalance = Ui.IconButton("↺", () => model.UpdateSettings(x => x.Grading.Balance.Clear()), "Reset the colour balance of every tone range");
-        resetBalance.IsEnabled = !g.BalanceIsNeutral; resetBalance.Margin = new Thickness(0);
-        DockPanel.SetDock(resetBalance, Dock.Right);
-        head.Children.Add(resetBalance);
-        head.Children.Add(new TextBlock { Text = "Colour balance", FontWeight = FontWeights.Bold, FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
-        p.Children.Add(head);
-        var toneSeg = Ui.Segmented(ToneRanges.All, t => t.DisplayName() + (g.GetBalance(t).IsNeutral ? "" : " •"), () => balanceTone, v => { balanceTone = v; model.Preferences.Set("balanceTone", EnumRaw.Name(v)); Rebuild(); }, out _, 10);
-        toneSeg.ToolTip = "Tone range the three sliders act on (• = adjusted); the ranges overlap smoothly by lightness, as in Photoshop";
-        toneSeg.HorizontalAlignment = HorizontalAlignment.Center; toneSeg.Margin = new Thickness(0, 4, 0, 4);
-        p.Children.Add(toneSeg);
-        p.Children.Add(Balance("Cyan – Red", tone, a => a.CyanRed, (a, v) => a.CyanRed = v, $"Negative towards cyan, positive towards red, in the {tone.DisplayName().ToLowerInvariant()}", lw));
-        p.Children.Add(Balance("Magenta – Green", tone, a => a.MagentaGreen, (a, v) => a.MagentaGreen = v, "Negative towards magenta, positive towards green", lw));
-        p.Children.Add(Balance("Yellow – Blue", tone, a => a.YellowBlue, (a, v) => a.YellowBlue = v, "Negative towards yellow, positive towards blue", lw));
-        p.Children.Add(C("Preserve luminosity", x => x.Grading.PreserveLuminosity, (x, v) => x.Grading.PreserveLuminosity = v, "Keep each pixel's lightness: only hue and saturation move (Photoshop's default)"));
-        p.Children.Add(Ui.Separator());
-        var head2 = new DockPanel();
-        var resetSelective = Ui.IconButton("↺", () => model.UpdateSettings(x => x.Grading.Selective.Clear()), "Reset the selective colour of every range");
-        resetSelective.IsEnabled = !g.SelectiveIsNeutral; resetSelective.Margin = new Thickness(0);
-        DockPanel.SetDock(resetSelective, Dock.Right);
-        head2.Children.Add(resetSelective);
-        head2.Children.Add(new TextBlock { Text = "Selective colour", FontWeight = FontWeights.Bold, FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
-        p.Children.Add(head2);
-        var rangeSeg = Ui.Segmented(SelectiveRanges.All, r => r.DisplayName() + (g.GetSelective(r).IsNeutral ? "" : " •"), () => selectiveRange, v => { selectiveRange = v; model.Preferences.Set("selectiveRange", EnumRaw.Name(v)); Rebuild(); }, out _, 10);
-        rangeSeg.ToolTip = "Whites: the brightest nearly-grey pixels; Neutrals: greys around mid-tone; Blacks: the darkest. The hue ranges are the Colour bands block";
-        rangeSeg.HorizontalAlignment = HorizontalAlignment.Center; rangeSeg.Margin = new Thickness(0, 4, 0, 4);
-        p.Children.Add(rangeSeg);
-        p.Children.Add(Selective("Cyan", range, a => a.Cyan, (a, v) => a.Cyan = v, $"More cyan ink (less red) in the {range.DisplayName().ToLowerInvariant()}; negative removes it", lw));
-        p.Children.Add(Selective("Magenta", range, a => a.Magenta, (a, v) => a.Magenta = v, "More magenta ink (less green); negative removes it", lw));
-        p.Children.Add(Selective("Yellow", range, a => a.Yellow, (a, v) => a.Yellow = v, "More yellow ink (less blue); negative removes it", lw));
-        p.Children.Add(Selective("Black", range, a => a.Black, (a, v) => a.Black = v, "Darkens (positive) or lightens (negative) the range", lw));
-        var methodRow = new DockPanel { Margin = new Thickness(0, 4, 0, 0) };
-        var methodSeg = Ui.Segmented(new[] { true, false }, b => b ? "Relative" : "Absolute", () => model.Settings.Grading.Relative, v => model.UpdateSettings(x => x.Grading.Relative = v), out _, 10);
-        methodSeg.ToolTip = "Relative changes the ink by a fraction of what is there (pure white cannot be touched); Absolute adds the amount outright";
-        DockPanel.SetDock(methodSeg, Dock.Right);
-        methodRow.Children.Add(methodSeg);
-        methodRow.Children.Add(new TextBlock { Text = "Method", FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
-        p.Children.Add(methodRow);
+        // One of the two tools at a time (• = adjusted).
+        var modeSeg = Ui.Segmented(new[] { "balance", "selective" }, m => m == "balance" ? "Color Balance" + (g.BalanceIsNeutral ? "" : " •") : "Selective Color" + (g.SelectiveIsNeutral ? "" : " •"),
+            () => balanceMode, v => { balanceMode = v; model.Preferences.Set("balanceMode", v); Rebuild(); }, out _, 11);
+        modeSeg.HorizontalAlignment = HorizontalAlignment.Center; modeSeg.Margin = new Thickness(0, 0, 0, 4);
+        p.Children.Add(modeSeg);
+        if (balanceMode != "selective")
+        {
+            var toneSeg = Ui.Segmented(ToneRanges.All, t => t.DisplayName() + (g.GetBalance(t).IsNeutral ? "" : " •"), () => balanceTone, v => { balanceTone = v; model.Preferences.Set("balanceTone", EnumRaw.Name(v)); Rebuild(); }, out _, 10);
+            toneSeg.ToolTip = "Tone range the three sliders act on (• = adjusted); the ranges overlap smoothly by lightness, as in Photoshop";
+            toneSeg.HorizontalAlignment = HorizontalAlignment.Center; toneSeg.Margin = new Thickness(0, 2, 0, 4);
+            p.Children.Add(toneSeg);
+            p.Children.Add(Balance("Cyan – Red", tone, a => a.CyanRed, (a, v) => a.CyanRed = v, $"Negative towards cyan, positive towards red, in the {tone.DisplayName().ToLowerInvariant()}", lw));
+            p.Children.Add(Balance("Magenta – Green", tone, a => a.MagentaGreen, (a, v) => a.MagentaGreen = v, "Negative towards magenta, positive towards green", lw));
+            p.Children.Add(Balance("Yellow – Blue", tone, a => a.YellowBlue, (a, v) => a.YellowBlue = v, "Negative towards yellow, positive towards blue", lw));
+            p.Children.Add(C("Preserve luminosity", x => x.Grading.PreserveLuminosity, (x, v) => x.Grading.PreserveLuminosity = v, "Keep each pixel's lightness: only hue and saturation move (Photoshop's default)"));
+        }
+        else
+        {
+            var rangeSeg = Ui.Segmented(SelectiveRanges.All, r => r.DisplayName() + (g.GetSelective(r).IsNeutral ? "" : " •"), () => selectiveRange, v => { selectiveRange = v; model.Preferences.Set("selectiveRange", EnumRaw.Name(v)); Rebuild(); }, out _, 10);
+            rangeSeg.ToolTip = "Whites: the brightest nearly-grey pixels; Neutrals: greys around mid-tone; Blacks: the darkest. The hue ranges are the Colour bands block";
+            rangeSeg.HorizontalAlignment = HorizontalAlignment.Center; rangeSeg.Margin = new Thickness(0, 2, 0, 4);
+            p.Children.Add(rangeSeg);
+            p.Children.Add(Selective("Cyan", range, a => a.Cyan, (a, v) => a.Cyan = v, $"More cyan ink (less red) in the {range.DisplayName().ToLowerInvariant()}; negative removes it", lw));
+            p.Children.Add(Selective("Magenta", range, a => a.Magenta, (a, v) => a.Magenta = v, "More magenta ink (less green); negative removes it", lw));
+            p.Children.Add(Selective("Yellow", range, a => a.Yellow, (a, v) => a.Yellow = v, "More yellow ink (less blue); negative removes it", lw));
+            p.Children.Add(Selective("Black", range, a => a.Black, (a, v) => a.Black = v, "Darkens (positive) or lightens (negative) the range", lw));
+            var methodRow = new DockPanel { Margin = new Thickness(0, 4, 0, 0) };
+            var methodSeg = Ui.Segmented(new[] { true, false }, b => b ? "Relative" : "Absolute", () => model.Settings.Grading.Relative, v => model.UpdateSettings(x => x.Grading.Relative = v), out _, 10);
+            methodSeg.ToolTip = "Relative changes the ink by a fraction of what is there (pure white cannot be touched); Absolute adds the amount outright";
+            DockPanel.SetDock(methodSeg, Dock.Right);
+            methodRow.Children.Add(methodSeg);
+            methodRow.Children.Add(new TextBlock { Text = "Method", FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
+            p.Children.Add(methodRow);
+        }
     }
 
     // Denoise
@@ -430,13 +470,8 @@ public sealed class ControlsStripView : Border
         }
         p.Children.Add(S("Protect", x => x.Denoise.ProtectBright, (x, v) => x.Denoise.ProtectBright = v, 0, 1, 0.5f, help: "Keeps bright structures (stars, nebula cores) untouched."));
         p.Children.Add(S("Colour", x => x.Denoise.Color, (x, v) => x.Denoise.Color = v, 0, 1, 0, help: "Smooths colour mottling (chroma only, luminance untouched)."));
-        var foot = new DockPanel();
-        var reset = Ui.IconButton("↺", () => model.UpdateSettings(x => x.Denoise = new DenoiseSettings()), "Reset the denoise settings");
-        reset.IsEnabled = !d.Equals(new DenoiseSettings()); reset.VerticalAlignment = VerticalAlignment.Bottom; reset.Margin = new Thickness(4, 0, 0, 0);
-        DockPanel.SetDock(reset, Dock.Right);
-        foot.Children.Add(reset);
-        foot.Children.Add(Ui.Caption(d.Method.Summary(), 9));
-        p.Children.Add(foot);
+        p.Children.Add(S("Hot pixels", x => x.Denoise.HotPixels, (x, v) => x.Denoise.HotPixels = v, 0, 1, 0, help: "Replaces isolated single-pixel spikes (often brought out by strong colour edits) by their neighbours' median, channel by channel; stars, which are wider than one pixel, are kept. Higher catches fainter spikes. Works at full resolution: visible at 1:1 and in the export."));
+        p.Children.Add(Ui.Caption(d.Method.Summary(), 9));
     }
 
     // Detail
@@ -456,54 +491,70 @@ public sealed class ControlsStripView : Border
         right.Children.Add(S("Sharpen", x => x.Detail.Sharpen, (x, v) => x.Detail.Sharpen = v, 0, 2, 0, help: "Unsharp mask on the luminance (stars excluded from the blur). The radius is in full-resolution pixels, so judge it at 1:1 with HQ on; a fitted preview shows little of it.", labelWidth: lw));
         right.Children.Add(S("Radius", x => x.Detail.SharpenRadius, (x, v) => x.Detail.SharpenRadius = v, 0.5f, 5, 1.5f, "0.0", help: "Sharpening radius in full-resolution pixels.", note: "px", labelWidth: lw));
         right.Children.Add(S("Masking", x => x.Detail.SharpenMasking, (x, v) => x.Detail.SharpenMasking = v, 0, 1, 0, help: "Protects flat, noisy areas: only detail above this fraction of the noise level is sharpened (like Camera Raw's Masking).", labelWidth: lw));
-        var reset = Ui.SmallButton("Reset", () => model.UpdateSettings(x => x.Detail = new DetailSettings()));
-        reset.HorizontalAlignment = HorizontalAlignment.Right; reset.IsEnabled = !model.Settings.Detail.Equals(new DetailSettings());
-        right.Children.Add(reset);
     }
 
-    // Stars
+    // Combine stars (the Background tab's blend settings, also editable from the Stars tab)
+
+    SliderRow SS(string title, Func<StarsBlendSettings, float> get, Action<StarsBlendSettings, float> set, float lo, float hi, float def, string format = "0.00", string? help = null, string? note = null, double labelWidth = 70)
+        => new(title, () => get(model.CombineStars), v => model.UpdateCombineStars(s => set(s, v)), lo, hi, def, format, false, help, note, labelWidth);
+
+    CheckRow CS(string title, Func<StarsBlendSettings, bool> get, Action<StarsBlendSettings, bool> set, string? help = null)
+        => new(title, () => get(model.CombineStars), v => model.UpdateCombineStars(s => set(s, v)), help);
+
+    MenuPicker<T> MS<T>(string title, Func<StarsBlendSettings, T> get, Action<StarsBlendSettings, T> set, IReadOnlyList<T> options, Func<T, string> label, string? help = null) where T : notnull
+        => new(title, () => get(model.CombineStars), v => model.UpdateCombineStars(s => set(s, v)), options, label, help);
 
     void StarsSection(StackPanel p)
     {
-        var st = model.Settings.Stars;
+        var st = model.CombineStars;
         const double lw = 70;
-        var top = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 2) };
-        if (model.StarsLayer is StarsLayer layer)
+        bool onBackground = model.ActiveLayer == ImageLayer.Background;
+        if (!onBackground) p.Children.Add(Ui.Caption("Stars tab: with Combine on, the preview shows these stars over the Background tab.", 9));
+        var stars = model.LayerSources(ImageLayer.Stars);
+        if (stars.Count > 0 && onBackground)
         {
-            var name = new TextBlock { Text = "✦ " + layer.FileName, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, MaxWidth = 250, TextTrimming = TextTrimming.CharacterEllipsis };
-            name.ToolTip = $"Stars layer: {layer.FileName} ({layer.FormatDescription}), kept as an RGB image and blended on top";
+            var top = new DockPanel { Margin = new Thickness(0, 0, 0, 2) };
+            var remove = Ui.IconButton("✕", model.RemoveStarsLayer, "Empty the Stars tab"); remove.Margin = new Thickness(0);
+            DockPanel.SetDock(remove, Dock.Right); top.Children.Add(remove);
+            var show = Ui.IconButton("➜", () => model.SwitchLayer(ImageLayer.Stars), "Show the Stars tab (Ctrl+2)"); show.IsEnabled = model.CanSwitchLayer;
+            DockPanel.SetDock(show, Dock.Right); top.Children.Add(show);
+            var name = new TextBlock
+            {
+                Text = "✦ Stars tab: " + string.Join(", ", ChannelKinds.All.Where(stars.ContainsKey).Select(k => k.ShortName())), FontSize = 11, VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis, ToolTip = string.Join("\n", stars.Values.Select(v => v.FileName).Distinct().OrderBy(x => x)),
+            };
             top.Children.Add(name);
-            top.Children.Add(Ui.IconButton("✕", model.RemoveStarsLayer, "Remove the stars layer"));
+            p.Children.Add(top);
         }
-        else
+        if (onBackground)
         {
-            top.Children.Add(Ui.SmallButton("Load RGB stars…", () => { var paths = Panels.OpenImages(Window.GetWindow(this)); if (paths.Count > 0) model.LoadStarsLayer(paths[0]); }, "An RGB image kept whole (not split into channels) and blended as stars: a stars-only image, or any RGB frame. Dropping a colour file offers the same choice."));
-            if (HasRgb) top.Children.Add(Ui.Caption("or the R, G, B channels", 10, false));
+            var load = Ui.SmallButton("Load RGB stars…", () => { var paths = Panels.OpenImages(Window.GetWindow(this)); if (paths.Count > 0) model.LoadStarsLayer(paths[0]); },
+                "Puts an already processed stars image on the Stars tab (as R, G, B; a grey image as L), replacing what is there, and switches the combination on. The tab shown does not change.");
+            load.HorizontalAlignment = HorizontalAlignment.Left; load.Margin = new Thickness(0, 0, 0, 2);
+            p.Children.Add(load);
         }
-        p.Children.Add(top);
-        var enable = C("Blend RGB stars into the result", x => x.Stars.Enabled, (x, v) => x.Stars.Enabled = v);
-        enable.IsEnabled = model.HasStars;
+        var enable = CS("Combine BG and Stars", x => x.Enabled, (x, v) => x.Enabled = v);
+        enable.IsEnabled = model.HasStars && model.LayerSources(ImageLayer.Background).Count > 0;
         p.Children.Add(enable);
-        if (!model.HasStars) p.Children.Add(Ui.Caption("Load a stars layer, or R, G and B channels, to enable."));
-        if (st.Enabled)
+        if (!model.HasStars) p.Children.Add(Ui.Caption("Fill the Stars tab first: drop star channels on it, use Remove Stars…, or Load RGB stars…."));
+        if (model.StarsCompositeBusy || model.BackgroundCompositeBusy)
+            p.Children.Add(Ui.Caption(onBackground ? "Rendering the Stars tab…" : "Rendering the Background tab…", 9));
+        if (st.Enabled && model.HasStars)
         {
             // One column, scrolled: the layer's look, then the blend.
-            var left = p;
-            left.Children.Add(S("Amount", x => x.Stars.Amount, (x, v) => x.Stars.Amount = v, 0, 1, 1, labelWidth: lw));
-            left.Children.Add(S("Brightness", x => x.Stars.Brightness, (x, v) => x.Stars.Brightness = v, -2, 2, 0, help: "Gain of the star layer in stops, after its stretch", note: "EV", labelWidth: lw));
-            left.Children.Add(S("Contrast", x => x.Stars.Contrast, (x, v) => x.Stars.Contrast = v, -1, 1, 0, help: "Spreads the star layer around the mid-tone: positive darkens faint halos and keeps the cores, negative softens", labelWidth: lw));
-            left.Children.Add(S("Star sat.", x => x.Stars.Saturation, (x, v) => x.Stars.Saturation = v, 0, 3, 1.3f, labelWidth: lw));
-            left.Children.Add(C("Brightest stars to white", x => x.Stars.Normalize, (x, v) => x.Stars.Normalize = v, "Scale the layer so its brightest stars reach white — the brightest values of the result (whole-image peak, so preview and export agree). With a lowered Amount the cores still stay white: the amount then fades the faint stars instead of greying everything"));
-            left.Children.Add(Ui.Separator());
-            var right = p;
-            right.Children.Add(M("Blend", x => x.Stars.Mode, (x, v) => x.Stars.Mode = v, StarsBlendModes.All, m => m.DisplayName(), "Screen: adds without clipping, soft on bright nebulae (default).\nLighten: the brighter of the two.\nAdd: sum, clipped."));
-            right.Children.Add(M("Blend at", x => x.Stars.Stage, (x, v) => x.Stars.Stage = v, StarsBlendStages.All, m => m.DisplayName(), "After denoise & detail: the stars are not denoised, sharpened or haloed (the starless workflow), and a star slider re-blends only.\nBefore: the stars go through denoise and detail with the nebula."));
-            right.Children.Add(M("Star data", x => x.Stars.Stretch, (x, v) => x.Stars.Stretch = v, StarsStretchModes.All, m => m.DisplayName()));
-            right.Children.Add(C("Mask by luminance", x => x.Stars.UseMask, (x, v) => x.Stars.UseMask = v, "Off for star-only images from StarNet/StarXTerminator."));
+            p.Children.Add(SS("Amount", x => x.Amount, (x, v) => x.Amount = v, 0, 1, 1, labelWidth: lw));
+            p.Children.Add(SS("Brightness", x => x.Brightness, (x, v) => x.Brightness = v, -2, 2, 0, help: "Gain of the star layer in stops", note: "EV", labelWidth: lw));
+            p.Children.Add(SS("Contrast", x => x.Contrast, (x, v) => x.Contrast = v, -1, 1, 0, help: "Spreads the star layer around the mid-tone: positive darkens faint halos and keeps the cores, negative softens", labelWidth: lw));
+            p.Children.Add(SS("Star sat.", x => x.Saturation, (x, v) => x.Saturation = v, 0, 3, 1.3f, labelWidth: lw));
+            p.Children.Add(CS("Brightest stars to white", x => x.Normalize, (x, v) => x.Normalize = v, "Scale the layer so its brightest stars reach white — the brightest values of the result (whole-image peak, so preview and export agree). With a lowered Amount the cores still stay white: the amount then fades the faint stars instead of greying everything"));
+            p.Children.Add(Ui.Separator());
+            p.Children.Add(MS("Blend", x => x.Mode, (x, v) => x.Mode = v, StarsBlendModes.All, m => m.DisplayName(), "Screen: adds without clipping, soft on bright nebulae (default).\nLighten: the brighter of the two.\nAdd: sum, clipped."));
+            p.Children.Add(MS("Blend at", x => x.Stage, (x, v) => x.Stage = v, StarsBlendStages.All, m => m.DisplayName(), "After denoise & detail: the stars are not denoised, sharpened or haloed (the starless workflow), and a star slider re-blends only.\nBefore: the stars go through denoise and detail with the nebula."));
+            p.Children.Add(CS("Mask by luminance", x => x.UseMask, (x, v) => x.UseMask = v, "Only the parts of the Stars tab brighter than the threshold are blended — for a full RGB frame on the Stars tab. Off for stars-only images."));
             if (st.UseMask)
             {
-                right.Children.Add(S("Threshold", x => x.Stars.Threshold, (x, v) => x.Stars.Threshold = v, 0, 1, 0.15f, labelWidth: lw));
-                right.Children.Add(S("Softness", x => x.Stars.Softness, (x, v) => x.Stars.Softness = v, 0.01f, 1, 0.25f, labelWidth: lw));
+                p.Children.Add(SS("Threshold", x => x.Threshold, (x, v) => x.Threshold = v, 0, 1, 0.15f, labelWidth: lw));
+                p.Children.Add(SS("Softness", x => x.Softness, (x, v) => x.Softness = v, 0.01f, 1, 0.25f, labelWidth: lw));
             }
         }
     }

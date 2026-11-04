@@ -12,24 +12,80 @@ public sealed class DetailOverview
 /// <summary>Colour post-processing on stretched [0,1] RGB data. Everything is point-wise.</summary>
 public static partial class PostProcess
 {
+    /// <summary>The Colour block: hue, vibrance, saturation, SCNR (the levels are in <see cref="ApplyTone"/>).</summary>
     public static void Apply(PostSettings s, RGBImage img)
     {
         if (s.HueShift != 0) HueShift(img, s.HueShift);
         if (s.Vibrance != 0) Vibrance(img, s.Vibrance);
         if (s.Saturation != 1) Saturation(img, s.Saturation);
         if (s.ScnrGreen > 0) Scnr(img, s.ScnrGreen);
-        if (s.BlackPoint != 0 || s.WhitePoint != 1)
-        {
-            float a = 1 / MathF.Max(s.WhitePoint - s.BlackPoint, 1e-4f);
-            foreach (var p in img.Planes) p.Affine(a, -s.BlackPoint * a);
-        }
         img.Clamp01();
-        if (s.Gamma != 1 && s.Gamma > 0)
+    }
+
+    /// <summary>
+    /// The Contrast block, per channel: exposure (gain), black / white point, shadows, highlights,
+    /// contrast, brightness, then gamma — one 4096-entry curve after the gain.
+    /// </summary>
+    public static void ApplyTone(ToneSettings t, PostSettings l, RGBImage img)
+    {
+        if (t.IsNeutral && l.LevelsAreNeutral) return;
+        img.Clamp01();
+        if (t.Exposure != 0)
         {
-            float g = s.Gamma;
-            foreach (var p in img.Planes)
-                Par.Rows(p.Height, p.Width, (y0, y1) => { var seg = p.Data.AsSpan(y0 * p.Width, (y1 - y0) * p.Width); Vec.Pow(seg, g, seg); });
+            float g = MathF.Pow(2, t.Exposure);
+            foreach (var p in img.Planes) p.Affine(g, 0);
+            img.Clamp01();
         }
+        bool curveNeutral = t.Brightness == 0 && t.Contrast == 0 && t.Highlights == 0 && t.Shadows == 0 && l.LevelsAreNeutral;
+        if (curveNeutral) return;
+        const int n = 4096;
+        var lut = new float[n];
+        for (int i = 0; i < n; i++) lut[i] = ToneCurve(i / (float)(n - 1), t, l);
+        const float last = n - 1;
+        foreach (var p in img.Planes)
+        {
+            var d = p.Data;
+            Par.Rows(p.Height, p.Width * 2, (y0, y1) =>
+            {
+                for (int i = y0 * p.Width; i < y1 * p.Width; i++)
+                {
+                    float x = MathF.Min(MathF.Max(d[i], 0), 1) * last;
+                    int k = Math.Min((int)x, n - 2);
+                    float f = x - k;
+                    d[i] = lut[k] + f * (lut[k + 1] - lut[k]);
+                }
+            });
+        }
+    }
+
+    /// <summary>
+    /// The tone curve on [0, 1] (exposure excluded): levels, shadows / highlights bumps (sine
+    /// lobes on [0, ½] and [½, 1], so black, mid-tone and white stay put and the curve stays
+    /// monotonic), contrast (smoothstep S-curve, or its inverse for negative values), brightness
+    /// (midtones transfer function), gamma.
+    /// </summary>
+    public static float ToneCurve(float x0, ToneSettings t, PostSettings l)
+    {
+        float x = (x0 - l.BlackPoint) / MathF.Max(l.WhitePoint - l.BlackPoint, 1e-4f);
+        x = MathF.Min(MathF.Max(x, 0), 1);
+        if (t.Shadows != 0 && x < 0.5f) x += 0.15f * t.Shadows * MathF.Sin(2 * MathF.PI * x);
+        if (t.Highlights != 0 && x > 0.5f) x += 0.15f * t.Highlights * MathF.Sin(2 * MathF.PI * (x - 0.5f));
+        if (t.Contrast > 0)
+        {
+            float s = x * x * (3 - 2 * x);
+            x += t.Contrast * (s - x);
+        }
+        else if (t.Contrast < 0)
+        {
+            // Inverse S: flatter mid-tones, black and white kept.
+            float s = x * x * (3 - 2 * x);
+            x += -t.Contrast * (x - s);
+        }
+        // MTF with the mid-tones balance moved from ½: positive brightens.
+        if (t.Brightness != 0) x = Stretch.Mtf(0.5f - 0.4f * t.Brightness, MathF.Min(MathF.Max(x, 0), 1));
+        x = MathF.Min(MathF.Max(x, 0), 1);
+        if (l.Gamma != 1 && l.Gamma > 0) x = MathF.Pow(x, l.Gamma);
+        return x;
     }
 
     /// <summary>Luma-preserving saturation: c' = Y + f (c − Y).</summary>
@@ -116,7 +172,8 @@ public static partial class PostProcess
 
     /// <summary>
     /// Per-band hue/saturation/lightness. Band weights interpolate linearly between the band
-    /// centres around the hue circle and fade out for nearly neutral pixels.
+    /// centres around the hue circle (widened and S-shaped with <c>Softness</c>) and fade out for
+    /// nearly neutral pixels.
     /// </summary>
     public static void ColorBands(RGBImage img, ColorBandsSettings s)
     {
@@ -137,12 +194,13 @@ public static partial class PostProcess
                 {
                     var a = adj[k];
                     if (a.IsNeutral) continue;
-                    float w = BandWeight(h, k, centers);
+                    float w = BandWeight(h, k, centers, s.Softness);
                     if (w <= 0) continue;
                     dh += w * a.Hue; ds += w * a.Saturation; dl += w * a.Lightness;
                 }
                 if (dh == 0 && ds == 0 && dl == 0) continue;
-                float t = MathF.Min(sat / 0.25f, 1);
+                // Softer bands also fade in more gradually from grey.
+                float t = MathF.Min(sat / (0.25f + 0.25f * s.Softness), 1);
                 float f = t * t * (3 - 2 * t);          // fade for nearly grey pixels
                 h = Mod(h + f * dh + 360, 360);
                 sat = MathF.Min(MathF.Max(sat * (1 + f * ds), 0), 1);
@@ -155,16 +213,25 @@ public static partial class PostProcess
 
     static float Mod(float a, float m) => a % m;   // C fmodf semantics
 
-    /// <summary>Piecewise-linear interpolation weight of band <paramref name="index"/> at <paramref name="hue"/> (degrees).</summary>
-    internal static float BandWeight(float hue, int index, float[] centers)
+    /// <summary>
+    /// Weight of band <paramref name="index"/> at <paramref name="hue"/> (degrees): 1 at its centre, falling to 0 at the
+    /// neighbouring centres (piecewise linear, a partition of unity) at softness 0; with softness
+    /// the reach grows up to 2× and the fall-off turns into a smoothstep.
+    /// </summary>
+    internal static float BandWeight(float hue, int index, float[] centers, float softness = 0)
     {
         float c = centers[index];
         float prev = centers[(index + centers.Length - 1) % centers.Length];
         float next = centers[(index + 1) % centers.Length];
-        float toPrev = Mod(c - prev + 360, 360), toNext = Mod(next - c + 360, 360);
+        float widen = 1 + MathF.Min(MathF.Max(softness, 0), 1);
+        float toPrev = Mod(c - prev + 360, 360) * widen, toNext = Mod(next - c + 360, 360) * widen;
         float d = Mod(hue - c + 540, 360) - 180;      // signed distance in (−180, 180]
-        if (d >= 0) return toNext > 0 ? MathF.Max(0, 1 - d / toNext) : 0;
-        return toPrev > 0 ? MathF.Max(0, 1 + d / toPrev) : 0;
+        float lin;
+        if (d >= 0) lin = toNext > 0 ? MathF.Max(0, 1 - d / toNext) : 0;
+        else lin = toPrev > 0 ? MathF.Max(0, 1 + d / toPrev) : 0;
+        if (softness <= 0) return lin;
+        float smooth = lin * lin * (3 - 2 * lin);
+        return lin + MathF.Min(softness, 1) * (smooth - lin);
     }
 
     internal static (float h, float s, float l) RgbToHsl(float r, float g, float b)

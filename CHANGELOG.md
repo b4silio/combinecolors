@@ -10,6 +10,7 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 - Fix: Generate produced no gradient points on a channel without a model (after switching channels in the gradient editor, or after Remove model): the samples model is now created on Generate or when a grid parameter changes
 - Fix: painted corrections scale only the signal above the channel's sky level by default ("Above the sky"); on linear data the old exposure-style correction also scaled the sky pedestal, which the stretch magnified (0.5 EV darkened the sky to black). "Exposure" keeps the old behaviour (macOS toolbar switch; Windows / Linux use the sky-relative mode)
 - Denoise runs before Detail again (better quality on the denoised image); the render cache keeps both outputs, so a detail slider re-runs the detail only
+- Windows: the app catches up with 1.10–1.15 — star removal with StarNet2 (Remove Stars… / Tools menu: downloads the official Windows package on first use, license shown and accepted in the app; CLI `starnet` command), Background and Stars tabs with the Combine stars block (Ctrl+1 / Ctrl+2), Contrast block (and `--exposure`, `--brightness`, `--contrast`, `--highlights`, `--shadows` in the CLI), colour band Softness, Denoise Hot pixels, Balance switch (Color Balance ±50 / Selective Color), reset icon on every block, Default button, Reset all removes all processing, File ▸ Close Image (Ctrl+W), double-click fits first, crop and rotation locked while an editor is open, even brush spacing; the preview now uses the render cache
 
 ## [1.15.0] – 2026-11-04
 

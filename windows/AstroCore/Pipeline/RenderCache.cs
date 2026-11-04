@@ -14,15 +14,16 @@ public sealed record RenderInputKey(IReadOnlyDictionary<ChannelKind, Guid> Sourc
 
 /// <summary>
 /// Keeps the intermediate images of the last preview render so that a change late in the pipeline
-/// only re-runs the stages after it. Three intermediates, each valid while its own inputs are unchanged:
+/// only re-runs the stages after it. Four intermediates, each valid while its own inputs are unchanged:
 /// <list type="bullet">
 /// <item><b>combined</b> — steps 1–4: normalise, stretch, combine, luminance;</item>
-/// <item><b>developed</b> — the above plus colour (bands, global controls, grading) and stars;</item>
-/// <item><b>denoised</b> — the above plus denoise.</item>
+/// <item><b>developed</b> — the above plus colour (bands, colour, balance, contrast) and stars;</item>
+/// <item><b>denoised</b> — the above plus denoise;</item>
+/// <item><b>detailed</b> — the above plus detail (local contrast, sharpening), the last finishing stage.</item>
 /// </list>
-/// Detail (local contrast, sharpening) runs on a copy of the last one; when the stars go in last
-/// its output is kept too (<b>detailed</b>) and a star slider re-blends only. Moving a denoise
-/// slider therefore costs denoise + detail, a colour slider costs colour + stars + denoise + detail,
+/// The stars, when they go in last, are blended on a copy of the last one, so a star slider
+/// re-blends only. Moving a detail slider therefore costs detail, a denoise slider denoise +
+/// detail, a colour slider colour + stars + denoise + detail,
 /// and only a change to the channels, the stretch or the combination runs the whole pipeline. Even
 /// then the single channels' prepared planes (normalised, stretched, adjusted) are kept per channel
 /// (<see cref="ChannelPlaneStore"/>): a gain or weight change on one channel prepares that channel only.
@@ -41,8 +42,8 @@ public sealed class RenderCache
     readonly ChannelPlaneStore channels = new();
     (CombineSettings settings, Renderer.Developed developed)? combined;
     (CombineSettings settings, RGBImage image, DetailOverview? overview)? developed;
-    (DenoiseSettings settings, RGBImage image)? denoised;
-    /// <summary>The detail stage's output, kept only when the stars go in after it (a star slider re-blends only).</summary>
+    (DenoiseSettings settings, float scale, RGBImage @base, RGBImage image)? denoised;
+    /// <summary>The detail stage's output, kept: a star slider re-blends only.</summary>
     (DetailSettings settings, float scale, RGBImage @base, RGBImage image)? detailed;
 
     public void Clear() { inputs = null; channels.Clear(); combined = null; developed = null; denoised = null; detailed = null; }
@@ -51,7 +52,7 @@ public sealed class RenderCache
     internal static CombineSettings CombineSettingsOf(CombineSettings s)
     {
         var c = DevelopSettingsOf(s);
-        c.ColorBands = new ColorBandsSettings(); c.Post = new PostSettings(); c.Grading = new ColorGradingSettings(); c.Stars = new StarsBlendSettings();
+        c.ColorBands = new ColorBandsSettings(); c.Post = new PostSettings(); c.Tone = new ToneSettings(); c.Grading = new ColorGradingSettings(); c.Stars = new StarsBlendSettings();
         return c;
     }
 
@@ -107,30 +108,31 @@ public sealed class RenderCache
             developed = (dv.settings, dv.image, Renderer.DetailOverview(plan, req, @base.PostStretch));
         }
 
-        // 7a. Denoised.
+        // 7a. Denoise on a copy of the developed image, kept: a detail slider then re-runs the
+        //     detail only.
+        bool starsLast = s.Stars.Enabled && s.Stars.Stage == StarsBlendStage.Last;
         RGBImage afterDenoise;
         if (s.Denoise.IsNeutral) afterDenoise = developed!.Value.image;
-        else if (denoised is { } dn && dn.settings.Equals(s.Denoise)) afterDenoise = dn.image;
+        else if (denoised is { } dn && dn.settings.Equals(s.Denoise) && dn.scale == req.Scale && ReferenceEquals(dn.@base, developed!.Value.image)) afterDenoise = dn.image;
         else
         {
             var img = developed!.Value.image.Copy();
-            Denoise.Apply(img, s.Denoise);
-            denoised = (s.Denoise.Clone(), img); detailed = null;
+            Denoise.Apply(img, s.Denoise, req.Scale);
+            denoised = (s.Denoise.Clone(), req.Scale, developed!.Value.image, img); detailed = null;
             afterDenoise = img;
             if (ranFrom == Stage.Nothing) ranFrom = Stage.Denoise;
         }
 
-        // 7b. Detail, on a copy: the cached intermediates stay as they are. With the stars last the
-        //     output is kept, so that a star slider finds it.
-        bool starsLast = s.Stars.Enabled && s.Stars.Stage == StarsBlendStage.Last;
+        // 7b. Detail (local contrast, sharpening) on the denoised image, on a copy, kept: a star
+        //     slider then re-blends only.
         RGBImage afterDetail;
         if (s.Detail.IsNeutral) afterDetail = afterDenoise;
-        else if (starsLast && detailed is { } dt && dt.settings.Equals(s.Detail) && dt.scale == req.Scale && ReferenceEquals(dt.@base, afterDenoise)) afterDetail = dt.image;
+        else if (detailed is { } dt && dt.settings.Equals(s.Detail) && dt.scale == req.Scale && ReferenceEquals(dt.@base, afterDenoise)) afterDetail = dt.image;
         else
         {
             var img = afterDenoise.Copy();
             PostProcess.Detail(img, s.Detail, req.Scale, developed!.Value.overview);
-            detailed = starsLast ? (s.Detail.Clone(), req.Scale, afterDenoise, img) : null;
+            detailed = (s.Detail.Clone(), req.Scale, afterDenoise, img);
             afterDetail = img;
             if (ranFrom == Stage.Nothing) ranFrom = Stage.Detail;
         }

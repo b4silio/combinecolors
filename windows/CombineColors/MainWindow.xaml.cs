@@ -26,7 +26,7 @@ public partial class MainWindow : Window
     readonly Border topToolbar = new();
     readonly Border zoomToolbar = new();
     readonly Border emptyState = new();
-    MenuItem? recentMenu, undoItem, redoItem, hqItem, limitsMenu;
+    MenuItem? recentMenu, undoItem, redoItem, hqItem, limitsMenu, closeItem, rotateItem, flipHItem, flipVItem, trimItem;
     bool dialogPending;
 
     public MainWindow(ProjectModel model)
@@ -40,6 +40,7 @@ public partial class MainWindow : Window
         controls = new ControlsStripView(model);
         palettes.MatrixRequested += () => MatrixEditorWindow.Show(this, model);
         palettes.PixelMathRequested += () => PixelMathEditorWindow.Show(this, model);
+        channels.RemoveStarsRequested += ShowStarRemoval;
 
         var menu = BuildMenu();
         DockPanel.SetDock(menu, Dock.Top); Root.Children.Add(menu);
@@ -108,7 +109,8 @@ public partial class MainWindow : Window
         file.Items.Add(new Separator());
         file.Items.Add(Item("Export Combined Image…", () => { if (model.Sources.Count > 0) ExportWindow.Show(this, model); }, "Ctrl+E", Key.E, ModifierKeys.Control));
         file.Items.Add(new Separator());
-        file.Items.Add(Item("Remove All Channels", model.RemoveAll));
+        closeItem = Item("Close Image", model.CloseImage, "Ctrl+W", Key.W, ModifierKeys.Control);
+        file.Items.Add(closeItem);
         file.Items.Add(new Separator());
         file.Items.Add(Item("Exit", Close, "Alt+F4"));
         menu.Items.Add(file);
@@ -119,9 +121,19 @@ public partial class MainWindow : Window
         edit.Items.Add(new Separator());
         edit.Items.Add(Item("Copy Preview Image", () => model.CopyPreviewToClipboard(), "Ctrl+Shift+C", Key.C, ModifierKeys.Control | ModifierKeys.Shift));
         menu.Items.Add(edit);
+        var tools = new MenuItem { Header = "_Tools" };
+        tools.Items.Add(Item("Remove Stars with StarNet2…", () =>
+        {
+            // Star removal works on the Background tab's channels.
+            if (model.ActiveLayer == ImageLayer.Stars) model.SwitchLayer(ImageLayer.Background);
+            if (model.ActiveLayer == ImageLayer.Background) ShowStarRemoval();
+        }));
         var view = new MenuItem { Header = "_View" };
+        view.Items.Add(Item("Background Tab", () => model.SwitchLayer(ImageLayer.Background), "Ctrl+1", Key.D1, ModifierKeys.Control));
+        view.Items.Add(Item("Stars Tab", () => model.SwitchLayer(ImageLayer.Stars), "Ctrl+2", Key.D2, ModifierKeys.Control));
+        view.Items.Add(new Separator());
         view.Items.Add(Item("Fit to Window", () => preview.Perform(ZoomAction.Fit), "Ctrl+0", Key.D0, ModifierKeys.Control));
-        view.Items.Add(Item("Actual Size", () => preview.Perform(ZoomAction.ActualSize), "Ctrl+1", Key.D1, ModifierKeys.Control));
+        view.Items.Add(Item("Actual Size", () => preview.Perform(ZoomAction.ActualSize), "1"));
         hqItem = new MenuItem { Header = "High Quality Preview", IsCheckable = true };
         hqItem.Click += (_, _) => model.HighQualityPreview = hqItem.IsChecked;
         view.Items.Add(hqItem);
@@ -135,11 +147,19 @@ public partial class MainWindow : Window
         }
         view.Items.Add(limitsMenu);
         view.Items.Add(new Separator());
-        view.Items.Add(Item("Rotate Clockwise", model.RotateClockwise, "Ctrl+R", Key.R, ModifierKeys.Control));
-        view.Items.Add(Item("Flip Horizontal", model.FlipHorizontal, "Ctrl+Shift+H", Key.H, ModifierKeys.Control | ModifierKeys.Shift));
-        view.Items.Add(Item("Flip Vertical", model.FlipVertical, "Ctrl+Shift+V", Key.V, ModifierKeys.Control | ModifierKeys.Shift));
-        view.Items.Add(Item("Auto Trim Borders", model.AutoCrop));
+        rotateItem = Item("Rotate Clockwise", model.RotateClockwise, "Ctrl+R", Key.R, ModifierKeys.Control); view.Items.Add(rotateItem);
+        flipHItem = Item("Flip Horizontal", model.FlipHorizontal, "Ctrl+Shift+H", Key.H, ModifierKeys.Control | ModifierKeys.Shift); view.Items.Add(flipHItem);
+        flipVItem = Item("Flip Vertical", model.FlipVertical, "Ctrl+Shift+V", Key.V, ModifierKeys.Control | ModifierKeys.Shift); view.Items.Add(flipVItem);
+        trimItem = Item("Auto Trim Borders", model.AutoCrop); view.Items.Add(trimItem);
         menu.Items.Add(view);
+        menu.Items.Add(tools);
+        file.SubmenuOpened += (_, _) => closeItem.IsEnabled = !((model.Sources.Count == 0 && !model.HasStars && model.ProjectPath == null) || model.IsRemovingStars);
+        view.SubmenuOpened += (_, _) =>
+        {
+            bool can = model.Sources.Count > 0 && !model.IsLoading && model.EditingTool == null;
+            rotateItem.IsEnabled = can; flipHItem.IsEnabled = can; flipVItem.IsEnabled = can;
+            trimItem.IsEnabled = model.Sources.Count > 0 && model.EditingTool == null;
+        };
         var help = new MenuItem { Header = "_Help" };
         help.Items.Add(Item("About CombineColors", () => AboutWindow.Show(this)));
         menu.Items.Add(help);
@@ -178,6 +198,13 @@ public partial class MainWindow : Window
         var path = Panels.Save(this, "combination.json", "CombineColors project|*.json", "Save the project (channel paths, crop and all settings)");
         if (path == null) return;
         try { model.SaveProject(path); } catch (Exception e) { model.ErrorMessage = e.Message; }
+    }
+
+    /// <summary>Opens the star removal (StarNet2) dialog on the Background channels.</summary>
+    void ShowStarRemoval()
+    {
+        if (model.Sources.Count == 0 || model.ActiveLayer != ImageLayer.Background) return;
+        StarRemovalWindow.Show(this, model);
     }
 
     void UpdateTitle() => Title = model.ProjectPath is string p ? $"{Path.GetFileNameWithoutExtension(p)} — CombineColors" : "CombineColors";
@@ -234,7 +261,8 @@ public partial class MainWindow : Window
         preview.StrokeBegin += model.BeginCorrectionStroke;
         preview.Paint += (a, b, invert) => model.PaintCorrection(a, b, invert);
         preview.BrushRadiusChanged += r => model.CorrectionBrushRadius = r;
-        preview.DoubleClick += () => preview.Perform(preview.IsActualSize ? ZoomAction.Fit : ZoomAction.ActualSize);
+        // Fit first; from the fitted view, 1:1.
+        preview.DoubleClick += () => preview.Perform(preview.IsFitted ? ZoomAction.ActualSize : ZoomAction.Fit);
         preview.KeyDown += (_, e) =>
         {
             if (model.DustEditing != null)
@@ -339,7 +367,7 @@ public partial class MainWindow : Window
         switch (what)
         {
             case Change.Frame: preview.Frame = model.Frame; break;
-            case Change.Sources: SyncPreview(); RefreshToolbars(); break;
+            case Change.Sources: case Change.Layer: SyncPreview(); RefreshToolbars(); break;
             case Change.Crop: case Change.Dust: case Change.Gradient: case Change.Corrections: SyncPreview(); RefreshToolbars(); break;
             case Change.Status: if (hqItem != null) hqItem.IsChecked = model.HighQualityPreview; break;
             case Change.Settings: UpdateUndo(); break;
@@ -680,6 +708,7 @@ public partial class MainWindow : Window
     {
         if (model.Sources.Count > 0) { emptyState.Visibility = Visibility.Collapsed; return; }
         emptyState.Visibility = Visibility.Visible;
+        if (model.ActiveLayer == ImageLayer.Stars) { emptyState.Child = EmptyStarsState(); return; }
         var panel = new StackPanel { Width = 540 };
         panel.Children.Add(new TextBlock { Text = "🖼", FontSize = 44, Foreground = Brushes.Gray, HorizontalAlignment = HorizontalAlignment.Center });
         panel.Children.Add(new TextBlock { Text = "Drop stacked FITS or TIFF channels here", FontSize = 20, Foreground = Brushes.WhiteSmoke, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 8, 0, 4) });
@@ -705,6 +734,22 @@ public partial class MainWindow : Window
             }
         }
         emptyState.Child = panel;
+    }
+
+    UIElement EmptyStarsState()
+    {
+        var panel = new StackPanel { Width = 560 };
+        panel.Children.Add(new TextBlock { Text = "✦", FontSize = 44, Foreground = Brushes.Gray, HorizontalAlignment = HorizontalAlignment.Center });
+        panel.Children.Add(new TextBlock { Text = "Stars tab", FontSize = 20, Foreground = Brushes.WhiteSmoke, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 8, 0, 4) });
+        panel.Children.Add(new TextBlock { Text = "Drop the star channels here (stars-only images, one per filter, or an RGB stars image).\nThey get settings of their own; the Combine stars block of the Background tab blends them in.\nRemove Stars… and Load RGB stars… on the Background tab fill this tab too.", FontSize = 12, Foreground = Brushes.Silver, TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap });
+        var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 10, 0, 0) };
+        var open = new Button { Content = "Open star images…", Padding = new Thickness(12, 4, 12, 4), Margin = new Thickness(0, 0, 8, 0) };
+        open.Click += (_, _) => { var p = Panels.OpenImages(this); if (p.Count > 0) model.LoadFiles(p); };
+        var back = new Button { Content = "Back to the Background tab", Padding = new Thickness(12, 4, 12, 4) };
+        back.Click += (_, _) => model.SwitchLayer(ImageLayer.Background);
+        row.Children.Add(open); row.Children.Add(back);
+        panel.Children.Add(row);
+        return panel;
     }
 }
 

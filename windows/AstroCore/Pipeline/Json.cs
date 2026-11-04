@@ -272,6 +272,25 @@ public sealed partial class LuminanceSettings : IJsonSettings
     }
 }
 
+public sealed partial class ToneSettings : IJsonSettings
+{
+    public JsonObject ToJson() => new()
+    {
+        ["exposure"] = SettingsJson.V(Exposure), ["brightness"] = SettingsJson.V(Brightness), ["contrast"] = SettingsJson.V(Contrast),
+        ["highlights"] = SettingsJson.V(Highlights), ["shadows"] = SettingsJson.V(Shadows),
+    };
+
+    public static ToneSettings FromJson(JsonObject? c)
+    {
+        var d = new ToneSettings();
+        return new ToneSettings
+        {
+            Exposure = SettingsJson.F(c, "exposure", d.Exposure), Brightness = SettingsJson.F(c, "brightness", d.Brightness), Contrast = SettingsJson.F(c, "contrast", d.Contrast),
+            Highlights = SettingsJson.F(c, "highlights", d.Highlights), Shadows = SettingsJson.F(c, "shadows", d.Shadows),
+        };
+    }
+}
+
 public sealed partial class PostSettings : IJsonSettings
 {
     public JsonObject ToJson() => new()
@@ -366,12 +385,12 @@ public sealed partial class ColorBandsSettings : IJsonSettings
     {
         var b = new JsonObject();
         foreach (var (k, v) in Bands) b[EnumRaw.Name(k)] = v.ToJson();
-        return new JsonObject { ["bands"] = b };
+        return new JsonObject { ["bands"] = b, ["softness"] = SettingsJson.V(Softness) };
     }
 
     public static ColorBandsSettings FromJson(JsonObject? c)
     {
-        var s = new ColorBandsSettings();
+        var s = new ColorBandsSettings { Softness = SettingsJson.F(c, "softness", 0) };
         var b = SettingsJson.Obj(c, "bands");
         if (b == null) return s;
         foreach (var kv in b)
@@ -438,7 +457,7 @@ public sealed partial class DenoiseSettings : IJsonSettings
     public JsonObject ToJson() => new()
     {
         ["method"] = SettingsJson.V(Method), ["amount"] = SettingsJson.V(Amount), ["layers"] = SettingsJson.V(Layers), ["search"] = SettingsJson.V(Search),
-        ["radius"] = SettingsJson.V(Radius), ["blockSearch"] = SettingsJson.V(BlockSearch), ["protectBright"] = SettingsJson.V(ProtectBright), ["color"] = SettingsJson.V(Color),
+        ["radius"] = SettingsJson.V(Radius), ["blockSearch"] = SettingsJson.V(BlockSearch), ["protectBright"] = SettingsJson.V(ProtectBright), ["color"] = SettingsJson.V(Color), ["hotPixels"] = SettingsJson.V(HotPixels),
     };
 
     public static DenoiseSettings FromJson(JsonObject? c)
@@ -448,7 +467,7 @@ public sealed partial class DenoiseSettings : IJsonSettings
         {
             Method = SettingsJson.E(c, "method", d.Method), Amount = SettingsJson.F(c, "amount", d.Amount), Layers = SettingsJson.I(c, "layers", d.Layers),
             Search = SettingsJson.I(c, "search", d.Search), Radius = SettingsJson.I(c, "radius", d.Radius), BlockSearch = SettingsJson.I(c, "blockSearch", d.BlockSearch),
-            ProtectBright = SettingsJson.F(c, "protectBright", d.ProtectBright), Color = SettingsJson.F(c, "color", d.Color),
+            ProtectBright = SettingsJson.F(c, "protectBright", d.ProtectBright), Color = SettingsJson.F(c, "color", d.Color), HotPixels = SettingsJson.F(c, "hotPixels", d.HotPixels),
         };
     }
 }
@@ -487,7 +506,7 @@ public sealed partial class CombineSettings : IJsonSettings
         {
             ["mode"] = SettingsJson.V(Mode), ["paletteID"] = SettingsJson.V(PaletteID), ["matrix"] = Matrix.ToJson(), ["pixelMath"] = PixelMath.ToJson(),
             ["channels"] = channels, ["normalization"] = Normalization.ToJson(), ["stretch"] = Stretch.ToJson(), ["stretchStage"] = SettingsJson.V(StretchStage),
-            ["luminance"] = Luminance.ToJson(), ["colorBands"] = ColorBands.ToJson(), ["post"] = Post.ToJson(), ["grading"] = Grading.ToJson(), ["detail"] = Detail.ToJson(),
+            ["luminance"] = Luminance.ToJson(), ["colorBands"] = ColorBands.ToJson(), ["post"] = Post.ToJson(), ["grading"] = Grading.ToJson(), ["tone"] = Tone.ToJson(), ["detail"] = Detail.ToJson(),
             ["denoise"] = Denoise.ToJson(), ["stars"] = Stars.ToJson(),
         };
         if (MonoChannels != null)
@@ -513,6 +532,7 @@ public sealed partial class CombineSettings : IJsonSettings
             Luminance = SettingsJson.Obj(c, "luminance") is JsonObject lo ? LuminanceSettings.FromJson(lo) : d.Luminance,
             Post = SettingsJson.Obj(c, "post") is JsonObject pso ? PostSettings.FromJson(pso) : d.Post,
             Grading = SettingsJson.Obj(c, "grading") is JsonObject gro ? ColorGradingSettings.FromJson(gro) : d.Grading,
+            Tone = SettingsJson.Obj(c, "tone") is JsonObject too ? ToneSettings.FromJson(too) : d.Tone,
             Stars = SettingsJson.Obj(c, "stars") is JsonObject sto ? StarsBlendSettings.FromJson(sto) : d.Stars,
             ColorBands = SettingsJson.Obj(c, "colorBands") is JsonObject cbo ? ColorBandsSettings.FromJson(cbo) : d.ColorBands,
             Detail = SettingsJson.Obj(c, "detail") is JsonObject deo ? DetailSettings.FromJson(deo) : d.Detail,
@@ -696,21 +716,15 @@ public sealed partial class ProjectDocument : IJsonSettings
 {
     public JsonObject ToJson()
     {
-        var channels = new JsonArray();
-        foreach (var ch in Channels)
-        {
-            var o = new JsonObject { ["kind"] = SettingsJson.V(ch.Kind), ["path"] = SettingsJson.V(ch.Path) };
-            if (ch.Bookmark != null) o["bookmark"] = SettingsJson.V(Convert.ToBase64String(ch.Bookmark));
-            channels.Add(o);
-        }
-        var presets = new JsonArray();
-        foreach (var p in Presets) presets.Add(p.ToJson());
+        var channels = ChannelsJson(Channels);
+        var presets = PresetsJson(Presets);
         var doc = new JsonObject
         {
             ["version"] = SettingsJson.V(Version), ["channels"] = channels, ["settings"] = Settings.ToJson(), ["presets"] = presets,
             ["rotation"] = SettingsJson.V(Rotation), ["flipped"] = SettingsJson.V(Flipped), ["dust"] = Dust.ToJson(), ["gradient"] = Gradient.ToJson(), ["corrections"] = Corrections.ToJson(),
         };
         if (StarsFile != null) doc["starsFile"] = SettingsJson.V(StarsFile);
+        if (StarsLayer != null) doc["starsLayer"] = StarsLayer.ToJson();
         if (Crop is PixelRect c) doc["crop"] = c.ToJson();
         return doc;
     }
@@ -729,14 +743,70 @@ public sealed partial class ProjectDocument : IJsonSettings
             Dust = SettingsJson.Obj(c, "dust") is JsonObject du ? DustSettings.FromJson(du) : d.Dust,
             Gradient = SettingsJson.Obj(c, "gradient") is JsonObject gr ? GradientSettings.FromJson(gr) : d.Gradient,
             Corrections = SettingsJson.Obj(c, "corrections") is JsonObject co ? CorrectionSettings.FromJson(co) : d.Corrections,
+            StarsLayer = SettingsJson.Obj(c, "starsLayer") is JsonObject sl ? LayerDocument.FromJson(sl) : null,
         };
+        doc.Channels = ReadChannels(c);
+        doc.Presets = ReadPresets(c);
+        return doc;
+    }
+
+    internal static JsonArray ChannelsJson(List<ChannelRef> list)
+    {
+        var channels = new JsonArray();
+        foreach (var ch in list)
+        {
+            var o = new JsonObject { ["kind"] = SettingsJson.V(ch.Kind), ["path"] = SettingsJson.V(ch.Path) };
+            if (ch.Bookmark != null) o["bookmark"] = SettingsJson.V(Convert.ToBase64String(ch.Bookmark));
+            channels.Add(o);
+        }
+        return channels;
+    }
+
+    internal static JsonArray PresetsJson(List<SettingsPreset> list)
+    {
+        var presets = new JsonArray();
+        foreach (var p in list) presets.Add(p.ToJson());
+        return presets;
+    }
+
+    internal static List<ChannelRef> ReadChannels(JsonObject? c)
+    {
+        var list = new List<ChannelRef>();
         if (SettingsJson.Arr(c, "channels") is JsonArray chs)
             foreach (var e in chs.OfType<JsonObject>())
                 if (ChannelKinds.FromRawValue(SettingsJson.S(e, "kind", "")) is ChannelKind k && SettingsJson.S(e, "path", "") is { Length: > 0 } path)
-                    doc.Channels.Add(new ChannelRef(k, path, SettingsJson.Bytes(e, "bookmark")));
+                    list.Add(new ChannelRef(k, path, SettingsJson.Bytes(e, "bookmark")));
+        return list;
+    }
+
+    internal static List<SettingsPreset> ReadPresets(JsonObject? c)
+    {
+        var list = new List<SettingsPreset>();
         if (SettingsJson.Arr(c, "presets") is JsonArray ps)
-            foreach (var e in ps.OfType<JsonObject>()) doc.Presets.Add(SettingsPreset.FromJson(e));
-        return doc;
+            foreach (var e in ps.OfType<JsonObject>()) list.Add(SettingsPreset.FromJson(e));
+        return list;
+    }
+}
+
+public sealed partial class LayerDocument : IJsonSettings
+{
+    public JsonObject ToJson() => new()
+    {
+        ["channels"] = ProjectDocument.ChannelsJson(Channels), ["settings"] = Settings.ToJson(), ["dust"] = Dust.ToJson(),
+        ["gradient"] = Gradient.ToJson(), ["corrections"] = Corrections.ToJson(), ["presets"] = ProjectDocument.PresetsJson(Presets),
+    };
+
+    public static LayerDocument FromJson(JsonObject? c)
+    {
+        var d = new LayerDocument();
+        return new LayerDocument
+        {
+            Channels = ProjectDocument.ReadChannels(c), Presets = ProjectDocument.ReadPresets(c),
+            Settings = SettingsJson.Obj(c, "settings") is JsonObject so ? CombineSettings.FromJson(so) : d.Settings,
+            Dust = SettingsJson.Obj(c, "dust") is JsonObject du ? DustSettings.FromJson(du) : d.Dust,
+            Gradient = SettingsJson.Obj(c, "gradient") is JsonObject gr ? GradientSettings.FromJson(gr) : d.Gradient,
+            Corrections = SettingsJson.Obj(c, "corrections") is JsonObject co ? CorrectionSettings.FromJson(co) : d.Corrections,
+        };
     }
 }
 

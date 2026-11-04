@@ -49,7 +49,7 @@ public static class Change
 {
     public const string Sources = "Sources", Settings = "Settings", Frame = "Frame", Thumbnails = "Thumbnails", SlotThumbnails = "SlotThumbnails",
         Status = "Status", Crop = "Crop", Dust = "Dust", Gradient = "Gradient", Presets = "Presets", RecentSets = "RecentSets", PaletteVisibility = "PaletteVisibility",
-        Pending = "Pending", Hover = "Hover", Context = "Context", Peek = "Peek", Error = "Error", Project = "Project", Stars = "Stars", Corrections = "Corrections";
+        Pending = "Pending", Hover = "Hover", Context = "Context", Peek = "Peek", Error = "Error", Project = "Project", Stars = "Stars", Corrections = "Corrections", Layer = "Layer";
 }
 
 /// <summary>
@@ -57,7 +57,7 @@ public static class Change
 /// thumbnails, presets and recent sets. Every member runs on the UI thread; background work comes
 /// back through the <see cref="IUiDispatcher"/>.
 /// </summary>
-public sealed class ProjectModel : INotifyPropertyChanged
+public sealed partial class ProjectModel : INotifyPropertyChanged
 {
     public event PropertyChangedEventHandler? PropertyChanged;
     /// <summary>Coarse change notification (see <see cref="Change"/>).</summary>
@@ -81,7 +81,16 @@ public sealed class ProjectModel : INotifyPropertyChanged
     public IReadOnlyDictionary<ChannelKind, ChannelSource> Sources => sources;
     public Size? ImageSize => sources.Values.FirstOrDefault() is ChannelSource s ? new Size(s.Width, s.Height) : null;
     /// <summary>Size a new file must have (the loaded size before the orientation is applied).</summary>
-    public Size? RequiredFileSize => ImageSize is Size sz ? (Orientation.SwapsAxes ? new Size(sz.Height, sz.Width) : sz) : null;
+    public Size? RequiredFileSize
+    {
+        get
+        {
+            // Both tabs hold images of one size: an empty tab takes the other's.
+            var s = sources.Values.FirstOrDefault() ?? inactiveLayer.Sources.Values.FirstOrDefault();
+            if (s == null) return null;
+            return Orientation.SwapsAxes ? new Size(s.Height, s.Width) : new Size(s.Width, s.Height);
+        }
+    }
     public HashSet<ChannelKind> AvailableKinds => sources.Keys.ToHashSet();
     readonly Dictionary<ChannelKind, BitmapSource> slotThumbnails = new();
     public IReadOnlyDictionary<ChannelKind, BitmapSource> SlotThumbnails => slotThumbnails;
@@ -98,7 +107,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
         {
             var old = settings;
             settings = value;
-            SettingsChanged(old);
+            if (!restoringLayer) SettingsChanged(old);
         }
     }
 
@@ -133,14 +142,37 @@ public sealed class ProjectModel : INotifyPropertyChanged
     public Orientation Orientation { get; private set; } = Orientation.Identity;
     public int Rotation => Orientation.Rotation;
 
-    // Stars layer
+    // Layers (Background / Stars tabs)
+    /// <summary>The tab shown: its channels, settings and caches are the model's live properties.</summary>
+    public ImageLayer ActiveLayer { get; private set; } = ImageLayer.Background;
+    /// <summary>The other tab, swapped in by <see cref="SwitchLayer"/>.</summary>
+    LayerState inactiveLayer = new();
+    public LayerState InactiveLayer => inactiveLayer;
+    /// <summary>Set while a tab's state is put back (no undo, no re-render per property).</summary>
+    bool restoringLayer;
+    /// <summary>Frames rendered for the tab left behind are dropped.</summary>
+    int minFrameGeneration;
+    /// <summary>
+    /// The Stars tab rendered at full resolution, blended by the Combine stars block of the
+    /// Background tab (processed: never stretched again). Oriented and sized like the channels.
+    /// </summary>
     StarsLayer? starsLayer;
-    /// <summary>An RGB image kept whole and blended as stars (oriented like the channels).</summary>
     public StarsLayer? StarsLayer => starsLayer;
-    /// <summary>Whether the RGB stars block has something to blend: a stars layer or R, G and B channels.</summary>
-    public bool HasStars => starsLayer != null || (sources.ContainsKey(ChannelKind.Red) && sources.ContainsKey(ChannelKind.Green) && sources.ContainsKey(ChannelKind.Blue));
-    /// <summary>Stars layer of a project being opened, loaded once the channels are in (size check).</summary>
-    string? pendingStarsFile;
+    StarsCompositeKey? starsCompositeKey;
+    int starsCompositeGeneration;
+    /// <summary>The Stars tab is being rendered for the combination.</summary>
+    public bool StarsCompositeBusy { get; private set; }
+    /// <summary>The Background tab rendered at full resolution (stars off), under the Stars tab's preview while the combination is on.</summary>
+    StarsLayer? backgroundImage;
+    StarsCompositeKey? backgroundCompositeKey;
+    int backgroundCompositeGeneration;
+    public bool BackgroundCompositeBusy { get; private set; }
+    /// <summary>Run once the channels being added are in (a project's Stars tab, the stars from StarNet2).</summary>
+    readonly List<Action> afterChannelsLoaded = new();
+    /// <summary>Whether the Combine stars block has something to blend: channels on the Stars tab.</summary>
+    public bool HasStars => LayerSources(ImageLayer.Stars).Count > 0;
+    /// <summary>Path length since the last brush dab (even dab spacing across mouse events).</summary>
+    double strokeCarry;
 
     // Manual corrections
     /// <summary>Strength per channel and brush defaults (stored in the project).</summary>
@@ -352,6 +384,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
         paletteFilter = prefs.GetString("paletteFilter") == "all" ? PaletteFilter.All : PaletteFilter.Favorites;
         renderer.OnFrame = (frame, gen) => ui.Post(() =>
         {
+            if (gen < minFrameGeneration) return;
             Frame = frame;
             IsRendering = gen != renderGeneration;
             RenderError = null;
@@ -454,6 +487,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
         s.Normalization.Method = NormalizationMethod.None;
         s.Luminance.Enabled = false;
         s.Post = new PostSettings();
+        s.Tone = new ToneSettings();
         s.Grading = new ColorGradingSettings();
         s.Detail = new DetailSettings();
         s.Denoise = new DenoiseSettings();
@@ -522,41 +556,42 @@ public sealed class ProjectModel : INotifyPropertyChanged
         Notify(Change.Pending);
     }
 
-    /// <summary>Keeps a colour file whole as the stars layer (blended on top; the channels stay as they are).</summary>
+    /// <summary>
+    /// Puts a colour file on the Stars tab as R, G and B without showing that tab (the Background
+    /// channels stay as they are); the Combine stars block blends it.
+    /// </summary>
     public void AssignColorFileAsStars(PendingFile pending)
     {
         PendingColorFile = null;
-        SetStarsLayer(pending.File);
+        LoadStarsLayer(pending.File);
     }
 
-    /// <summary>Sets the stars layer from a colour file (oriented like the channels; the size must match the loaded channels).</summary>
-    public void SetStarsLayer(LoadedFile f)
+    /// <summary>
+    /// The Stars tab from one file: a colour file gives R, G and B, a grey one L. Already-stretched
+    /// star images are detected (no stretch on the Stars tab then). The combination is switched on.
+    /// </summary>
+    public void LoadStarsLayer(LoadedFile f)
     {
-        if (f.Planes.Count < 3) { ErrorMessage = $"{f.FileName} is not a colour image."; return; }
         if (RequiredFileSize is Size sz && ((int)sz.Width != f.Width || (int)sz.Height != f.Height))
         {
             ErrorMessage = $"{f.FileName}: {f.Width}×{f.Height} does not match the loaded channels ({(int)sz.Width}×{(int)sz.Height}).";
             return;
         }
-        var orient = Orientation;
-        IsLoading = true;
-        LoadingMessage = "Analysing stars layer…";
-        Task.Run(() =>
+        List<ChannelItem> items = f.IsColor
+            ? new[] { ChannelKind.Red, ChannelKind.Green, ChannelKind.Blue }.Select((k, i) => new ChannelItem(k, f.Planes[i], f.FileName, f.Path, f.FormatDescription)).ToList()
+            : [new ChannelItem(ChannelKind.Luminance, f.Planes[0], f.FileName, f.Path, f.FormatDescription)];
+        if (ActiveLayer == ImageLayer.Stars) { AddChannels(items); return; }
+        // The file replaces whatever the Stars tab held.
+        if (!inactiveLayer.IsEmpty)
         {
-            var layer = new StarsLayer(f.Planes.Take(3).Select(p => orient.Apply(p)).ToList(), f.FileName, f.Path, f.FormatDescription);
-            ui.Post(() =>
-            {
-                starsLayer = layer;
-                var s = settings.Clone(); bool changed = false;
-                if (!s.Stars.Enabled) { s.Stars.Enabled = true; changed = true; }
-                if (s.Stars.UseMask && f.FileName.Contains("star", StringComparison.OrdinalIgnoreCase)) { s.Stars.UseMask = false; changed = true; }
-                IsLoading = false;
-                if (changed) Settings = s;
-                Notify(Change.Stars); Notify(Change.Sources);
-                ScheduleRender();
-                ScheduleThumbnails(TimeSpan.FromSeconds(0.3));
-                ScheduleRecentStateSave();
-            });
+            inactiveLayer = new LayerState();
+            starsLayer = null; starsCompositeKey = null; starsCompositeGeneration++; StarsCompositeBusy = false;
+        }
+        LoadIntoLayer(ImageLayer.Stars, items, completion: () =>
+        {
+            if (ActiveLayer != ImageLayer.Background) return;
+            if (!settings.Stars.Enabled) UpdateSettings(s => s.Stars.Enabled = true);
+            UpdateStarsComposite();
         });
     }
 
@@ -569,24 +604,26 @@ public sealed class ProjectModel : INotifyPropertyChanged
             try
             {
                 var f = ImageLoader.Load(path);
-                ui.Post(() =>
-                {
-                    IsLoading = false;
-                    if (f.IsColor) SetStarsLayer(f); else ErrorMessage = $"{f.FileName} is not a colour image (a stars layer needs R, G and B).";
-                });
+                ui.Post(() => { IsLoading = false; LoadStarsLayer(f); });
             }
             catch (Exception e) { ui.Post(() => { IsLoading = false; ErrorMessage = e.Message; }); }
         });
     }
 
+    /// <summary>Empties the Stars tab (from the Background tab).</summary>
     public void RemoveStarsLayer()
     {
-        if (starsLayer == null) return;
-        starsLayer = null;
-        if (!HasStars && settings.Stars.Enabled) UpdateSettings(s => s.Stars.Enabled = false);
-        Notify(Change.Stars); Notify(Change.Sources);
-        ScheduleRender();
-        ScheduleThumbnails(TimeSpan.FromSeconds(0.3));
+        if (ActiveLayer == ImageLayer.Stars)
+        {
+            foreach (var k in sources.Keys.ToList()) RemoveChannel(k);
+            return;
+        }
+        if (inactiveLayer.IsEmpty && starsLayer == null) return;
+        inactiveLayer = new LayerState();
+        starsLayer = null; starsCompositeKey = null; starsCompositeGeneration++; StarsCompositeBusy = false;
+        if (settings.Stars.Enabled) UpdateSettings(s => s.Stars.Enabled = false);
+        else { ScheduleRender(); ScheduleThumbnails(TimeSpan.FromSeconds(0.3)); }
+        Notify(Change.Stars); Notify(Change.Layer);
         ScheduleRecentStateSave();
     }
 
@@ -607,46 +644,85 @@ public sealed class ProjectModel : INotifyPropertyChanged
         IsLoading = true;
         LoadingMessage = $"Analysing {string.Join(", ", items.Select(i => i.Kind.ShortName()))}…";
         var cropNow = crop; var orient = Orientation; var dust = Dust.Clone(); var gradient = Gradient.Clone(); var corr = Corrections.Clone();
+        var layer = ActiveLayer;
         Task.Run(() =>
         {
-            var built = new ChannelSource[items.Count];
-            var originals = new PlanarImage[items.Count];
-            var maps = new CorrectionMap?[items.Count];
-            Parallel.For(0, items.Count, i =>
-            {
-                var it = items[i];
-                var oriented = orient.Apply(it.Plane);
-                // A stored correction map (sidecar) comes in the file's orientation.
-                CorrectionMap? map = null;
-                if (it.Path != null && CorrectionMap.Read(it.Path, it.Kind, it.Plane.Width, it.Plane.Height) is CorrectionMap stored)
-                {
-                    var m = stored;
-                    if (orient.Flipped) m = m.Applying(OrientationOp.FlipHorizontal);
-                    for (int r = 0; r < orient.Rotation; r++) m = m.Applying(OrientationOp.RotateClockwise);
-                    map = m;
-                }
-                var healed = Process(oriented, it.Kind, dust, gradient, map == null ? null : (map, (float)corr.StrengthFor(it.Kind)));
-                built[i] = new ChannelSource(it.Kind, healed, it.FileName, it.Path, it.Format);
-                originals[i] = oriented;
-                maps[i] = map;
-            });
-            var cropped = built.Select(b => cropNow == null ? b : new ChannelSource(b, cropNow)).ToArray();
-            var thumbs = cropped.Select(c => (c.Kind, SlotThumbnail(c))).ToArray();
+            var built = BuildChannels(items, cropNow, orient, dust, gradient, corr);
             ui.Post(() =>
             {
-                for (int i = 0; i < built.Length; i++)
+                // Tabs cannot be switched while loading; should it happen anyway, the channels go to their tab.
+                if (layer != ActiveLayer)
                 {
-                    baseSources[built[i].Kind] = built[i]; sources[cropped[i].Kind] = cropped[i]; originalImages[built[i].Kind] = originals[i];
-                    if (maps[i] is CorrectionMap m) correctionMaps[built[i].Kind] = m; else correctionMaps.Remove(built[i].Kind);
+                    IsLoading = false;
+                    StoreInactive(built, layer, null, true);
+                    return;
                 }
-                foreach (var (k, t) in thumbs) slotThumbnails[k] = t;
+                bool wasEmpty = baseSources.Count == 0;
+                for (int i = 0; i < built.Base.Count; i++)
+                {
+                    var b = built.Base[i];
+                    baseSources[b.Kind] = b; sources[b.Kind] = built.Cropped[i]; originalImages[b.Kind] = built.Originals[i];
+                    if (built.Maps.TryGetValue(b.Kind, out var m)) correctionMaps[b.Kind] = m; else correctionMaps.Remove(b.Kind);
+                }
+                foreach (var (k, t) in built.Thumbs) slotThumbnails[k] = t;
+                // First channels on the Stars tab: settings suited to star images.
+                if (wasEmpty && layer == ImageLayer.Stars)
+                {
+                    restoringLayer = true;
+                    settings = StarsLayerDefaults(inactiveLayer.Settings, sources.Keys.ToHashSet(), LooksLikeStretchedStars(sources.Values));
+                    restoringLayer = false;
+                    inactiveLayer.Settings.Stars.UseMask = false;
+                    Notify(Change.Settings);
+                }
                 IsLoading = false;
-                Notify(Change.SlotThumbnails); Notify(Change.Corrections);
+                Notify(Change.SlotThumbnails); Notify(Change.Corrections); Notify(Change.Layer);
                 SourcesChanged();
                 OpenEditorFromLaunchArgument();
-                if (pendingStarsFile is string sp) { pendingStarsFile = null; LoadStarsLayer(sp); }
+                var after = afterChannelsLoaded.ToList();
+                afterChannelsLoaded.Clear();
+                foreach (var a in after) a();
             });
         });
+    }
+
+    /// <summary>Channels built from loaded planes: oriented, healed / corrected, analysed, cropped, thumbnailed.</summary>
+    public sealed class BuiltChannels
+    {
+        public List<ChannelSource> Base = new();
+        public List<ChannelSource> Cropped = new();
+        public List<PlanarImage> Originals = new();
+        public Dictionary<ChannelKind, CorrectionMap> Maps = new();
+        public List<(ChannelKind kind, BitmapSource thumb)> Thumbs = new();
+    }
+
+    public static BuiltChannels BuildChannels(IReadOnlyList<ChannelItem> items, PixelRect? cropNow, Orientation orient, DustSettings dust, GradientSettings gradient, CorrectionSettings corr)
+    {
+        var built = new ChannelSource[items.Count];
+        var originals = new PlanarImage[items.Count];
+        var maps = new CorrectionMap?[items.Count];
+        Parallel.For(0, items.Count, i =>
+        {
+            var it = items[i];
+            var oriented = orient.Apply(it.Plane);
+            // A stored correction map (sidecar) comes in the orientation of the file.
+            CorrectionMap? map = null;
+            if (it.Path != null && CorrectionMap.Read(it.Path, it.Kind, it.Plane.Width, it.Plane.Height) is CorrectionMap stored)
+            {
+                var m = stored;
+                if (orient.Flipped) m = m.Applying(OrientationOp.FlipHorizontal);
+                for (int r = 0; r < orient.Rotation; r++) m = m.Applying(OrientationOp.RotateClockwise);
+                map = m;
+            }
+            var healed = Process(oriented, it.Kind, dust, gradient, map == null ? null : (map, (float)corr.StrengthFor(it.Kind)));
+            built[i] = new ChannelSource(it.Kind, healed, it.FileName, it.Path, it.Format);
+            originals[i] = oriented;
+            maps[i] = map;
+        });
+        var o = new BuiltChannels { Base = built.ToList(), Originals = originals.ToList() };
+        o.Cropped = built.Select(b => cropNow == null ? b : new ChannelSource(b, cropNow)).ToList();
+        o.Thumbs = o.Cropped.Select(c => (c.Kind, SlotThumbnail(c))).ToList();
+        for (int i = 0; i < items.Count; i++) if (maps[i] is CorrectionMap m) o.Maps[built[i].Kind] = m;
+        return o;
     }
 
     /// <summary>Grayscale strip thumbnail of a source (cropped to its region when a crop is set).</summary>
@@ -669,20 +745,38 @@ public sealed class ProjectModel : INotifyPropertyChanged
         if (GradientEditing == kind) { GradientEditing = null; gradientDraft = null; GradientFit = null; gradientHealed = null; Notify(Change.Gradient); }
         correctionMaps.Remove(kind); Corrections.Strength.Remove(kind);
         if (CorrectionEditing == kind) { CorrectionEditing = null; CorrectionDraft = null; correctionUndo.Clear(); Notify(Change.Corrections); }
-        if (sources.Count == 0) { Frame = null; crop = null; cropDraft = null; cropEditing = false; Notify(Change.Crop); Notify(Change.Frame); }
-        Notify(Change.SlotThumbnails);
+        if (sources.Count == 0)
+        {
+            Frame = null; Histogram = new();
+            // Crop and orientation are shared: they go only when both tabs are empty.
+            if (inactiveLayer.IsEmpty) { crop = null; cropDraft = null; cropEditing = false; Notify(Change.Crop); }
+            Notify(Change.Frame);
+        }
+        Notify(Change.SlotThumbnails); Notify(Change.Layer);
         SourcesChanged();
+        if (ActiveLayer == ImageLayer.Stars) ScheduleRecentStateSave();
     }
 
     public void RemoveAll()
     {
+        // Both tabs go; the Background tab is shown again.
+        if (ActiveLayer != ImageLayer.Background)
+        {
+            RestoreLayer(inactiveLayer);
+            ActiveLayer = ImageLayer.Background;
+            renderGeneration++; minFrameGeneration = renderGeneration;
+        }
+        inactiveLayer = new LayerState();
+        starsCompositeKey = null; starsCompositeGeneration++; StarsCompositeBusy = false;
+        backgroundImage = null; backgroundCompositeKey = null; backgroundCompositeGeneration++; BackgroundCompositeBusy = false;
+        afterChannelsLoaded.Clear();
         baseSources.Clear(); sources.Clear(); slotThumbnails.Clear(); Frame = null; thumbnails.Clear();
         crop = null; cropDraft = null; cropEditing = false; Orientation = Orientation.Identity;
         originalImages.Clear(); Dust = new DustSettings(); dustDraft = null; DustEditing = null; dustPreviewed.Clear();
         Gradient = new GradientSettings(); gradientDraft = null; GradientEditing = null; gradientPreviewed.Clear(); GradientFit = null; gradientHealed = null;
-        starsLayer = null; pendingStarsFile = null;
+        starsLayer = null;
         Corrections = new CorrectionSettings(); correctionMaps.Clear(); CorrectionEditing = null; CorrectionDraft = null; correctionUndo.Clear();
-        Notify(Change.Crop); Notify(Change.Dust); Notify(Change.Gradient); Notify(Change.Frame); Notify(Change.SlotThumbnails); Notify(Change.Thumbnails); Notify(Change.Stars); Notify(Change.Corrections);
+        Notify(Change.Crop); Notify(Change.Dust); Notify(Change.Gradient); Notify(Change.Frame); Notify(Change.SlotThumbnails); Notify(Change.Thumbnails); Notify(Change.Stars); Notify(Change.Corrections); Notify(Change.Layer);
         SourcesChanged();
     }
 
@@ -695,7 +789,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
     /// <summary>Rotates or mirrors every channel (and the crop); statistics and star masks are rebuilt.</summary>
     public void Transform(OrientationOp op)
     {
-        if (baseSources.Count == 0 || IsLoading) return;
+        if (baseSources.Count == 0 || IsLoading || EditingTool != null) return;
         var baseCopy = new Dictionary<ChannelKind, ChannelSource>(baseSources);
         var first = baseCopy.Values.First();
         int w = first.Width, h = first.Height;
@@ -726,6 +820,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
         }
         var maps = new Dictionary<ChannelKind, CorrectionMap>(correctionMaps); var corr = Corrections.Clone();
         var stars = starsLayer;
+        var other = inactiveLayer;
         IsLoading = true;
         LoadingMessage = op == OrientationOp.RotateClockwise ? "Rotating…" : "Flipping…";
         Frame = null;
@@ -733,6 +828,8 @@ public sealed class ProjectModel : INotifyPropertyChanged
         Task.Run(() =>
         {
             var newStars = stars?.Applying(op);
+            // The other tab turns with this one (crop and orientation are shared).
+            var newOther = other.IsEmpty ? other : Reoriented(other, op, w, h, newCrop);
             var kinds = baseCopy.Keys.ToArray();
             var newBase = new ChannelSource[kinds.Length]; var newCur = new ChannelSource[kinds.Length]; var newOrig = new PlanarImage[kinds.Length];
             Parallel.For(0, kinds.Length, i =>
@@ -752,6 +849,10 @@ public sealed class ProjectModel : INotifyPropertyChanged
                 baseSources.Clear(); sources.Clear(); originalImages.Clear();
                 for (int i = 0; i < kinds.Length; i++) { baseSources[kinds[i]] = newBase[i]; sources[kinds[i]] = newCur[i]; originalImages[kinds[i]] = newOrig[i]; }
                 starsLayer = newStars;
+                if (starsCompositeKey is StarsCompositeKey key && newStars != null)
+                    starsCompositeKey = new StarsCompositeKey(SourceIds(newOther.BaseSources), key.Settings, newCrop, Orientation);
+                inactiveLayer = newOther;
+                backgroundImage = null; backgroundCompositeKey = null;
                 foreach (var (k, t) in thumbs) slotThumbnails[k] = t;
                 IsLoading = false;
                 postStretchCache.Clear();
@@ -762,6 +863,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
                 RebuildContext();
                 RequestFit();
                 ScheduleRecentStateSave();
+                UpdateComposites();
             });
         });
     }
@@ -833,7 +935,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
         {
             Context = null; AnalysisSamples = new(); thumbnails.Clear();
             renderer.ClearCache();
-            StatusText = "Drop FITS or TIFF images to begin.";
+            StatusText = ActiveLayer == ImageLayer.Stars ? EmptyStarsText : "Drop FITS or TIFF images to begin.";
             Notify(Change.Thumbnails); Notify(Change.Context);
             return;
         }
@@ -858,10 +960,12 @@ public sealed class ProjectModel : INotifyPropertyChanged
 
     void RecordRecentSet()
     {
-        if (suppressRecent || IsLoading || sources.Count == 0) return;
-        var entries = sources.Values.Where(s => s.Path != null).Select(s => new RecentSet.Entry(s.Kind, s.Path!)).ToList();
+        // A set is the Background tab's files; the Stars tab is part of its saved state.
+        var bg = BackgroundSources;
+        if (suppressRecent || IsLoading || bg.Count == 0) return;
+        var entries = bg.Values.Where(s => s.Path != null).Select(s => new RecentSet.Entry(s.Kind, s.Path!)).ToList();
         // Only complete sets (every channel backed by a file) are remembered.
-        if (entries.Count != sources.Count) return;
+        if (entries.Count != bg.Count) return;
         RecentSets = recentStore.Record(entries);
         Notify(Change.RecentSets);
         SaveRecentState();
@@ -911,10 +1015,11 @@ public sealed class ProjectModel : INotifyPropertyChanged
     public void SaveRecentState()
     {
         stateSaveTimer?.Dispose(); stateSaveTimer = null;
-        if (suppressRecent || IsLoading || sources.Count == 0) return;
+        var bg = BackgroundSources;
+        if (suppressRecent || IsLoading || bg.Count == 0) return;
         // Only complete sets (every channel backed by a file; a split colour file backs three).
-        if (sources.Values.Any(s => s.Path == null)) return;
-        var paths = sources.Values.Select(s => s.Path!).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (bg.Values.Any(s => s.Path == null)) return;
+        var paths = bg.Values.Select(s => s.Path!).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var doc = ProjectDocument();
         doc.Channels = new();
         RecentSets = recentStore.UpdateState(paths, doc);
@@ -953,7 +1058,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
                     presetThumbnailCache.Clear();
                     Notify(Change.Presets); Notify(Change.Dust); Notify(Change.Gradient); Notify(Change.Corrections);
                 }
-                if (set.State?.StarsFile is string sf) pendingStarsFile = sf;
+                if (set.State is ProjectDocument st2) RestoreStarsAfterLoading(st2);
                 AddChannels(items);
             });
         });
@@ -987,13 +1092,14 @@ public sealed class ProjectModel : INotifyPropertyChanged
                 Notify(Change.SlotThumbnails); Notify(Change.Sources);
                 RebuildContext();
                 RequestFit();
+                UpdateComposites();
             });
         });
     }
 
     public void AutoCrop()
     {
-        if (sources.Count == 0) return;
+        if (sources.Count == 0 || EditingTool != null) return;
         IsLoading = true; LoadingMessage = "Detecting empty borders…";
         var images = sources.Values.Select(s => s.Image).ToList();
         Task.Run(() =>
@@ -1014,6 +1120,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
 
     public void BeginCropEditing()
     {
+        if (EditingTool != null) return;
         if (DustEditing != null) CancelDustEditing();
         if (GradientEditing != null) CancelGradientEditing();
         CropDraft = crop ?? (ImageSize is Size s ? new PixelRect((int)(s.Width * 0.1), (int)(s.Height * 0.1), (int)(s.Width * 0.8), (int)(s.Height * 0.8)) : null);
@@ -1030,7 +1137,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
     /// <summary>Keeps a draft around (the fields are hidden anyway) so bindings created while editing stay valid.</summary>
     public void CancelCropEditing() { CropEditing = false; CropDraft = crop ?? cropDraft; }
 
-    public void ClearCrop() { Crop = null; CropDraft = null; CropEditing = false; }
+    public void ClearCrop() { if (EditingTool != null) return; Crop = null; CropDraft = null; CropEditing = false; }
 
     // ---- Context / rendering ---------------------------------------------------------------------
 
@@ -1053,8 +1160,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
                 Notify(Change.Context);
                 ScheduleRender();
                 ScheduleThumbnails(TimeSpan.FromSeconds(0.05));
-                var any = srcs.Values.First();
-                StatusText = $"{srcs.Count} channel{(srcs.Count == 1 ? "" : "s")} loaded · {any.Width} × {any.Height}" + (statusHint != null ? " · " + statusHint : "");
+                StatusText = LoadedStatusText();
             });
         });
     }
@@ -1064,6 +1170,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
         if (settings.Equals(old)) return;
         RegisterUndo(old);
         Notify(Change.Settings);
+        if (ActiveLayer == ImageLayer.Background && settings.Stars.Enabled && !old.Stars.Enabled) UpdateStarsComposite();
         if (!settings.Normalization.Equals(old.Normalization))
         {
             RebuildContext();
@@ -1089,13 +1196,15 @@ public sealed class ProjectModel : INotifyPropertyChanged
 
     public Rect FullRect => ImageSize is Size s ? new Rect(0, 0, s.Width, s.Height) : Rect.Empty;
 
-    string PostStretchKey(CombineSettings s)
+    string PostStretchKey(CombineSettings s) => PostStretchKey(s, crop, AvailableKinds);
+
+    static string PostStretchKey(CombineSettings s, PixelRect? crop, IEnumerable<ChannelKind> kinds)
     {
         var k = new CombineSettings
         {
             Normalization = s.Normalization, Channels = s.Channels, Mode = s.Mode, Matrix = s.Matrix, PixelMath = s.PixelMath, Stretch = s.Stretch, StretchStage = s.StretchStage,
         };
-        return SettingsJson.Canonical(k) + "|" + (crop?.ToString() ?? "-") + "|" + string.Join(",", AvailableKinds.SortedByRaw().Select(x => x.RawValue()));
+        return SettingsJson.Canonical(k) + "|" + (crop?.ToString() ?? "-") + "|" + string.Join(",", kinds.ToHashSet().SortedByRaw().Select(x => x.RawValue()));
     }
 
     public void ScheduleRender()
@@ -1104,6 +1213,9 @@ public sealed class ProjectModel : INotifyPropertyChanged
         renderGeneration++;
         IsRendering = true;
         var shown = DisplayedSettings;
+        // Stars are blended on the Background tab only, from the rendered Stars tab (never from R, G, B channels).
+        var blend = BlendStars;
+        if (blend == null && shown.Stars.Enabled) { shown = shown.Clone(); shown.Stars.Enabled = false; }
         var srcs = new Dictionary<ChannelKind, ChannelSource>(sources);
         Rect? visible = viewport.VisibleRect.IsEmpty || viewport.VisibleRect.Width <= 0 ? null : viewport.VisibleRect;
         int budget = HighQualityPreview ? 12_000_000 : 3_000_000;
@@ -1117,11 +1229,15 @@ public sealed class ProjectModel : INotifyPropertyChanged
         {
             // Different normalisation than the live context: render with a context of its own.
             var snapshotCtx = RenderContext.Make(shown.Normalization, srcs);
-            renderer.Submit(new PreviewRequest { Sources = srcs, Settings = shown, Context = snapshotCtx, AnalysisSamples = AnalysisSamples, FixedPostStretch = null, VisibleRect = visible, Scale = viewport.Scale, PixelBudget = budget, Generation = renderGeneration, Stars = starsLayer, Correction = correction });
+            renderer.Submit(new PreviewRequest { Sources = srcs, Settings = shown, Context = snapshotCtx, AnalysisSamples = AnalysisSamples, FixedPostStretch = null, VisibleRect = visible, Scale = viewport.Scale, PixelBudget = budget, Generation = renderGeneration, Stars = blend, Correction = correction });
             return;
         }
         List<ResolvedStretch>? fixedStretch = shown.StretchStage == StretchStage.PostCombine && postStretchCache.TryGetValue(PostStretchKey(shown), out var ps) ? ps : null;
-        renderer.Submit(new PreviewRequest { Sources = srcs, Settings = shown, Context = ctx, AnalysisSamples = AnalysisSamples, FixedPostStretch = fixedStretch, VisibleRect = visible, Scale = viewport.Scale, PixelBudget = budget, Generation = renderGeneration, Stars = starsLayer, Correction = correction });
+        StarsLayer? overlay = null; CombineSettings? overlaySettings = null;
+        if (ActiveLayer == ImageLayer.Stars && PeekChannel == null && EditingChannel == null && backgroundImage != null
+            && inactiveLayer.Settings.Stars.Enabled && Equals(backgroundCompositeKey, CurrentBackgroundCompositeKey()))
+        { overlay = backgroundImage; overlaySettings = inactiveLayer.Settings.Clone(); }
+        renderer.Submit(new PreviewRequest { Sources = srcs, Settings = shown, Context = ctx, AnalysisSamples = AnalysisSamples, FixedPostStretch = fixedStretch, VisibleRect = visible, Scale = viewport.Scale, PixelBudget = budget, Generation = renderGeneration, Stars = blend, Correction = correction, Background = overlay, BackgroundSettings = overlaySettings });
     }
 
     public void ScheduleThumbnails(TimeSpan delay)
@@ -1141,8 +1257,8 @@ public sealed class ProjectModel : INotifyPropertyChanged
         };
         thumbnailGeneration = thumbnailer.Submit(new ThumbnailCoordinator.Job
         {
-            Palettes = Palettes.Available(AvailableKinds), Sources = new Dictionary<ChannelKind, ChannelSource>(sources), Settings = settings.Clone(), Context = ctx,
-            AnalysisSamples = AnalysisSamples, Region = region, MaxPixels = 90_000, Stars = starsLayer,
+            Palettes = Palettes.Available(AvailableKinds), Sources = new Dictionary<ChannelKind, ChannelSource>(sources), Settings = ThumbnailSettings(), Context = ctx,
+            AnalysisSamples = AnalysisSamples, Region = region, MaxPixels = 90_000, Stars = BlendStars,
         });
     }
 
@@ -1222,6 +1338,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
         {
             s.Stretch.Method = StretchMethod.None;
             s.Post = new PostSettings();
+            s.Tone = new ToneSettings();
             s.Grading = new ColorGradingSettings();
             s.ColorBands = new ColorBandsSettings();
             s.Detail = new DetailSettings();
@@ -1229,12 +1346,21 @@ public sealed class ProjectModel : INotifyPropertyChanged
             s.Stars.Enabled = false;
         }
         postStretchCache.TryGetValue(PostStretchKey(s), out var fixedStretch);
-        var srcs = new Dictionary<ChannelKind, ChannelSource>(sources); var cropNow = crop; var stars = starsLayer;
+        // The Background tab blends the rendered Stars tab (rendered now when the cached one is stale).
+        if (BlendStars == null && !(ActiveLayer == ImageLayer.Background && HasStars)) s.Stars.Enabled = false;
+        var currentKey = CurrentStarsCompositeKey();
+        var cached = starsCompositeKey != null && Equals(starsCompositeKey, currentKey) ? starsLayer : null;
+        bool needStars = s.Stars.Enabled && cached == null;
+        var other = inactiveLayer; var starsSettings = currentKey?.Settings;
+        var srcs = new Dictionary<ChannelKind, ChannelSource>(sources); var cropNow = crop;
         ExportProgress = 0; Notify(Change.Status);
         Task.Run(() =>
         {
             try
             {
+                var stars = cached;
+                if (needStars && starsSettings != null) stars = RenderStars(other, starsSettings, cropNow);
+                if (stars == null) s.Stars.Enabled = false;
                 var img = Renderer.RenderFull(srcs, s, ctx, fixedStretch, cropNow, progress: p => ui.Post(() => { ExportProgress = p * 0.9; Notify(Change.Status); }), stars: stars);
                 if (img == null) { ui.Post(() => { ExportProgress = null; Notify(Change.Status); completion(null); }); return; }
                 RasterWriter.Write(img.Planes, path, format);
@@ -1259,8 +1385,20 @@ public sealed class ProjectModel : INotifyPropertyChanged
 
     public ProjectDocument ProjectDocument()
     {
-        var doc = new ProjectDocument { Settings = settings.Clone(), Crop = crop, Orientation = Orientation, Dust = Dust.Clone(), Gradient = Gradient.Clone(), Corrections = Corrections.Clone(), Presets = Presets.Select(p => p.Clone()).ToList(), StarsFile = starsLayer?.Path };
-        doc.Channels = sources.Values.OrderBy(s => s.Kind.RawValue(), StringComparer.Ordinal).Where(s => s.Path != null).Select(s => new ProjectDocument.ChannelRef(s.Kind, s.Path!)).ToList();
+        var bg = LayerStateOf(ImageLayer.Background); var st = LayerStateOf(ImageLayer.Stars);
+        static List<ProjectDocument.ChannelRef> Refs(Dictionary<ChannelKind, ChannelSource> srcs)
+            => srcs.Values.OrderBy(s => s.Kind.RawValue(), StringComparer.Ordinal).Where(s => s.Path != null).Select(s => new ProjectDocument.ChannelRef(s.Kind, s.Path!)).ToList();
+        var doc = new ProjectDocument
+        {
+            Settings = bg.Settings.Clone(), Crop = crop, Orientation = Orientation, Dust = bg.Dust.Clone(), Gradient = bg.Gradient.Clone(), Corrections = bg.Corrections.Clone(),
+            Presets = bg.Presets.Select(p => p.Clone()).ToList(), Channels = Refs(bg.Sources),
+        };
+        if (!st.IsEmpty)
+            doc.StarsLayer = new LayerDocument
+            {
+                Channels = Refs(st.Sources), Settings = st.Settings.Clone(), Dust = st.Dust.Clone(), Gradient = st.Gradient.Clone(),
+                Corrections = st.Corrections.Clone(), Presets = st.Presets.Select(p => p.Clone()).ToList(),
+            };
         return doc;
     }
 
@@ -1288,7 +1426,6 @@ public sealed class ProjectModel : INotifyPropertyChanged
         Dust = doc.Dust.Clone();
         Gradient = doc.Gradient.Clone();
         Corrections = doc.Corrections.Clone();
-        pendingStarsFile = doc.StarsFile;
         Notify(Change.Dust); Notify(Change.Gradient); Notify(Change.Corrections);
         if (refs.Count == 0) { Settings = doc.Settings.Clone(); Crop = doc.Crop; return; }
         IsLoading = true;
@@ -1301,6 +1438,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
                 if (errors.Count > 0) ErrorMessage = string.Join("\n", errors);
                 Settings = doc.Settings.Clone();
                 Crop = doc.Crop;
+                RestoreStarsAfterLoading(doc);
                 AddChannels(items);
             });
         });
@@ -1740,7 +1878,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
     {
         if (CorrectionEditing == null || CorrectionDraft is not CorrectionMap d) return;
         float sign = (Corrections.Darken != invert) ? -1 : 1;
-        d.Stroke(a.X, a.Y, b.X, b.Y, CorrectionBrushRadius, sign * (float)Corrections.BrushFlow, (float)(1 - Corrections.BrushFeather));
+        d.Stroke(a.X, a.Y, b.X, b.Y, CorrectionBrushRadius, sign * (float)Corrections.BrushFlow, (float)(1 - Corrections.BrushFeather), ref strokeCarry);
         CorrectionVersion++;
         Notify(Change.Corrections);
         ScheduleRender();
@@ -1749,6 +1887,7 @@ public sealed class ProjectModel : INotifyPropertyChanged
     /// <summary>Start of a stroke: the undo snapshot.</summary>
     public void BeginCorrectionStroke()
     {
+        strokeCarry = CorrectionMap.StrokeStart(CorrectionBrushRadius);
         if (CorrectionDraft is not CorrectionMap d) return;
         correctionUndo.Add(d.Copy());
         if (correctionUndo.Count > 24) correctionUndo.RemoveAt(0);
@@ -2157,8 +2296,19 @@ public sealed class ProjectModel : INotifyPropertyChanged
     }
 
     /// <summary>Developer switch for screenshots: <c>--open-editor gradient:Ha[:background]</c> (or <c>dust:Ha</c>) opens that editor once the channel is loaded.</summary>
+    /// <summary>Developer switch: the tab to show once both tabs are loaded (screenshots).</summary>
+    public ImageLayer? LaunchLayer;
+
+    void SwitchToLaunchLayer(int tries) => ui.Delay(TimeSpan.FromSeconds(2), () =>
+    {
+        if (LaunchLayer is not ImageLayer target || target == ActiveLayer) return;
+        if (!inactiveLayer.IsEmpty && CanSwitchLayer) { LaunchLayer = null; SwitchLayer(target); }
+        else if (tries > 0) SwitchToLaunchLayer(tries - 1);
+    });
+
     void OpenEditorFromLaunchArgument()
     {
+        if (LaunchLayer != null && LaunchLayer != ActiveLayer) SwitchToLaunchLayer(20);
         if (launchEditorOpened || LaunchEditor is not string v) return;
         var parts = v.Split(':');
         if (parts.Length < 2 || (ChannelKinds.FromRawValue(parts[1]) ?? ChannelKinds.FromPixelMathIdentifier(parts[1])) is not ChannelKind k || !sources.ContainsKey(k)) return;

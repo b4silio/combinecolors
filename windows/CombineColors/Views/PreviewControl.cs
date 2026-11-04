@@ -201,6 +201,20 @@ public sealed class PreviewControl : FrameworkElement
 
     public bool IsActualSize => Math.Abs(Zoom * Backing - 1) < 0.01;
 
+    /// <summary>The zoom of "Fit" (the crop, else the whole image, with a small margin).</summary>
+    public double FitZoom
+    {
+        get
+        {
+            var r = FitTarget;
+            if (r.Width <= 0 || r.Height <= 0 || ActualWidth <= 0) return Zoom;
+            return Math.Min(ActualWidth / r.Width, ActualHeight / r.Height) * 0.97;
+        }
+    }
+
+    /// <summary>The view shows the fitted picture (zoom within 1 % of the fit zoom).</summary>
+    public bool IsFitted => FitZoom > 0 && Math.Abs(Zoom - FitZoom) / FitZoom < 0.01;
+
     public void SetZoom(double z, Point anchor)
     {
         if (imageSize.Width <= 0) return;
@@ -785,6 +799,8 @@ public sealed class PreviewControl : FrameworkElement
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
+        // Ctrl / Alt combinations are menu shortcuts (Ctrl+1 / Ctrl+2 switch tabs), never the plain keys below.
+        if ((Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Alt)) != 0) { base.OnKeyDown(e); return; }
         switch (e.Key)
         {
             case Key.Add: case Key.OemPlus: Perform(ZoomAction.ZoomIn); e.Handled = true; break;
