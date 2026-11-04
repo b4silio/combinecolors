@@ -116,6 +116,39 @@ final class DustRemovalTests: XCTestCase {
         XCTAssertNil(DustRemoval.fit(image: plain, x: 140, y: 100, radius: 20))
     }
 
+    /// Bright spots: a star halo left by star removal is light added on top of the sky; it is found
+    /// like a mote and subtracted. (Like the local-flat model of dust spots, the estimate also
+    /// takes away nebular structure at its smoothing scale under the spot.)
+    func testBrightSpotRemovesAHalo() throws {
+        let truth = Synth.channel(width: 900, height: 700, background: 0.01, nebula: 0, stars: 0, noise: 0.0002, seed: 11, gradient: 0.002)
+        let img = truth.copy()
+        for y in 0..<img.height { for x in 0..<img.width {
+            let d = hypot(Float(x) + 0.5 - 450, Float(y) + 0.5 - 350)
+            img[x, y] = truth[x, y] + 0.004 * exp(-pow(d / 22, 2)) + 0.0015 * exp(-pow(d / 45, 2))
+        } }
+        let before = blockError(img, truth, cx: 450, cy: 350, radius: 30)
+        XCTAssertGreaterThan(before.median, 0.08)
+        let fitted = try XCTUnwrap(DustRemoval.fit(image: img, x: 458, y: 343, radius: 15, polarity: .bright))
+        XCTAssertEqual(fitted.polarity, .bright)
+        XCTAssertEqual(fitted.x, 450, accuracy: 3); XCTAssertEqual(fitted.y, 350, accuracy: 3)
+        XCTAssertGreaterThan(fitted.radius, 45); XCTAssertLessThan(fitted.radius, 130)
+        for model in DustModel.allCases {
+            var spot = fitted; spot.model = model
+            let healed = DustRemoval.heal(img, spots: [spot])
+            let after = blockError(healed, truth, cx: 450, cy: 350, radius: 40)
+            XCTAssertLessThan(after.median, 0.015, "\(model) median"); XCTAssertLessThan(after.max, 0.06, "\(model) max")
+        }
+        // A bright fit on plain sky finds nothing.
+        XCTAssertNil(DustRemoval.fit(image: truth, x: 450, y: 350, radius: 20, polarity: .bright))
+        // Spots keep their polarity through a document; old spots are dark.
+        let back = try JSONDecoder().decode(DustSpot.self, from: JSONEncoder().encode(fitted))
+        XCTAssertEqual(back.polarity, .bright)
+        let old = try JSONDecoder().decode(DustSpot.self, from: Data(#"{"x": 1, "y": 2, "radius": 3}"#.utf8))
+        XCTAssertEqual(old.polarity, .dark)
+        var settings = DustSettings(); settings.polarity = .bright
+        XCTAssertEqual(settings.newSpot(x: 1, y: 1, radius: 5).polarity, .bright)
+    }
+
     func testSpotsAtTheBorderAndOutsideAreHandled() {
         let truth = scene()
         let shaded = shade(truth, disc: (12, 160, 30, 0.15), donut: nil)

@@ -213,6 +213,9 @@ struct ContentView: View {
         let smoothBinding = Binding<Float>(
             get: { Float(selected?.smoothness ?? draft.wrappedValue.smoothness) },
             set: { v in if var sp = model.selectedDustSpotValue { sp.smoothness = Double(v); model.updateSelectedDustSpot(sp) } else { draft.wrappedValue.smoothness = Double(v) } })
+        let polarityBinding = Binding<SpotPolarity>(
+            get: { selected?.polarity ?? draft.wrappedValue.polarity },
+            set: { v in if var sp = model.selectedDustSpotValue { sp.polarity = v; model.updateSelectedDustSpot(sp) } else { draft.wrappedValue.polarity = v } })
         let featherBinding = Binding<Float>(
             get: { Float(selected?.feather ?? draft.wrappedValue.feather) },
             set: { v in if var sp = model.selectedDustSpotValue { sp.feather = Double(v); model.updateSelectedDustSpot(sp) } else { draft.wrappedValue.feather = Double(v) } })
@@ -232,6 +235,9 @@ struct ContentView: View {
             }
             HStack(spacing: 6) {
                 Text(selected == nil ? "New spots" : "Selected").font(.caption).foregroundStyle(.secondary).frame(width: 60, alignment: .trailing)
+                Picker("", selection: polarityBinding) { ForEach(SpotPolarity.allCases) { Text($0.displayName).tag($0) } }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize()
+                    .help("Dark spots: dust shadows, divided out like a flat (white dashed circles).\nBright spots: star halos left behind by star removal, the glow above the surrounding sky subtracted (orange dotted circles).\nEdits the selected spot, or the kind of new spots.")
                 Picker("", selection: modelBinding) { ForEach(DustModel.allCases) { Text($0.displayName).tag($0) } }
                     .pickerStyle(.segmented).labelsHidden().fixedSize()
                     .help("Local flat: free-form shadow (star-masked, multi-scale estimate of the ratio to the surrounding sky, noise left untouched), follows irregular motes and fringes.\nRadial profile: one transmission per distance to the centre, robust to nebulosity, for round motes and donuts.\nEdits the selected spot, or the parameters given to new spots.")
@@ -263,7 +269,7 @@ struct ContentView: View {
                 .font(.caption)
                 .textFieldStyle(.roundedBorder)
             }
-            Text("Click a shadow to add a fitted spot · drag to move · drag the handle to resize · drag empty sky to pan")
+            Text("Click a shadow (or, with Bright spots, a halo) to add a fitted spot · drag to move · drag the handle to resize · drag empty sky to pan")
                 .font(.system(size: 9)).foregroundStyle(.secondary)
         }
     }

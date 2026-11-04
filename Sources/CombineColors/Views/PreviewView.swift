@@ -96,6 +96,8 @@ final class ZoomPanNSView: NSView {
     private let handleLayers = (0..<8).map { _ in CALayer() }
     private let dustLayer = CAShapeLayer()
     private let dustSelectedLayer = CAShapeLayer()
+    /// Bright spots (star halos): orange, dotted, to tell them from dust shadows.
+    private let dustBrightLayer = CAShapeLayer()
     private let dustHandle = CALayer()
     private let gradientLayer = CAShapeLayer()
     private let gradientRefinedLayer = CAShapeLayer()
@@ -187,7 +189,13 @@ final class ZoomPanNSView: NSView {
         dustHandle.borderColor = NSColor.black.cgColor
         dustHandle.borderWidth = 1
         dustHandle.cornerRadius = 5
+        dustBrightLayer.fillColor = nil
+        dustBrightLayer.strokeColor = NSColor.systemOrange.withAlphaComponent(0.95).cgColor
+        dustBrightLayer.lineWidth = 1.2
+        dustBrightLayer.lineDashPattern = [1.5, 3]
+        dustBrightLayer.lineCap = .round
         layer?.addSublayer(dustLayer)
+        layer?.addSublayer(dustBrightLayer)
         layer?.addSublayer(dustSelectedLayer)
         layer?.addSublayer(dustHandle)
         gradientLayer.fillColor = nil
@@ -228,7 +236,7 @@ final class ZoomPanNSView: NSView {
         layer?.addSublayer(brushLayer); layer?.addSublayer(radiusLabel)
         layer?.actions = ["sublayers": NSNull()]
         imageLayer.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull(), "frame": NSNull()]
-        for l in dimLayers + handleLayers + gradientHandles + regionHandles + [cropBorder, cropGrid, dustLayer, dustSelectedLayer, dustHandle, gradientLayer, gradientRefinedLayer, regionLayer, regionSelectedLayer, sampleLayer, sampleRejectedLayer, sampleSelectedLayer, correctionLayer, brushLayer, radiusLabel] { l.actions = ["bounds": NSNull(), "position": NSNull(), "frame": NSNull(), "path": NSNull(), "hidden": NSNull()] }
+        for l in dimLayers + handleLayers + gradientHandles + regionHandles + [cropBorder, cropGrid, dustLayer, dustBrightLayer, dustSelectedLayer, dustHandle, gradientLayer, gradientRefinedLayer, regionLayer, regionSelectedLayer, sampleLayer, sampleRejectedLayer, sampleSelectedLayer, correctionLayer, brushLayer, radiusLabel] { l.actions = ["bounds": NSNull(), "position": NSNull(), "frame": NSNull(), "path": NSNull(), "hidden": NSNull(), "lineDashPattern": NSNull()] }
     }
 
     deinit { if let k = keyMonitor { NSEvent.removeMonitor(k) } }
@@ -738,8 +746,9 @@ final class ZoomPanNSView: NSView {
     private func dustHandlePoint(_ s: DustSpot) -> CGPoint { viewPoint(CGPoint(x: s.x + s.radius, y: s.y)) }
 
     private func updateDustOverlay() {
-        guard dustEditing, imageSize != .zero else { dustLayer.isHidden = true; dustSelectedLayer.isHidden = true; dustHandle.isHidden = true; return }
-        let others = CGMutablePath(), selected = CGMutablePath()
+        guard dustEditing, imageSize != .zero else { dustLayer.isHidden = true; dustBrightLayer.isHidden = true; dustSelectedLayer.isHidden = true; dustHandle.isHidden = true; return }
+        let others = CGMutablePath(), brightOthers = CGMutablePath(), selected = CGMutablePath()
+        var selectedBright = false
         var handle: CGPoint? = nil
         for s in dustSpots {
             let c = viewPoint(s.center), r = s.radius * zoom
@@ -751,11 +760,17 @@ final class ZoomPanNSView: NSView {
                 selected.move(to: CGPoint(x: p.minX, y: p.midY)); selected.addLine(to: CGPoint(x: p.maxX, y: p.midY))
                 selected.move(to: CGPoint(x: p.midX, y: p.minY)); selected.addLine(to: CGPoint(x: p.midX, y: p.maxY))
                 handle = dustHandlePoint(s)
+                selectedBright = s.polarity == .bright
+            } else if s.polarity == .bright {
+                brightOthers.addEllipse(in: rect)
             } else {
                 others.addEllipse(in: rect)
             }
         }
         dustLayer.isHidden = false; dustLayer.path = others
+        dustBrightLayer.isHidden = false; dustBrightLayer.path = brightOthers
+        // The selected spot stays yellow; dotted when it is a bright one.
+        dustSelectedLayer.lineDashPattern = selectedBright ? [2, 3] : nil
         dustSelectedLayer.isHidden = false; dustSelectedLayer.path = selected
         if let h = handle { dustHandle.isHidden = false; dustHandle.frame = toAppKit(CGRect(x: h.x - 5, y: h.y - 5, width: 10, height: 10)) }
         else { dustHandle.isHidden = true }

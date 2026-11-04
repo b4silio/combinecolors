@@ -37,7 +37,7 @@ import AstroCore
 //      --crop x,y,w,h         shared crop rectangle (full-resolution pixels); "auto" trims empty borders
 //      --save-project <file>  write a project file (channel paths, crop, settings) instead of/besides rendering
 //      --dust <kind>:x,y,r[;x,y,r…]  heal dust spots on a channel before anything else (repeatable; a project's
-//                             spots are applied too);  --dust-model surface | radial;  --dust-smooth <px>;  --dust-feather <0..0.5>
+//                             spots are applied too);  --dust-model surface | radial;  --dust-smooth <px>;  --dust-feather <0..0.5>;  --dust-polarity dark | bright (star halos)
 //                             (the three parameters apply to the spots given with --dust)
 //      --gradient <kind>:line:x0,y0,x1,y1 | <kind>:ellipse:cx,cy,a,b[,angle°] | <kind>:poly[:degree] | <kind>:samples[:perRow[,tolerance]]
 //                             (samples: a grid of background samples with a spline / kriging surface;  --gradient-surface spline | kriging;
@@ -153,6 +153,7 @@ case "render":
     if let m = option("--dust-model").flatMap({ DustModel(rawValue: $0) }) { dust.model = m }
     if let v = option("--dust-smooth").flatMap(Double.init) { dust.smoothness = v }
     if let v = option("--dust-feather").flatMap(Double.init) { dust.feather = v }
+    if let v = option("--dust-polarity").flatMap({ SpotPolarity(rawValue: $0) }) { dust.polarity = v }
     while let d = option("--dust") {
         let parts = d.split(separator: ":", maxSplits: 1).map(String.init)
         guard parts.count == 2, let k = ChannelKind(rawValue: parts[0]) ?? ChannelKind.fromPixelMathIdentifier(parts[0]) else { print("bad --dust \(d)"); continue }

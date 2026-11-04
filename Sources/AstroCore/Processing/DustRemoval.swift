@@ -14,14 +14,17 @@ public struct DustSpot: Codable, Equatable, Hashable, Identifiable {
     public var smoothness: Double
     /// Fraction of the radius over which the correction fades out beyond the shadow.
     public var feather: Double
+    /// A shadow (dust) or a glow (a star halo left by star removal).
+    public var polarity: SpotPolarity
 
-    public init(x: Double, y: Double, radius: Double, model: DustModel = .surface, smoothness: Double = 3, feather: Double = 0.2, id: UUID = UUID()) {
+    public init(x: Double, y: Double, radius: Double, model: DustModel = .surface, smoothness: Double = 3, feather: Double = 0.2,
+                polarity: SpotPolarity = .dark, id: UUID = UUID()) {
         self.id = id; self.x = x; self.y = y; self.radius = radius
-        self.model = model; self.smoothness = smoothness; self.feather = feather
+        self.model = model; self.smoothness = smoothness; self.feather = feather; self.polarity = polarity
     }
 
     public var center: CGPoint { CGPoint(x: x, y: y) }
-    var options: DustRemoval.Options { DustRemoval.Options(model: model, smoothness: smoothness, feather: feather) }
+    var options: DustRemoval.Options { DustRemoval.Options(model: model, smoothness: smoothness, feather: feather, polarity: polarity) }
 
     /// The spot after the image (`imageWidth` × `imageHeight`) has undergone `op`.
     public func applying(_ op: Orientation.Op, imageWidth: Int, imageHeight: Int) -> DustSpot {
@@ -50,6 +53,15 @@ public struct DustSpot: Codable, Equatable, Hashable, Identifiable {
     }
 }
 
+/// What a spot corrects: a darker patch (the shadow of a dust mote, divided out like a flat would)
+/// or a brighter one (the halo of a star that star removal left behind: light added on top of the
+/// scene, subtracted).
+public enum SpotPolarity: String, Codable, CaseIterable, Identifiable {
+    case dark, bright
+    public var id: String { rawValue }
+    public var displayName: String { self == .dark ? "Dark spots" : "Bright spots" }
+}
+
 /// How the shadow of a spot is modelled from the pixels under it.
 public enum DustModel: String, Codable, CaseIterable, Identifiable {
     /// Free-form 2-D transmission (star-masked smoothing of the local ratio): follows elongated or
@@ -76,6 +88,8 @@ public struct DustSettings: Codable, Equatable {
     public var smoothness: Double = 3
     /// Feather given to new spots.
     public var feather: Double = 0.2
+    /// Polarity given to new spots.
+    public var polarity: SpotPolarity = .dark
 
     public init() {}
 
@@ -83,7 +97,7 @@ public struct DustSettings: Codable, Equatable {
     public func spots(for kind: ChannelKind) -> [DustSpot] { spots[kind] ?? [] }
     /// A spot with the parameters for new spots.
     public func newSpot(x: Double, y: Double, radius: Double) -> DustSpot {
-        DustSpot(x: x, y: y, radius: radius, model: model, smoothness: smoothness, feather: feather)
+        DustSpot(x: x, y: y, radius: radius, model: model, smoothness: smoothness, feather: feather, polarity: polarity)
     }
 }
 
@@ -99,14 +113,32 @@ public struct DustSettings: Codable, Equatable {
 /// — and the pixels are divided by it (stars included: they were dimmed by the same shadow). The
 /// correction fades out over the outer `feather` fraction of the radius so the edge is seamless;
 /// pixels beyond the radius are untouched, zero (padding) pixels stay zero.
+///
+/// Bright spots (star halos left by star removal) go through the same estimate on the reciprocal of
+/// the ratio — a glow is a "shadow" of 1 / ratio — so detection, outline, smoothing and fit are
+/// shared; the correction is then additive: the excess over the background surface, B·(ratio − 1)
+/// smoothed, is subtracted (a halo is light added on top of the scene, not a multiplicative loss),
+/// which keeps the nebula's own contrast under it.
 public enum DustRemoval {
     public struct Options: Equatable {
         public var model: DustModel = .surface
         public var smoothness: Double = 3
         public var feather: Double = 0.2
-        public init(model: DustModel = .surface, smoothness: Double = 3, feather: Double = 0.2) {
-            self.model = model; self.smoothness = smoothness; self.feather = feather
+        public var polarity: SpotPolarity = .dark
+        public init(model: DustModel = .surface, smoothness: Double = 3, feather: Double = 0.2, polarity: SpotPolarity = .dark) {
+            self.model = model; self.smoothness = smoothness; self.feather = feather; self.polarity = polarity
         }
+    }
+
+    /// Star-mask threshold (in noise units) of the spot window: bright spots are the bright thing
+    /// themselves, so only very compact, very bright peaks are left out of their estimate.
+    static func starSigma(_ p: SpotPolarity) -> Float { p == .dark ? 6 : 30 }
+
+    /// The ratio a dark-spot estimate works on: itself for dark spots, its reciprocal for bright ones.
+    static func oriented(_ q: PlanarImage, _ p: SpotPolarity) -> PlanarImage {
+        guard p == .bright else { return q }
+        for i in 0..<q.count where q.pointer[i] > 0 && q.pointer[i] != 1 { q.pointer[i] = 1 / q.pointer[i] }
+        return q
     }
 
     /// Transmission range accepted for a shadow (dust never brightens; a little over 1 is allowed
@@ -131,19 +163,29 @@ public enum DustRemoval {
         for y in 0..<win.height {
             let row = image.pointer + (win.y + y) * image.width + win.x
             let trow = t.pointer + y * t.width
+            let brow = sh.background.map { $0.pointer + y * $0.width }
             for x in 0..<win.width {
                 let g = trow[x]
                 let v = row[x]
-                if v != 0 && g != 1 { row[x] = v / g }
+                guard v != 0 && g != 1 else { continue }
+                if let b = brow {
+                    // Glow: subtract the excess over the background (never down to zero, which means padding).
+                    row[x] = max(v - b[x] * (g - 1), min(v, b[x]) * 0.02)
+                } else {
+                    row[x] = v / g
+                }
             }
         }
         return true
     }
 
-    /// Window around a spot and the effective transmission inside it (1 where nothing changes).
+    /// Window around a spot and the effective transmission inside it (1 where nothing changes). For
+    /// a bright spot `transmission` is the brightening (≥ 1) and `background` the surface it sits on:
+    /// the correction subtracts background × (transmission − 1).
     public struct Shadow {
         public var window: PixelRect
         public var transmission: PlanarImage
+        public var background: PlanarImage? = nil
     }
 
     /// Estimates the transmission map of a spot.
@@ -158,13 +200,16 @@ public enum DustRemoval {
         let r = max(spot.radius, 3)
         let options = spot.options
         let surfaceModel = options.model == .surface
-        guard let a = Analysis(image: image, cx: spot.x, cy: spot.y, radius: r, others: others, outerFactor: surfaceModel ? 1.8 : 1.7) else { return nil }
+        let bright = options.polarity == .bright
+        guard let a = Analysis(image: image, cx: spot.x, cy: spot.y, radius: r, others: others, outerFactor: surfaceModel ? 1.8 : 1.7,
+                               starSigma: starSigma(options.polarity)) else { return nil }
         let w = a.window.width, h = a.window.height, n = w * h
         let t = PlanarImage(width: w, height: h, fill: 1)
         var mask = a.mask
         var raw: PlanarImage? = nil
         var weight: PlanarImage? = nil
         var exclude: PlanarImage? = nil
+        var background: PlanarImage? = nil
         let sigma = max(0.5, options.smoothness)
         let featherPx = Float(max(2, options.feather * r))
         // Two passes: the first star mask may flag the bright side of a deep shadow edge; masking the
@@ -172,11 +217,15 @@ public enum DustRemoval {
         // away from the shadow found in the first pass).
         for pass in 0..<2 {
             if pass == 1, let t0 = raw {
+                // Flattened window (t0 is in the dark-spot sense: a glow's reciprocal).
                 let flat = a.crop.copy()
-                vDSP_vdiv(t0.pointer, 1, flat.pointer, 1, flat.pointer, 1, vDSP_Length(n))
-                mask = a.starMask(flat, thresholdSigma: 4)
+                if bright { vDSP_vmul(t0.pointer, 1, flat.pointer, 1, flat.pointer, 1, vDSP_Length(n)) }
+                else { vDSP_vdiv(t0.pointer, 1, flat.pointer, 1, flat.pointer, 1, vDSP_Length(n)) }
+                mask = a.starMask(flat, thresholdSigma: bright ? starSigma(.bright) : 4)
             }
-            guard let q = a.ratio(mask: mask, exclude: exclude) else { return nil }
+            guard let (q0, b) = a.ratioAndBackground(mask: mask, exclude: exclude) else { return nil }
+            let q = oriented(q0, options.polarity)
+            background = b
             switch options.model {
             case .radial:
                 guard let p = radialProfile(ratio: q, mask: mask, rad: a.rad, radius: r, window: max(2, options.smoothness)) else { return nil }
@@ -207,12 +256,16 @@ public enum DustRemoval {
             }
         }
         guard let tr = raw else { return nil }
+        /// The clamped estimate back in its own sense: a transmission, or a brightening for a glow.
+        func value(_ i: Int) -> Float {
+            let v = min(max(tr.pointer[i], transmissionRange.lowerBound), transmissionRange.upperBound)
+            return bright ? 1 / v : v
+        }
         if let wgt = weight {
             for i in 0..<n {
                 let f = wgt.pointer[i]
                 guard f > 0 else { continue }
-                let v = min(max(tr.pointer[i], transmissionRange.lowerBound), transmissionRange.upperBound)
-                t.pointer[i] = 1 + (v - 1) * f
+                t.pointer[i] = 1 + (value(i) - 1) * f
             }
         } else {
             // Feather towards the edge of the circle and clamp.
@@ -221,11 +274,10 @@ public enum DustRemoval {
                 let d = a.rad.pointer[i]
                 guard d < fr else { continue }
                 let f: Float = d <= inner ? 1 : 0.5 * (1 + cos(Float.pi * (d - inner) / max(fr - inner, 1e-3)))
-                let v = min(max(tr.pointer[i], transmissionRange.lowerBound), transmissionRange.upperBound)
-                t.pointer[i] = 1 + (v - 1) * f
+                t.pointer[i] = 1 + (value(i) - 1) * f
             }
         }
-        return Shadow(window: a.window, transmission: t)
+        return Shadow(window: a.window, transmission: t, background: bright ? background : nil)
     }
 
     /// Connected region of pixels below `threshold` that touches the disc of `seedRadius` around the
@@ -285,7 +337,8 @@ public enum DustRemoval {
     /// Shadows of stacked data can be very shallow (a few ‰ of the sky level: the Soul Core OIII
     /// motes are 0.5 % deep) yet obvious after stretching, so the detection threshold is set by the
     /// bin-to-bin noise of the profile rather than by a fixed depth.
-    public static func fit(image: PlanarImage, x: Double, y: Double, radius r0: Double, smoothness: Double = 3) -> DustSpot? {
+    public static func fit(image: PlanarImage, x: Double, y: Double, radius r0: Double, smoothness: Double = 3, polarity: SpotPolarity = .dark) -> DustSpot? {
+        let ss = starSigma(polarity)
         var cx = x, cy = y, r = max(r0, 12)
         var found = false
         // The search never grows past a fraction of the image (a window of the whole frame is slow
@@ -297,8 +350,8 @@ public enum DustRemoval {
             var hit: (p: [Float], outer: Float, depth: Float)? = nil
             for factor in (iteration == 0 ? [2.5, 5, 10] : [1.6]) {
                 let search = min(r * factor, maxSearch)
-                guard let a = Analysis(image: image, cx: cx, cy: cy, radius: search),
-                      let q = a.ratio(mask: a.mask),
+                guard let a = Analysis(image: image, cx: cx, cy: cy, radius: search, starSigma: ss),
+                      let q = a.ratio(mask: a.mask).map({ oriented($0, polarity) }),
                       let (p, counts) = radialProfileWithCounts(ratio: q, mask: a.mask, rad: a.rad, radius: search, window: max(2, smoothness)), p.count >= 10 else { break }
                 var tail = Array(p[(p.count * 4 / 5)...]); tail.sort()
                 let outer = Statistics.percentile(sorted: tail, q: 0.5)
@@ -319,12 +372,18 @@ public enum DustRemoval {
                 if depth > 0.0015 && best.significance > 6 { hit = (p, outer, depth); break }
                 if search >= maxSearch { break }
             }
-            guard let (p, outer, depth) = hit, let edge = p.lastIndex(where: { $0 < outer - 0.15 * depth }), edge >= 3 else { break }
-            let newR = min(Double(edge + 1) * 1.25 + 2, maxSearch * 0.8)
+            // A halo fades out slowly (a long, faint tail): its edge is taken much further down, and
+            // the background annulus starts further out, or the tail would count as sky.
+            let edgeFraction: Float = polarity == .bright ? 0.08 : 0.15
+            guard let (p, outer, depth) = hit, let edge = p.lastIndex(where: { $0 < outer - edgeFraction * depth }), edge >= 3 else { break }
+            var newR = min(Double(edge + 1) * (polarity == .bright ? 1.3 : 1.25) + 2, maxSearch * 0.8)
+            // A glow next to a brightness step (mosaic edge, nebula) has a tail that never ends: at most
+            // a few half-widths.
+            if polarity == .bright, let half = p.lastIndex(where: { $0 < outer - 0.5 * depth }) { newR = min(newR, Double(half + 1) * 3.5 + 2) }
             // Centre: centroid of the pixels darker than half the depth, measured with the background
             // fitted close around the new radius (a far annulus extrapolates nebulosity badly). The
             // binary weight is far less sensitive to gradients than the darkening itself.
-            guard let b = Analysis(image: image, cx: cx, cy: cy, radius: newR), let qb = b.ratio(mask: b.mask) else { break }
+            guard let b = Analysis(image: image, cx: cx, cy: cy, radius: newR, starSigma: ss), let qb = b.ratio(mask: b.mask).map({ oriented($0, polarity) }) else { break }
             var sx = 0.0, sy = 0.0, sw = 0.0
             let w = b.window.width, h = b.window.height
             let half = outer - 0.5 * depth
@@ -340,7 +399,7 @@ public enum DustRemoval {
             if abs(newR - r) < 1 && moved < 0.5 { r = newR; break }
             r = newR
         }
-        return found ? DustSpot(x: cx, y: cy, radius: r) : nil
+        return found ? DustSpot(x: cx, y: cy, radius: r, polarity: polarity) : nil
     }
 
     // MARK: - Pieces
@@ -356,7 +415,7 @@ public enum DustRemoval {
         let outer: Double
         let cx: Double, cy: Double
 
-        init?(image: PlanarImage, cx: Double, cy: Double, radius: Double, others: [DustSpot] = [], outerFactor: Double = 1.7) {
+        init?(image: PlanarImage, cx: Double, cy: Double, radius: Double, others: [DustSpot] = [], outerFactor: Double = 1.7, starSigma: Float = 6) {
             let outer = radius * outerFactor
             let x0 = Int(floor(cx - outer)), y0 = Int(floor(cy - outer))
             let x1 = Int(ceil(cx + outer)), y1 = Int(ceil(cy + outer))
@@ -373,7 +432,7 @@ public enum DustRemoval {
                 for x in 0..<w { let dx = Float(x) + 0.5 - lcx; rad[x, y] = (dx * dx + dy * dy).squareRoot() }
             }
             self.rad = rad
-            let m = Analysis.starMask(crop, radius: radius, thresholdSigma: 6)
+            let m = Analysis.starMask(crop, radius: radius, thresholdSigma: starSigma)
             // Other spots overlapping the window are masked so that their shadows do not bias the
             // background fit (the mask is also reused for the second pass through `excluded`).
             let ex = PlanarImage(width: w, height: h)
@@ -417,6 +476,11 @@ public enum DustRemoval {
         /// crop / B where B is the background surface fitted to the annulus outside the spot — or, with
         /// `exclude`, to every unmasked pixel outside the excluded area (1 where undefined).
         func ratio(mask: PlanarImage, exclude: PlanarImage? = nil) -> PlanarImage? {
+            ratioAndBackground(mask: mask, exclude: exclude)?.0
+        }
+
+        /// The ratio and the background surface it divides by.
+        func ratioAndBackground(mask: PlanarImage, exclude: PlanarImage? = nil) -> (PlanarImage, PlanarImage)? {
             guard let b = backgroundSurface(mask: mask, exclude: exclude) else { return nil }
             let n = window.width * window.height
             let q = PlanarImage(width: window.width, height: window.height, fill: 1)
@@ -424,7 +488,7 @@ public enum DustRemoval {
                 let v = crop.pointer[i], bb = b.pointer[i]
                 if v > 0 && bb > 0 { q.pointer[i] = v / bb }
             }
-            return q
+            return (q, b)
         }
 
         /// Least-squares plane (a constant when few samples) through the unmasked annulus pixels,
@@ -626,6 +690,7 @@ extension DustSpot {
         let c = try decoder.container(keyedBy: AnyKey.self)
         id = c.value("id", UUID()); x = c.value("x", 0.0); y = c.value("y", 0.0); radius = c.value("radius", 30.0)
         model = c.value("model", .surface); smoothness = c.value("smoothness", 3.0); feather = c.value("feather", 0.2)
+        polarity = c.value("polarity", .dark)
     }
 }
 
@@ -635,5 +700,6 @@ extension DustSettings {
         let d = DustSettings()
         spots = c.value("spots", d.spots); model = c.value("model", d.model)
         smoothness = c.value("smoothness", d.smoothness); feather = c.value("feather", d.feather)
+        polarity = c.value("polarity", d.polarity)
     }
 }

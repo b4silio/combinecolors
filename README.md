@@ -130,7 +130,11 @@ export at full resolution.
   resize, ⌫ deletes, *Copy to all* gives every channel the same spots (dust on
   the sensor window shadows every filter alike), the segmented control switches
   the channel so all spots are set in one go, *Original* (B) toggles the
-  spots off for a before / after look. Each spot has its own model, smoothness
+  spots off for a before / after look. **Bright spots** (the *Dark spots / Bright
+  spots* switch) do the same for star halos that star removal left behind: the
+  glow is found like a shadow (on the reciprocal of the ratio to the sky) and
+  the light above the surrounding sky is subtracted rather than divided out;
+  they are drawn as orange dotted circles. Each spot has its own kind, model, smoothness
   and feather (the controls edit the selected spot, or the values given to new
   spots). Two models: *Local flat* (default) — the ratio of the pixels to a sky
   plane fitted around the spot (star-masked, sigma-clipped, neighbouring spots
@@ -326,7 +330,7 @@ release with the changelog section as notes.
    channels at once. To straighten, turn the picture with the *Angle* slider or
    by dragging around the crop before pressing Return.
    *Heal Dust Spots…* in a channel's menu opens the spot editor on that channel
-   (click a shadow, adjust, switch channels, Return applies); *Remove Gradient…*
+   (click a shadow, or a leftover star halo with *Bright spots*, adjust, switch channels, Return applies); *Remove Gradient…*
    opens the gradient editor (drag a line or an ellipse over the gradient, add
    protected regions over the object, Return applies).
 3. **Pick a palette** from the thumbnails in the right pane (the slider at the

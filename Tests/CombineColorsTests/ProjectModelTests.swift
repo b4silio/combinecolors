@@ -420,6 +420,23 @@ final class ProjectModelTests: XCTestCase {
         XCTAssertEqual(m.originalImages[.oiii]!.toArray(), expected.toArray())
     }
 
+    /// Bright spots (star halos) in the dust editor: the kind of new spots, kept per spot, lowers
+    /// the glow under it on Apply.
+    func testBrightSpotsInTheDustEditor() async throws {
+        let m = try await loadedModel()
+        let before = m.sources[.oiii]!.image
+        m.beginDustEditing(.oiii)
+        m.dustDraft?.polarity = .bright
+        m.addDustSpot(at: CGPoint(x: 100, y: 75))
+        let spot = try XCTUnwrap(m.dustDraft?.spots(for: .oiii).first)
+        XCTAssertEqual(spot.polarity, .bright)
+        m.commitDustEditing()
+        await wait { !m.isLoading && m.context != nil && m.sources[.oiii]!.image !== before }
+        XCTAssertEqual(m.dust.spots(for: .oiii).first?.polarity, .bright)
+        XCTAssertLessThan(m.sources[.oiii]!.image[100, 75], before[100, 75], "the glow at the centre is taken down")
+        XCTAssertEqual(m.projectDocument().dust.spots(for: .oiii).first?.polarity, .bright)
+    }
+
     func testCropConstraintFitsInsideTheTurnedFrame() {
         for angle in [-30.0, -5, 4, 12, 45] {
             let r = ProjectModel.constrained(PixelRect(x: 10, y: 10, width: 180, height: 130), angle: angle, width: 200, height: 150)

@@ -1533,7 +1533,7 @@ extension ProjectModel {
     func addDustSpot(at p: CGPoint) {
         guard let k = dustEditing, var d = dustDraft, let orig = originalImages[k] ?? baseSources[k]?.image else { return }
         var spot = d.newSpot(x: p.x, y: p.y, radius: defaultDustRadius)
-        if let f = DustRemoval.fit(image: orig, x: p.x, y: p.y, radius: defaultDustRadius, smoothness: d.smoothness) { spot.x = f.x; spot.y = f.y; spot.radius = f.radius }
+        if let f = DustRemoval.fit(image: orig, x: p.x, y: p.y, radius: defaultDustRadius, smoothness: d.smoothness, polarity: d.polarity) { spot.x = f.x; spot.y = f.y; spot.radius = f.radius }
         d.spots[k, default: []].append(spot)
         dustDraft = d
         selectedDustSpot = spot.id
@@ -1556,7 +1556,9 @@ extension ProjectModel {
         guard let k = dustEditing, let id = selectedDustSpot, var d = dustDraft, let orig = originalImages[k] ?? baseSources[k]?.image,
               let i = d.spots[k]?.firstIndex(where: { $0.id == id }) else { return }
         var s = d.spots[k]![i]
-        guard let f = DustRemoval.fit(image: orig, x: s.x, y: s.y, radius: s.radius / 2, smoothness: s.smoothness) else { statusText = "No shadow found around the spot."; return }
+        guard let f = DustRemoval.fit(image: orig, x: s.x, y: s.y, radius: s.radius / 2, smoothness: s.smoothness, polarity: s.polarity) else {
+            statusText = s.polarity == .bright ? "No glow found around the spot." : "No shadow found around the spot."; return
+        }
         s.x = f.x; s.y = f.y; s.radius = f.radius
         d.spots[k]![i] = s
         dustDraft = d
