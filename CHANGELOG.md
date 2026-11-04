@@ -5,6 +5,12 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 (`scripts/bump.sh`). The version lives in `VERSION` and is stamped into the app at build time;
 `scripts/release.sh` tags it and publishes the DMG as a GitHub release.
 
+## [1.15.1] – 2026-11-04
+
+- Fix: Generate produced no gradient points on a channel without a model (after switching channels in the gradient editor, or after Remove model): the samples model is now created on Generate or when a grid parameter changes
+- Fix: painted corrections scale only the signal above the channel's sky level by default ("Above the sky"); on linear data the old exposure-style correction also scaled the sky pedestal, which the stretch magnified (0.5 EV darkened the sky to black). "Exposure" keeps the old behaviour (macOS toolbar switch; Windows / Linux use the sky-relative mode)
+- Denoise runs before Detail again (better quality on the denoised image); the render cache keeps both outputs, so a detail slider re-runs the detail only
+
 ## [1.15.0] – 2026-11-04
 
 - Detail runs before Denoise (blocks and pipeline in the same order; the render cache keeps both outputs, so a denoise slider re-runs the denoise only)

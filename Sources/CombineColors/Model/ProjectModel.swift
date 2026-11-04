@@ -574,7 +574,7 @@ final class ProjectModel {
                 for _ in 0..<orient.rotation { m = m.applying(.rotateClockwise) }
                 map = m
             }
-            let healed = ProjectModel.process(oriented, kind: kind, dust: dust, gradient: gradient, correction: map.map { ($0, Float(corr.strength(for: kind))) })
+            let healed = ProjectModel.process(oriented, kind: kind, dust: dust, gradient: gradient, correction: map.map { ($0, Float(corr.strength(for: kind))) }, mode: corr.mode)
             let src = ChannelSource(kind: kind, image: healed, fileName: name, url: url, formatDescription: fmt)
             lock.lock(); built[i] = src; originals[i] = oriented; if let m = map { maps[kind] = m }; lock.unlock()
         }
@@ -632,11 +632,14 @@ final class ProjectModel {
 
     /// A loaded (oriented) channel after dust healing, gradient removal and the painted corrections, in that order.
     nonisolated static func process(_ oriented: PlanarImage, kind: ChannelKind, dust: DustSettings, gradient: GradientSettings,
-                                    correction: (map: CorrectionMap, strength: Float)? = nil) -> PlanarImage {
+                                    correction: (map: CorrectionMap, strength: Float)? = nil, mode: CorrectionMode = .aboveSky) -> PlanarImage {
         let healed = DustRemoval.heal(oriented, spots: dust.spots(for: kind))
         let corrected = GradientRemoval.correct(healed, kind: kind, settings: gradient)
         guard let c = correction, !c.map.isEmpty else { return corrected }
-        return c.map.applied(to: corrected === oriented ? corrected.copy() : corrected, strength: c.strength)
+        // The same pivot as the live preview: the background of the uncorrected channel (a ChannelSource
+        // over the whole image computes its statistics the same way).
+        let pedestal = mode == .aboveSky ? CorrectionMap.pedestal(of: corrected) : nil
+        return c.map.applied(to: corrected === oriented ? corrected.copy() : corrected, strength: c.strength, pedestal: pedestal)
     }
 
     /// The committed correction of a channel, for `process`.
@@ -739,7 +742,7 @@ final class ProjectModel {
                 // The edited channel keeps showing its draft spots / model.
                 let d = (k == editing ? draft : nil) ?? dust
                 let g = (k == gradientEditing ? gradientDraft : nil) ?? gradient
-                let healed = ProjectModel.process(orig, kind: k, dust: d, gradient: g, correction: maps[k].map { ($0, Float(corr.strength(for: k))) })
+                let healed = ProjectModel.process(orig, kind: k, dust: d, gradient: g, correction: maps[k].map { ($0, Float(corr.strength(for: k))) }, mode: corr.mode)
                 let b = ChannelSource(kind: k, image: healed, fileName: old.fileName, url: old.url, formatDescription: old.formatDescription)
                 let c = newCrop == nil ? b : ChannelSource(b, region: newCrop)
                 lock.lock(); newBase[k] = b; newCur[k] = c; newOrig[k] = orig; lock.unlock()
@@ -1076,9 +1079,11 @@ final class ProjectModel {
         // committed map already, so the draft starts as that map and the source is swapped for the
         // uncorrected one while editing (see beginCorrectionEditing). The editor renders with its
         // own context (normalisation off), so the draft goes on both paths.
-        var correction: (map: CorrectionMap, strength: Float, kind: ChannelKind)? = nil
+        var correction: (map: CorrectionMap, strength: Float, kind: ChannelKind, pedestal: Float?)? = nil
         if let k = correctionEditing, let d = correctionDraft, !correctionBypass, !d.isEmpty {
-            correction = (d.copy(), Float(corrections.strength(for: k)), k)
+            // Sky-relative: the pivot is the uncorrected channel's background, as `process` computes it.
+            let pedestal = corrections.mode == .aboveSky ? baseSources[k]?.stats.background : nil
+            correction = (d.copy(), Float(corrections.strength(for: k)), k, pedestal)
         }
         if shown.normalization != settings.normalization {
             // Different normalisation than the live context: render with a context of its own.
@@ -1598,7 +1603,7 @@ extension ProjectModel {
             let lock = NSLock()
             DispatchQueue.concurrentPerform(iterations: kinds.count) { i in
                 let k = kinds[i], old = base[k]!
-                let healed = ProjectModel.process(originals[k]!, kind: k, dust: dust, gradient: gradient, correction: maps[k].map { ($0, Float(corr.strength(for: k))) })
+                let healed = ProjectModel.process(originals[k]!, kind: k, dust: dust, gradient: gradient, correction: maps[k].map { ($0, Float(corr.strength(for: k))) }, mode: corr.mode)
                 let b = ChannelSource(kind: k, image: healed, fileName: old.fileName, url: old.url, formatDescription: old.formatDescription)
                 let c = crop == nil ? b : ChannelSource(b, region: crop)
                 lock.lock(); out[k] = (b, c); lock.unlock()
@@ -1654,6 +1659,20 @@ extension ProjectModel {
     var correctionBrushFlow: Double { get { corrections.brushFlow } set { corrections.brushFlow = min(max(newValue, 0.005), 1) } }
     var correctionBrushFeather: Double { get { corrections.brushFeather } set { corrections.brushFeather = min(max(newValue, 0), 1) } }
     var correctionDarken: Bool { get { corrections.darken } set { corrections.darken = newValue } }
+    /// Sky-relative or exposure corrections; switching re-processes the channels that carry a map
+    /// (the edited one renders it live).
+    var correctionMode: CorrectionMode {
+        get { corrections.mode }
+        set {
+            guard newValue != corrections.mode else { return }
+            corrections.mode = newValue
+            var kinds = Set(correctionMaps.keys)
+            if let k = correctionEditing { kinds.remove(k) }
+            rebuildHealed(kinds: kinds)
+            scheduleRender()
+            scheduleRecentStateSave()
+        }
+    }
     var canUndoCorrection: Bool { !correctionUndo.isEmpty }
     func hasCorrection(_ kind: ChannelKind) -> Bool { correctionMaps[kind] != nil }
 
@@ -1888,7 +1907,24 @@ extension ProjectModel {
     }
 
     /// Drops the samples; the next fit generates the grid again with the current parameters.
+    /// The edited channel's model, created when the chosen shape needs no drawing (samples,
+    /// polynomial) and the channel has none yet — after switching to another channel or after
+    /// Remove model, the toolbar still shows that shape, and Generate or a parameter must act on it.
+    @discardableResult
+    func ensureGradientSpec() -> GradientSpec? {
+        guard let k = gradientEditing, var d = gradientDraft else { return nil }
+        if let spec = d.specs[k] { return spec }
+        switch d.shape {
+        case .samples: d.specs[k] = d.newSpec(gesture: .samples())
+        case .polynomial: d.specs[k] = d.newSpec(gesture: .polynomial())
+        default: return nil
+        }
+        gradientDraft = d
+        return d.specs[k]
+    }
+
     func regenerateGradientGrid() {
+        if gradientDraft?.shape == .samples { ensureGradientSpec() }
         guard let k = gradientEditing, var d = gradientDraft, var spec = d.specs[k], spec.gesture.shape == .samples else { return }
         spec.samples = []
         if spec.gridPerRow <= 0 { spec.gridPerRow = max(4, d.gridPerRow) }
@@ -2345,7 +2381,7 @@ extension ProjectModel {
         for (k, old) in st.baseSources {
             let orig = (st.originalImages[k] ?? old.image).applying(op)
             let healed = ProjectModel.process(orig, kind: k, dust: out.dust, gradient: out.gradient,
-                                              correction: out.correctionMaps[k].map { ($0, Float(out.corrections.strength(for: k))) })
+                                              correction: out.correctionMaps[k].map { ($0, Float(out.corrections.strength(for: k))) }, mode: out.corrections.mode)
             let b = ChannelSource(kind: k, image: healed, fileName: old.fileName, url: old.url, formatDescription: old.formatDescription)
             let c = newCrop == nil ? b : ChannelSource(b, region: newCrop)
             out.baseSources[k] = b; out.sources[k] = c; out.originalImages[k] = orig

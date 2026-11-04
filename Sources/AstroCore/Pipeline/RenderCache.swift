@@ -23,12 +23,12 @@ public struct RenderInputKey: Hashable {
 ///
 /// * **combined** — steps 1–4: normalise, stretch, combine, luminance;
 /// * **developed** — the above plus colour (bands, colour, balance, contrast) and stars;
-/// * **detailed** — the above plus detail (local contrast, sharpening);
-/// * **denoised** — the above plus denoise (the last finishing stage).
+/// * **denoised** — the above plus denoise;
+/// * **detailed** — the above plus detail (local contrast, sharpening), the last finishing stage.
 ///
 /// The stars, when they go in last, are blended on a copy of the last one, so a star slider
-/// re-blends only. Moving a denoise slider therefore costs denoise, a detail slider detail +
-/// denoise, a colour slider colour + stars + detail + denoise,
+/// re-blends only. Moving a detail slider therefore costs detail, a denoise slider denoise +
+/// detail, a colour slider colour + stars + denoise + detail,
 /// and only a change to the channels, the stretch or the combination runs the whole pipeline. Even
 /// then the single channels' prepared planes (normalised, stretched, adjusted) are kept per channel
 /// (`ChannelPlaneStore`): a gain or weight change on one channel prepares that channel only.
@@ -38,16 +38,16 @@ public struct RenderInputKey: Hashable {
 /// detail stage, bypass it. Not thread safe: one render queue owns it. The result image of a render
 /// whose detail stage is neutral is the cached intermediate itself — read it, do not write to it.
 public final class RenderCache {
-    public enum Stage: String { case combine, colour, detail, denoise, stars, nothing }
+    public enum Stage: String { case combine, colour, denoise, detail, stars, nothing }
 
     private var inputs: RenderInputKey? = nil
     private let channels = ChannelPlaneStore()
     private var combined: (settings: CombineSettings, developed: Renderer.Developed)? = nil
     private var developed: (settings: CombineSettings, image: RGBImage, overview: DetailOverview?)? = nil
-    /// The detail stage's output (`base`: the image it ran on).
-    private var detailed: (settings: DetailSettings, scale: Float, base: RGBImage, image: RGBImage)? = nil
-    /// The denoise stage's output, after the detail (`base`: the image it ran on).
+    /// The denoise stage's output (`base`: the image it ran on).
     private var denoised: (settings: DenoiseSettings, scale: Float, base: RGBImage, image: RGBImage)? = nil
+    /// The detail stage's output, after the denoise (`base`: the image it ran on).
+    private var detailed: (settings: DetailSettings, scale: Float, base: RGBImage, image: RGBImage)? = nil
 
     public init() {}
 
@@ -107,45 +107,45 @@ public final class RenderCache {
             developed!.overview = try Renderer.detailOverview(plan, req: req, postStretch: base.postStretch)
         }
 
-        // 7a. Detail (local contrast, sharpening) on a copy of the developed image, kept: a denoise
-        //     slider then re-runs the denoise only.
+        // 7a. Denoise on a copy of the developed image, kept: a detail slider then re-runs the
+        //     detail only.
         let starsLast = s.stars.enabled && s.stars.stage == .last
-        let afterDetail: RGBImage
-        if s.detail.isNeutral {
-            afterDetail = developed!.image
-        } else if let d = detailed, d.settings == s.detail, d.scale == req.scale, d.base === developed!.image {
-            afterDetail = d.image
-        } else {
-            let img = developed!.image.copy()
-            PostProcess.detail(img, settings: s.detail, scale: req.scale, overview: developed!.overview)
-            detailed = (s.detail, req.scale, developed!.image, img); denoised = nil
-            afterDetail = img
-            if ranFrom == .nothing { ranFrom = .detail }
-        }
-
-        // 7b. Denoise last of the finishing stages (it also cleans what the detail stage brought
-        //     out), on a copy, kept: a star slider then re-blends only.
         let afterDenoise: RGBImage
         if s.denoise.isNeutral {
-            afterDenoise = afterDetail
-        } else if let d = denoised, d.settings == s.denoise, d.scale == req.scale, d.base === afterDetail {
+            afterDenoise = developed!.image
+        } else if let d = denoised, d.settings == s.denoise, d.scale == req.scale, d.base === developed!.image {
             afterDenoise = d.image
         } else {
-            let img = afterDetail.copy()
+            let img = developed!.image.copy()
             Denoise.apply(img, settings: s.denoise, scale: req.scale)
-            denoised = (s.denoise, req.scale, afterDetail, img)
+            denoised = (s.denoise, req.scale, developed!.image, img); detailed = nil
             afterDenoise = img
             if ranFrom == .nothing { ranFrom = .denoise }
+        }
+
+        // 7b. Detail (local contrast, sharpening) on the denoised image, on a copy, kept: a star
+        //     slider then re-blends only.
+        let afterDetail: RGBImage
+        if s.detail.isNeutral {
+            afterDetail = afterDenoise
+        } else if let d = detailed, d.settings == s.detail, d.scale == req.scale, d.base === afterDenoise {
+            afterDetail = d.image
+        } else {
+            let img = afterDenoise.copy()
+            PostProcess.detail(img, settings: s.detail, scale: req.scale, overview: developed!.overview)
+            detailed = (s.detail, req.scale, afterDenoise, img)
+            afterDetail = img
+            if ranFrom == .nothing { ranFrom = .detail }
         }
 
         // 7c. The stars last, on a copy.
         let out: RGBImage
         if starsLast {
-            out = afterDenoise.copy()
+            out = afterDetail.copy()
             Renderer.starsStage(out, plan, planes: req.planes, context: req.context, stars: req.stars)
             if ranFrom == .nothing { ranFrom = .stars }
         } else {
-            out = afterDenoise
+            out = afterDetail
         }
         var res = RenderResult(image: out, postStretch: base.postStretch, channelStretch: base.channelStretch, millis: Date().timeIntervalSince(t0) * 1000)
         res.ranFrom = ranFrom

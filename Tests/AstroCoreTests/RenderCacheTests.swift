@@ -15,12 +15,15 @@ final class RenderCacheTests: XCTestCase {
         RenderInputKey(sources: s.mapValues(\.id), stars: nil, context: ctx.id, level: level, x: 0, y: 0, width: 160 >> level, height: 120 >> level)
     }
 
+    /// Equal images. Vectorised Accelerate math may differ in the last bit with the buffers'
+    /// alignment (a cached plane vs a fresh one), which showed up only under the load of the full
+    /// suite: a few 1e-6 at most; anything larger is a real difference.
     private func assertSame(_ a: RGBImage, _ b: RGBImage, _ what: String, file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertEqual(a.width, b.width, what, file: file, line: line)
         for (p, q) in zip(a.planes, b.planes) {
             var maxDiff: Float = 0
             for i in 0..<p.count { maxDiff = max(maxDiff, abs(p.pointer[i] - q.pointer[i])) }
-            XCTAssertEqual(maxDiff, 0, what, file: file, line: line)
+            XCTAssertLessThanOrEqual(maxDiff, 1e-5, what, file: file, line: line)
         }
     }
 
@@ -41,7 +44,7 @@ final class RenderCacheTests: XCTestCase {
             XCTAssertEqual(cached.ranFrom, expect, what)
         }
         try check(s, expect: .combine, "first render runs everything")
-        try check(s, expect: .nothing, "same settings: detail and denoise outputs are both kept")
+        try check(s, expect: .nothing, "same settings: denoise and detail outputs are both kept")
         s.detail.sharpen = 0.8
         try check(s, expect: .detail, "detail change")
         s.denoise.amount = 0.6
@@ -135,13 +138,13 @@ final class RenderCacheTests: XCTestCase {
         }
         try check(s, expect: .combine, "first render")
         s.stars.amount = 0.6
-        try check(s, expect: .stars, "star amount: re-blend on the kept denoise output")
+        try check(s, expect: .stars, "star amount: re-blend on the kept detail output")
         s.stars.brightness = 0.5
         try check(s, expect: .stars, "star brightness")
         s.detail.sharpen = 0.7
         try check(s, expect: .detail, "detail: detail + stars")
         s.denoise.amount = 0.2
-        try check(s, expect: .denoise, "denoise (after detail): denoise + stars only")
+        try check(s, expect: .denoise, "denoise: denoise + detail + stars")
         s.stars.stage = .beforeDetail
         try check(s, expect: .colour, "stars before detail: part of the developed image")
         s.stars.amount = 0.3

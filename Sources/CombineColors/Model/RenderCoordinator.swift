@@ -35,7 +35,7 @@ struct PreviewRequest {
     /// RGB stars layer blended into the result (nil: the R, G, B channels serve as stars).
     var stars: StarsLayer? = nil
     /// Live hand-painted correction of one channel (the corrections editor).
-    var correction: (map: CorrectionMap, strength: Float, kind: ChannelKind)? = nil
+    var correction: (map: CorrectionMap, strength: Float, kind: ChannelKind, pedestal: Float?)? = nil
     /// Stars tab with the combination on: the rendered Background tab the result is blended onto,
     /// with the Background tab's settings (its Combine stars block).
     var background: StarsLayer? = nil
@@ -116,7 +116,7 @@ final class RenderCoordinator {
         var request = RenderRequest(planes: planes, analysisPlanes: req.analysisSamples, settings: req.settings, context: req.context, fixedPostStretch: req.fixedPostStretch, scale: Float(s),
                                     overview: overview?.planes, overviewRect: overview?.rect)
         if req.settings.stars.enabled, let st = req.stars, st.width == fullW, st.height == fullH { request.stars = st.input(level: level, x: x0, y: y0, width: cw, height: ch) }
-        if let c = req.correction { request.correction = CorrectionInput(map: c.map, strength: c.strength, kind: c.kind, rect: rect) }
+        if let c = req.correction { request.correction = CorrectionInput(map: c.map, strength: c.strength, kind: c.kind, rect: rect, pedestal: c.pedestal) }
         let result: RenderResult
         if let cache {
             let key = RenderInputKey(sources: req.sources.mapValues(\.id), stars: request.stars == nil ? nil : req.stars?.id, context: req.context.id,

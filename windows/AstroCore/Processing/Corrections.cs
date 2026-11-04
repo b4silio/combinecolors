@@ -127,7 +127,10 @@ public sealed class CorrectionMap
     /// image × 2^(strength × map) for the region <paramref name="rect"/> of the image (full-resolution
     /// pixels) that the image covers (null: the whole image); zero pixels stay zero. In place.
     /// </summary>
-    public void Apply(PlanarImage image, float strength, SampleRect? rect = null)
+    /// <remarks>With a <paramref name="pedestal"/> (sky-relative, as the macOS app's default mode) only
+    /// the signal above the sky is scaled: p + (image − p) × 2^(strength × map). On linear data the
+    /// whole value is mostly the sky pedestal, which the stretch then magnifies.</remarks>
+    public void Apply(PlanarImage image, float strength, SampleRect? rect = null, float? pedestal = null)
     {
         if (strength == 0) return;
         var r = rect ?? new SampleRect(0, 0, ImageWidth, ImageHeight);
@@ -136,15 +139,25 @@ public sealed class CorrectionMap
         var m = sampled.Data; var d = image.Data;
         Par.Rows(image.Height, image.Width * 4, (y0, y1) =>
         {
-            for (int i = y0 * image.Width; i < y1 * image.Width; i++) d[i] *= MathF.Pow(2, strength * m[i]);
+            if (pedestal is float p)
+            {
+                for (int i = y0 * image.Width; i < y1 * image.Width; i++) if (d[i] != 0) d[i] = p + (d[i] - p) * MathF.Pow(2, strength * m[i]);
+            }
+            else
+            {
+                for (int i = y0 * image.Width; i < y1 * image.Width; i++) d[i] *= MathF.Pow(2, strength * m[i]);
+            }
         });
     }
 
+    /// <summary>The sky level a sky-relative correction pivots on: the image's sigma-clipped background.</summary>
+    public static float Pedestal(PlanarImage image) => Statistics.Compute(image).Background;
+
     /// <summary>A corrected copy of the whole image.</summary>
-    public PlanarImage Applied(PlanarImage image, float strength)
+    public PlanarImage Applied(PlanarImage image, float strength, float? pedestal = null)
     {
         var out_ = image.Copy();
-        Apply(out_, strength);
+        Apply(out_, strength, null, pedestal);
         return out_;
     }
 
@@ -238,7 +251,9 @@ public sealed class CorrectionInput
     public float Strength { get; }
     public ChannelKind Kind { get; }
     public SampleRect? Rect { get; }
-    public CorrectionInput(CorrectionMap map, float strength, ChannelKind kind, SampleRect? rect) { Map = map; Strength = strength; Kind = kind; Rect = rect; }
+    /// <summary>Sky level of a sky-relative correction (null: the whole value is scaled).</summary>
+    public float? Pedestal { get; }
+    public CorrectionInput(CorrectionMap map, float strength, ChannelKind kind, SampleRect? rect, float? pedestal = null) { Map = map; Strength = strength; Kind = kind; Rect = rect; Pedestal = pedestal; }
 }
 
 /// <summary>

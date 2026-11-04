@@ -117,3 +117,27 @@ final class BrushSpacingTests: XCTestCase {
         XCTAssertGreaterThan(slow.value(x: 200, y: 100), 0.05)
     }
 }
+
+final class SkyRelativeCorrectionTests: XCTestCase {
+    /// Sky-relative: the sky stays, the signal above it is scaled; exposure scales everything.
+    func testAboveSkyScalesOnlyTheSignal() {
+        let w = 64, h = 32
+        let img = PlanarImage(width: w, height: h, fill: 0.006)          // a linear sky pedestal
+        for y in 0..<h { for x in 40..<64 { img[x, y] = 0.008 } }       // nebula on the right
+        img[0, 0] = 0                                                   // padding stays zero
+        let map = CorrectionMap(imageWidth: w, imageHeight: h)
+        var carry = CorrectionMap.strokeStart(radius: 200)
+        map.stroke(from: CGPoint(x: 32, y: 16), to: CGPoint(x: 32, y: 16), radius: 200, amount: -1, hardness: 0.98, carry: &carry)
+        let pedestal = CorrectionMap.pedestal(of: img)
+        XCTAssertEqual(pedestal, 0.006, accuracy: 2e-4)
+        let rel = map.applied(to: img, strength: 1, pedestal: pedestal)
+        XCTAssertEqual(rel[10, 10], img[10, 10], accuracy: 1e-5, "the sky stays")
+        XCTAssertEqual(rel[50, 10] - pedestal, (img[50, 10] - pedestal) / 2, accuracy: 1e-5, "the signal above it halves at −1 EV")
+        XCTAssertEqual(rel[0, 0], 0)
+        let exp = map.applied(to: img, strength: 1)
+        XCTAssertEqual(exp[10, 10], 0.003, accuracy: 1e-5, "exposure halves the pedestal too")
+        // Old settings decode with the sky-relative mode.
+        let d = try! JSONDecoder().decode(CorrectionSettings.self, from: Data(#"{"brushFlow":0.02}"#.utf8))
+        XCTAssertEqual(d.mode, .aboveSky)
+    }
+}

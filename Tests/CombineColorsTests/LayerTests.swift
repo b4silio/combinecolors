@@ -230,3 +230,31 @@ extension ProjectModelTests {
         XCTAssertNil(m.frame)
     }
 }
+
+extension ProjectModelTests {
+    /// The samples shape stays selected when the editor switches to a channel without a model or
+    /// after Remove model: Generate (or a grid parameter) must then create the model and its grid
+    /// (user report 2026-11-04: no points at all on the Pleiades Hα).
+    func testGenerateGridOnAChannelWithoutModel() async throws {
+        let m = ProjectModel(defaults: defaults)
+        m.loadFiles([try makeChannel("g-Ha.fits", kind: .ha, scale: 1, seed: 1, width: 360, height: 240),
+                     try makeChannel("g-OIII.fits", kind: .oiii, scale: 0.4, seed: 2, width: 360, height: 240)])
+        await wait { m.sources.count == 2 && !m.isLoading && m.context != nil }
+        m.beginGradientEditing(.oiii)
+        m.setGradientShape(.samples)
+        await wait(timeout: 20) { !m.gradientSamples.isEmpty }
+        XCTAssertFalse(m.gradientSamples.isEmpty)
+        m.switchGradientChannel(.ha)
+        XCTAssertEqual(m.gradientShape, .samples)
+        XCTAssertNil(m.editedGradientSpec, "the other channel has no model yet")
+        m.regenerateGradientGrid()
+        await wait(timeout: 20) { !m.gradientSamples.isEmpty }
+        XCTAssertFalse(m.gradientSamples.isEmpty, "Generate creates the model and its grid")
+        m.clearGradient()
+        XCTAssertTrue(m.gradientSamples.isEmpty)
+        m.regenerateGradientGrid()
+        await wait(timeout: 20) { !m.gradientSamples.isEmpty }
+        XCTAssertFalse(m.gradientSamples.isEmpty, "and again after Remove model")
+        m.cancelGradientEditing()
+    }
+}

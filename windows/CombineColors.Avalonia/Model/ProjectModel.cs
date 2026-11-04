@@ -1111,9 +1111,9 @@ public sealed class ProjectModel : INotifyPropertyChanged
         // The corrections editor paints on the channel live: the draft goes with the render (a copy,
         // the renderer runs while the next stroke lands); the source shows the uncorrected channel meanwhile.
         // The editor renders with its own context (normalisation off), so the draft goes on both paths.
-        (CorrectionMap map, float strength, ChannelKind kind)? correction = null;
+        (CorrectionMap map, float strength, ChannelKind kind, float? pedestal)? correction = null;
         if (CorrectionEditing is ChannelKind ck && CorrectionDraft is CorrectionMap cd && !correctionBypass && !cd.IsEmpty)
-            correction = (cd.Copy(), (float)Corrections.StrengthFor(ck), ck);
+            correction = (cd.Copy(), (float)Corrections.StrengthFor(ck), ck, baseSources.TryGetValue(ck, out var cb) ? cb.Stats.Background : null);
         if (!shown.Normalization.Equals(settings.Normalization))
         {
             // Different normalisation than the live context: render with a context of its own.
@@ -1667,7 +1667,8 @@ public sealed class ProjectModel : INotifyPropertyChanged
         var healed = DustRemoval.Heal(oriented, dust.SpotsFor(kind));
         var corrected = GradientRemoval.Correct(healed, kind, gradient);
         if (correction is not (CorrectionMap map, float strength) || map.IsEmpty) return corrected;
-        return map.Applied(corrected, strength);
+        // Sky-relative: the pivot is the background of the uncorrected channel (the live preview uses the same).
+        return map.Applied(corrected, strength, CorrectionMap.Pedestal(corrected));
     }
 
     // ---- Manual corrections ----------------------------------------------------------------------
@@ -1960,6 +1961,14 @@ public sealed class ProjectModel : INotifyPropertyChanged
     /// <summary>Drops the samples; the next fit generates the grid again with the current parameters.</summary>
     public void RegenerateGradientGrid()
     {
+        // The Samples shape stays selected on a channel without a model (another channel's choice, or
+        // after Remove model): Generate creates the model.
+        if (GradientEditing is ChannelKind ek && gradientDraft != null && gradientDraft.Shape == GradientShape.Samples && !gradientDraft.Specs.ContainsKey(ek))
+        {
+            var cd = gradientDraft.Clone();
+            cd.Specs[ek] = cd.NewSpec(GradientGesture.Samples());
+            GradientDraft = cd;
+        }
         if (GradientEditing is not ChannelKind k || gradientDraft == null || !gradientDraft.Specs.TryGetValue(k, out var sp) || sp.Gesture.Shape != GradientShape.Samples) return;
         var nd = gradientDraft.Clone();
         var spec = nd.Specs[k];

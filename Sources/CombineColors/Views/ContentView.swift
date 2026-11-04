@@ -279,10 +279,15 @@ struct ContentView: View {
                           help: "Fraction of the radius over which a dab fades out (0 = hard edge)", labelWidth: 48)
                     .frame(width: 150)
                 SliderRow(title: "Strength", value: strength, range: 0...1.5, defaultValue: 0.5, format: "%.2f",
-                          help: "Exposure range of the map in stops: a fully painted area is darkened or brightened by this many stops", note: "EV", labelWidth: 66)
+                          help: "Range of the map in stops: a fully painted area has its signal above the sky (or, in Exposure mode, its whole value) darkened or brightened by this many stops", note: "EV", labelWidth: 66)
                     .frame(width: 170)
             }
             HStack(spacing: 6) {
+                Picker("", selection: Binding(get: { model.correctionMode }, set: { model.correctionMode = $0 })) {
+                    ForEach(CorrectionMode.allCases) { Text($0.displayName).tag($0) }
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize().controlSize(.small)
+                .help("Above the sky: only the signal above the channel's sky level is dimmed or lifted — even on linear (unstretched) data, where scaling the whole value also scales the sky pedestal, which the stretch then magnifies. Exposure: the whole value (the earlier behaviour)")
                 Button("Undo stroke") { model.undoCorrection() }.keyboardShortcut("z", modifiers: .command).disabled(!model.canUndoCorrection)
                 Button("Clear") { model.clearCorrection() }.disabled(model.correctionDraft?.isEmpty ?? true).help("Erase the whole map")
                 Text("Paint on the channel to darken or brighten it · right-drag to set the radius · ⌥ paints the opposite · the map is kept next to the image (.ccmask.png)")
@@ -301,7 +306,11 @@ struct ContentView: View {
         // Parameters: the edited channel's model, or the defaults given to the next one.
         func edit<T>(_ get: @escaping (GradientSpec) -> T, _ fallback: T, _ set: @escaping (inout GradientSpec, T) -> Void, _ setDefault: @escaping (inout GradientSettings, T) -> Void) -> Binding<T> {
             Binding(get: { model.editedGradientSpec.map(get) ?? fallback },
-                    set: { v in if var sp = model.editedGradientSpec { set(&sp, v); model.updateGradientSpec(sp) } else { var d = model.gradientDraft ?? GradientSettings(); setDefault(&d, v); model.gradientDraft = d } })
+                    set: { v in
+                        // A samples / polynomial channel without a model yet gets one (it needs no drawing).
+                        if var sp = model.editedGradientSpec ?? model.ensureGradientSpec() { set(&sp, v); model.updateGradientSpec(sp) }
+                        else { var d = model.gradientDraft ?? GradientSettings(); setDefault(&d, v); model.gradientDraft = d }
+                    })
         }
         let shape = Binding<GradientShape>(get: { model.gradientShape }, set: { model.setGradientShape($0) })
         let mode = edit({ $0.mode }, defaults.mode, { $0.mode = $1 }, { $0.mode = $1 })

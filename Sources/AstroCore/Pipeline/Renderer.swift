@@ -132,9 +132,9 @@ public enum Renderer {
         //    image), then the stars when they go in last.
         if req.applyDetail {
             let overview = try detailOverview(plan, req: req, postStretch: main.postStretch)
-            // Detail, then denoise (which also cleans what the detail stage brought out).
-            PostProcess.detail(combined, settings: plan.settings.detail, scale: req.scale, overview: overview)
+            // Denoise, then detail (on the cleaner image: better quality than the other way round).
             Denoise.apply(combined, settings: plan.settings.denoise, scale: req.scale)
+            PostProcess.detail(combined, settings: plan.settings.detail, scale: req.scale, overview: overview)
             if plan.settings.stars.enabled, plan.settings.stars.stage == .last {
                 starsStage(combined, plan, planes: req.planes, context: req.context, stars: req.stars)
             }
@@ -171,7 +171,7 @@ public enum Renderer {
     static func detailOverview(_ plan: Plan, req: RenderRequest, postStretch: [ResolvedStretch]?) throws -> DetailOverview? {
         guard !plan.settings.detail.isNeutral, let ov = req.overview, let rect = req.overviewRect, plan.needed.allSatisfy({ ov[$0] != nil }) else { return nil }
         let o = try develop(plan, planes: ov, context: req.context, analysisPlanes: nil, fixedPostStretch: postStretch,
-                            correction: req.correction.map { CorrectionInput(map: $0.map, strength: $0.strength, kind: $0.kind, rect: nil) })
+                            correction: req.correction.map { CorrectionInput(map: $0.map, strength: $0.strength, kind: $0.kind, rect: nil, pedestal: $0.pedestal) })
         return DetailOverview(image: o.image, rect: rect)
     }
 
@@ -213,7 +213,7 @@ public enum Renderer {
             var plane = reqPlanes[k]!
             if let c = correction, c.kind == k {
                 plane = plane.copy()
-                c.map.apply(to: plane, strength: c.strength, rect: c.rect)
+                c.map.apply(to: plane, strength: c.strength, rect: c.rect, pedestal: c.pedestal)
             }
             return prepareLinear(k, plane: plane, settings: s, context: context)
         }
@@ -597,8 +597,8 @@ public enum Renderer {
             progress?(Double(y) / Double(h))
         }
         if isCancelled?() == true { return nil }
-        PostProcess.detail(out, settings: settings.detail, scale: 1)
         Denoise.apply(out, settings: settings.denoise)
+        PostProcess.detail(out, settings: settings.detail, scale: 1)
         if settings.stars.enabled, settings.stars.stage == .last {
             // The stars last, strip by strip again (point-wise, so the strips agree with a whole render).
             let plan = try Plan(RenderRequest(planes: sources.mapValues { $0.image }, settings: settings, context: context))

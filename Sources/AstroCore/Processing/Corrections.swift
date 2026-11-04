@@ -140,9 +140,16 @@ public final class CorrectionMap {
 
     // MARK: Application
 
-    /// `image × 2^(strength × map)` for the region `rect` of the image (full-resolution pixels) that
-    /// `image` covers (nil: the whole image); zero pixels stay zero. In place.
-    public func apply(to image: PlanarImage, strength: Float, rect: CGRect? = nil) {
+    /// The sky level a sky-relative correction pivots on: the image's sigma-clipped background.
+    public static func pedestal(of image: PlanarImage) -> Float { Statistics.compute(image: image).background }
+
+    /// In place, for the region `rect` of the image (full-resolution pixels) that `image` covers (nil:
+    /// the whole image); zero pixels stay zero. With a `pedestal` (sky-relative, the default mode)
+    /// only the signal above the sky is scaled: `p + (image − p) × 2^(strength × map)`; without,
+    /// the whole value: `image × 2^(strength × map)`. On linear data the whole value is mostly the
+    /// sky pedestal, which the stretch then magnifies: 0.5 EV on a sky at 0.0062 with a black point
+    /// at 0.0060 multiplied the stretched sky level by ≈ 11, so the strength felt erratic.
+    public func apply(to image: PlanarImage, strength: Float, rect: CGRect? = nil, pedestal: Float? = nil) {
         guard strength != 0 else { return }
         let r = rect ?? CGRect(x: 0, y: 0, width: imageWidth, height: imageHeight)
         let s = scale
@@ -153,13 +160,22 @@ public final class CorrectionMap {
         vDSP_vsmul(sampled.pointer, 1, &k, sampled.pointer, 1, vDSP_Length(n))
         var count = Int32(n)
         vvexp2f(sampled.pointer, sampled.pointer, &count)
-        vDSP_vmul(image.pointer, 1, sampled.pointer, 1, image.pointer, 1, vDSP_Length(n))
+        guard let p = pedestal else {
+            vDSP_vmul(image.pointer, 1, sampled.pointer, 1, image.pointer, 1, vDSP_Length(n))
+            return
+        }
+        let v = image.pointer, g = sampled.pointer
+        let chunks = max(1, min(16, n / 65536))
+        DispatchQueue.concurrentPerform(iterations: chunks) { c in
+            let start = c * n / chunks, end = (c + 1) * n / chunks
+            for i in start..<end where v[i] != 0 { v[i] = p + (v[i] - p) * g[i] }
+        }
     }
 
     /// A corrected copy of the whole image.
-    public func applied(to image: PlanarImage, strength: Float) -> PlanarImage {
+    public func applied(to image: PlanarImage, strength: Float, pedestal: Float? = nil) -> PlanarImage {
         let out = image.copy()
-        apply(to: out, strength: strength)
+        apply(to: out, strength: strength, pedestal: pedestal)
         return out
     }
 
@@ -235,7 +251,23 @@ public struct CorrectionInput {
     public var strength: Float
     public var kind: ChannelKind
     public var rect: CGRect?
-    public init(map: CorrectionMap, strength: Float, kind: ChannelKind, rect: CGRect?) { self.map = map; self.strength = strength; self.kind = kind; self.rect = rect }
+    /// Sky level of a sky-relative correction (nil: the whole value is scaled).
+    public var pedestal: Float?
+    public init(map: CorrectionMap, strength: Float, kind: ChannelKind, rect: CGRect?, pedestal: Float? = nil) {
+        self.map = map; self.strength = strength; self.kind = kind; self.rect = rect; self.pedestal = pedestal
+    }
+}
+
+/// What a painted correction scales.
+public enum CorrectionMode: String, Codable, CaseIterable, Identifiable {
+    /// The signal above the channel's sky level: even on linear data, sky glow and nebulosity are
+    /// dimmed or lifted without the sky pedestal being amplified by the stretch.
+    case aboveSky
+    /// The whole value (an exposure change): strong on linear data, where the sky pedestal is most
+    /// of every value.
+    case exposure
+    public var id: String { rawValue }
+    public var displayName: String { self == .aboveSky ? "Above the sky" : "Exposure" }
 }
 
 /// Per-channel strength of the painted corrections and the brush defaults (stored in the project;
@@ -250,6 +282,8 @@ public struct CorrectionSettings: Codable, Equatable {
     /// Fraction of the radius over which the dab fades (0 hard … 1 soft).
     public var brushFeather: Double = 0.7
     public var darken: Bool = true
+    /// What the map scales: the signal above the sky (default) or the whole value.
+    public var mode: CorrectionMode = .aboveSky
 
     public init() {}
 

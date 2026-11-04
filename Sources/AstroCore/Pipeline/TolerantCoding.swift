@@ -286,5 +286,7 @@ extension CorrectionSettings {
         let d = CorrectionSettings()
         strength = c.value("strength", d.strength); brushRadius = c.value("brushRadius", d.brushRadius); brushFlow = c.value("brushFlow", d.brushFlow)
         brushFeather = c.value("brushFeather", d.brushFeather); darken = c.value("darken", d.darken)
+        // Older projects get the sky-relative mode too (the exposure mode made the strength erratic on linear data).
+        mode = c.value("mode", d.mode)
     }
 }

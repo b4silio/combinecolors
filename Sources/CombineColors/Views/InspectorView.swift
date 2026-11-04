@@ -67,10 +67,10 @@ struct ControlsStripView: View {
                              reset: reset(model.settings.tone.isNeutral && model.settings.post.levelsAreNeutral, "exposure, brightness, contrast, highlights, shadows, black / white point and gamma") {
                                  $0.tone = ToneSettings(); $0.post.blackPoint = 0; $0.post.whitePoint = 1; $0.post.gamma = 1
                              }) { contrastSection }
-                ControlBlock(title: "Detail", width: 262, expanded: binding("detail"), dragScroll: dragScroll, minHeight: contentHeight - 12,
-                             reset: reset(model.settings.detail == DetailSettings(), "local contrast and sharpening") { $0.detail = DetailSettings() }) { detailSection }
                 ControlBlock(title: "Denoise", width: 330, expanded: binding("denoise"), dragScroll: dragScroll, minHeight: contentHeight - 12,
                              reset: reset(model.settings.denoise == DenoiseSettings(), "the noise reduction") { $0.denoise = DenoiseSettings() }) { denoiseSection }
+                ControlBlock(title: "Detail", width: 262, expanded: binding("detail"), dragScroll: dragScroll, minHeight: contentHeight - 12,
+                             reset: reset(model.settings.detail == DetailSettings(), "local contrast and sharpening") { $0.detail = DetailSettings() }) { detailSection }
                 // Blends the Stars tab into the background (both tabs show it).
                 ControlBlock(title: "Combine stars", width: 250, expanded: binding("stars"), dragScroll: dragScroll, minHeight: contentHeight - 12,
                              reset: starsReset) { starsSection }

@@ -39,7 +39,7 @@ public sealed class PreviewRequest
     /// <summary>RGB stars layer blended into the result (null: the R, G, B channels serve as stars).</summary>
     public StarsLayer? Stars;
     /// <summary>Live hand-painted correction of one channel (the corrections editor).</summary>
-    public (CorrectionMap map, float strength, ChannelKind kind)? Correction;
+    public (CorrectionMap map, float strength, ChannelKind kind, float? pedestal)? Correction;
 }
 
 /// <summary>Serial, latest-wins background renderer.</summary>
@@ -133,7 +133,7 @@ public sealed class RenderCoordinator
         var request = new RenderRequest(planes, req.Settings, req.Context, req.AnalysisSamples, req.FixedPostStretch, scale: (float)sc,
                                         overview: overview?.planes, overviewRect: overview?.rect);
         if (req.Settings.Stars.Enabled && req.Stars is StarsLayer st && st.Width == fullW && st.Height == fullH) request.Stars = st.Input(level, x0, y0, cw, ch);
-        if (req.Correction is (CorrectionMap cmap, float cstr, ChannelKind ckind)) request.Correction = new CorrectionInput(cmap, cstr, ckind, new SampleRect(x0 * inv, y0 * inv, cw * inv, ch * inv));
+        if (req.Correction is (CorrectionMap cmap, float cstr, ChannelKind ckind, var cped)) request.Correction = new CorrectionInput(cmap, cstr, ckind, new SampleRect(x0 * inv, y0 * inv, cw * inv, ch * inv), cped);
         var result = Renderer.Render(request);
         var bmp = RasterWriter.MakeDisplayImage(result.Image);
         return new PreviewFrame

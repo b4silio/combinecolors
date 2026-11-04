@@ -193,7 +193,7 @@ public static class Renderer
     {
         if (plan.Settings.Detail.IsNeutral || req.Overview is not { } ov || req.OverviewRect is not { } rect || !plan.Needed.All(ov.ContainsKey)) return null;
         var o = Develop(plan, ov, req.Context, null, postStretch, null,
-                        req.Correction == null ? null : new CorrectionInput(req.Correction.Map, req.Correction.Strength, req.Correction.Kind, null));
+                        req.Correction == null ? null : new CorrectionInput(req.Correction.Map, req.Correction.Strength, req.Correction.Kind, null, req.Correction.Pedestal));
         return new DetailOverview(o.Image, rect);
     }
 
@@ -244,7 +244,7 @@ public static class Renderer
             if (correction != null && correction.Kind == k)
             {
                 plane = plane.Copy();
-                correction.Map.Apply(plane, correction.Strength, correction.Rect);
+                correction.Map.Apply(plane, correction.Strength, correction.Rect, correction.Pedestal);
             }
             return PrepareLinear(k, plane, s, context);
         }
