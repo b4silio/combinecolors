@@ -47,8 +47,7 @@ struct ControlsStripView: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: true) {
             HStack(alignment: .top, spacing: 6) {
-                ControlBlock(title: "Channels", width: 250, expanded: binding("channels"), dragScroll: dragScroll, minHeight: contentHeight - 12,
-                             reset: reset(model.settings.channels.values.allSatisfy(\.isNeutral), "the channel weights and gains") { $0.channels = [:] }) { channelsSection }
+                // The channel weights live in the right pane (Channel mix, under the palettes).
                 ControlBlock(title: "Stretch", width: 262, expanded: binding("stretch"), dragScroll: dragScroll, minHeight: contentHeight - 12,
                              reset: reset(model.settings.stretch == StretchSettings() && model.settings.stretchStage == .preCombine, "the stretch") { $0.stretch = StretchSettings(); $0.stretchStage = .preCombine }) { stretchSection }
                 ControlBlock(title: "Normalisation", width: 290, expanded: binding("normalisation"), dragScroll: dragScroll, minHeight: contentHeight - 12,
@@ -218,37 +217,84 @@ struct ControlsStripView: View {
 
     @ViewBuilder var stretchSection: some View {
         let s = $model.settings.stretch
+        let st = model.settings.stretch
+        // Highlight clipping shown as the share of pixels clipped to white (0…2 %).
+        let clip = Binding<Float>(get: { (1 - model.settings.stretch.highlightsPercentile) * 100 },
+                                  set: { model.settings.stretch.highlightsPercentile = 1 - min(max($0, 0), 100) / 100 })
         MenuPicker(title: "Method", selection: s.method, options: StretchMethod.allCases) { $0.displayName }
         MenuPicker(title: "Order", selection: $model.settings.stretchStage, options: StretchStage.allCases) { $0.shortName }
             .help("Stretch first: each channel is stretched, then combined. Combine first: the linear channels are combined, then the colour image is stretched.")
-        Toggle("Linked channels", isOn: s.linked).help("Same stretch for all channels")
-        if model.settings.stretch.method != .none {
-            SliderRow(title: "Target bg", value: s.targetBackground, range: 0.02...0.6, defaultValue: 0.2, help: "Where the median background lands after the stretch (PixInsight STF default 0.25).")
-            SliderRow(title: "Shadow clip", value: s.shadowsClipping, range: -6...0, defaultValue: -2.8, format: "%.1f", help: "Black point in MADN units below the median (STF default −2.8).")
-            SliderRow(title: "Highlights", value: s.highlightsPercentile, range: 0.9...1, defaultValue: 1, format: "%.4f", help: "Percentile mapped to white (1 = no highlight clipping).")
+        if st.method != .none {
+            Toggle("Linked channels", isOn: s.linked).help("Same stretch for all channels")
         }
-        switch model.settings.stretch.method {
+        if st.usesTargetBackground {
+            SliderRow(title: "Target bg", value: s.targetBackground, range: 0.02...0.6, defaultValue: 0.2, help: "Where the median background lands after the stretch (PixInsight STF default 0.25).")
+        }
+        if st.usesClipping {
+            SliderRow(title: "Shadow clip", value: s.shadowsClipping, range: -6...0, defaultValue: -2.8, format: "%.1f", help: "Black point in noise units (MADN) below the median background (STF default −2.8). Closer to 0 darkens the sky.")
+        }
+        // The manual strengths are relative to the data's noise, so the same values suit any linear stack.
+        switch st.method {
         case .mtf:
-            SliderRow(title: "Shadows", value: s.mtfShadows, range: 0...0.5, defaultValue: 0, format: "%.3f")
-            SliderRow(title: "Midtones", value: s.mtfMidtones, range: 0.001...0.999, defaultValue: 0.5, format: "%.3f", logarithmic: true)
-            SliderRow(title: "Highlights", value: s.mtfHighlights, range: 0.5...1, defaultValue: 1, format: "%.3f")
+            SliderRow(title: "Midtones", value: s.mtfMidtonesSigma, range: 0.3...1000, defaultValue: 10, format: "%.1f", logarithmic: true,
+                      help: "Midtones balance in noise units: lower is brighter. The sky (2.8 noises above the default black point) lands near 2.8 / (2.8 + value): 3 ≈ 0.5, 10 ≈ 0.2, 100 ≈ 0.03. The absolute midtones (PixInsight HistogramTransformation) are shown below.")
         case .arcsinh:
-            SliderRow(title: "Stretch", value: s.arcsinhStretch, range: 1...5000, defaultValue: 200, format: "%.0f", logarithmic: true)
+            SliderRow(title: "Stretch", value: s.arcsinhStrength, range: 0.01...100, defaultValue: 1, format: "%.2f", logarithmic: true,
+                      help: "Stretch factor relative to the noise: 1 puts the sky near 0.2 on most linear stacks, 0.1 near 0.05, 10 near 0.35. The absolute factor (PixInsight ArcsinhStretch) is shown below.")
         case .ghs:
-            SliderRow(title: "ln(D+1)", value: s.ghsLogD, range: 0...12, defaultValue: 5, format: "%.2f", help: "Stretch factor (logarithmic).")
-            SliderRow(title: "b", value: s.ghsB, range: 0...15, defaultValue: 2, help: "Local intensity: how concentrated the stretch is around the symmetry point.")
-            SliderRow(title: "SP", value: s.ghsSP, range: 0...1, defaultValue: 0, format: "%.3f", help: "Symmetry point.")
-            SliderRow(title: "LP", value: s.ghsLP, range: 0...1, defaultValue: 0, format: "%.3f", help: "Shadow protection point.")
-            SliderRow(title: "HP", value: s.ghsHP, range: 0...1, defaultValue: 1, format: "%.3f", help: "Highlight protection point.")
+            SliderRow(title: "Stretch", value: s.ghsStrength, range: 0.001...100, defaultValue: 0.1, format: "%.3f", logarithmic: true,
+                      help: "Stretch factor D relative to the noise. The absolute ln(D+1) (PixInsight / Siril GHS) is shown below.")
+            SliderRow(title: "b", value: s.ghsB, range: 0...15, defaultValue: 2, format: "%.1f", help: "Local intensity: how concentrated the stretch is around the symmetry point (0 = exponential).")
+            SliderRow(title: "SP", value: s.ghsSPPercentile, range: 0...100, defaultValue: 0, format: "%.1f",
+                      help: "Symmetry point, as the share of the image's pixels darker than it: 0 = the black point, ≈ 50 = the sky background, 90+ = nebula. The contrast is greatest around it.", note: "%", curve: 2)
+            SliderRow(title: "LP", value: s.ghsLPPercentile, range: 0...100, defaultValue: 0, format: "%.1f",
+                      help: "Shadow protection: below this percentile the curve continues as a straight line (never above SP).", note: "%", curve: 2)
+            SliderRow(title: "HP", value: s.ghsHPPercentile, range: 0...100, defaultValue: 100, format: "%.2f",
+                      help: "Highlight protection: above this percentile the curve continues as a straight line, keeping star cores from saturating (100 = none; never below SP).", note: "%", curve: 0.5)
         case .log:
-            SliderRow(title: "k", value: s.logK, range: 1...100000, defaultValue: 2000, format: "%.0f", logarithmic: true)
+            SliderRow(title: "Strength", value: s.logStrength, range: 0.01...100, defaultValue: 1, format: "%.2f", logarithmic: true,
+                      help: "k relative to the noise: 1 puts the sky near 0.17 on most linear stacks. The absolute k is shown below.")
         default: EmptyView()
         }
+        if st.usesClipping {
+            SliderRow(title: "Highlights", value: clip, range: 0...2, defaultValue: 0, format: "%.3f",
+                      help: "Share of the pixels clipped to white (the white point). Auto STF keeps the background on target; the other methods keep their strength relative to the noise, so the picture brightens moderately.", note: "%", curve: 3)
+        }
         SliderRow(title: "Gamma", value: s.gamma, range: 0.3...3, defaultValue: 1, logarithmic: true)
-        if !model.settings.stretch.linked && model.settings.stretchStage == .preCombine && model.settings.stretch.method == .autoSTF {
-            Text("Unlinked auto-stretch equalises every channel: normalisation and gain have no visible effect.")
+        if let note = resolvedStretchNote {
+            Text(note).font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+        }
+        if !st.linked && st.method != .none && model.settings.stretchStage == .preCombine {
+            Text("Unlinked stretches equalise every channel: normalisation and gain have little visible effect.")
                 .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    /// The absolute values the manual stretch resolved to (PixInsight-style numbers), per channel
+    /// when they differ; nil for Auto STF and None.
+    private var resolvedStretchNote: String? {
+        let method = model.settings.stretch.method
+        guard [.mtf, .arcsinh, .ghs, .log].contains(method), let f = model.frame, f.settings.stretch.method == method else { return nil }
+        let entries: [(String, ResolvedStretch)]
+        if model.settings.stretchStage == .preCombine {
+            entries = ChannelKind.allCases.compactMap { k in f.channelStretch[k].map { (k.shortName, $0) } }
+        } else {
+            entries = Array(zip(["R", "G", "B", "L"], f.postStretch ?? []))
+        }
+        guard !entries.isEmpty else { return nil }
+        func value(_ r: ResolvedStretch) -> String {
+            switch method {
+            case .mtf: return String(format: "m %.5f", r.midtones)
+            case .arcsinh: return String(format: "factor %.0f", r.arcsinhStretch)
+            case .log: return String(format: "k %.0f", r.logK)
+            case .ghs: return String(format: "ln(D+1) %.2f, SP %.5f", log(r.ghsD + 1), r.ghsSP)
+            default: return ""
+            }
+        }
+        let values = entries.map { ($0.0, value($0.1)) }
+        if Set(values.map(\.1)).count == 1 { return "Absolute: " + values[0].1 }
+        return "Absolute: " + values.map { "\($0.0) \($0.1)" }.joined(separator: " · ")
     }
 
     // MARK: Normalisation
@@ -279,16 +325,6 @@ struct ControlsStripView: View {
                     .font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary)
                 }
             }
-        }
-    }
-
-    // MARK: Channels
-
-    @ViewBuilder var channelsSection: some View {
-        let kinds = ChannelKind.allCases.filter { model.sources[$0] != nil }
-        if kinds.isEmpty { Text("No channels loaded.").font(.caption).foregroundStyle(.secondary) }
-        ForEach(kinds) { k in
-            ChannelAdjustView(model: model, kind: k)
         }
     }
 
@@ -417,48 +453,6 @@ struct ControlsStripView: View {
     }
 
 }
-
-struct ChannelAdjustView: View {
-    @Bindable var model: ProjectModel
-    let kind: ChannelKind
-    @State private var expanded = false
-
-    private var adjust: Binding<ChannelAdjust> {
-        Binding(get: { model.settings.adjust(kind) }, set: { model.settings.setAdjust(kind, $0) })
-    }
-
-    var body: some View {
-        let a = adjust
-        let pre = model.settings.stretchStage == .preCombine
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Toggle(isOn: a.enabled) { EmptyView() }.toggleStyle(.checkbox)
-                Circle().fill(kind.tint).frame(width: 8, height: 8)
-                Text(kind.displayName).font(.subheadline).bold()
-                if !model.settings.allChannels(available: model.availableKinds).contains(kind) {
-                    Text("unused").font(.caption2).foregroundStyle(.tertiary)
-                }
-                Spacer()
-                if !model.settings.adjust(kind).isNeutral {
-                    Button("Reset") { model.settings.setAdjust(kind, ChannelAdjust()) }.controlSize(.mini).buttonStyle(.link)
-                }
-                Button { expanded.toggle() } label: { Image(systemName: expanded ? "chevron.up" : "chevron.down") }.buttonStyle(.plain).controlSize(.small)
-            }
-            SliderRow(title: "Weight", value: a.weight, range: 0...2, defaultValue: 1, help: pre ? "Multiplier after the stretch." : "Linear multiplier before the combined stretch.")
-            if expanded {
-                SliderRow(title: "Linear gain", value: a.gain, range: 0.1...10, defaultValue: 1, logarithmic: true, help: "Multiplier on the normalised linear data (before the stretch).")
-                SliderRow(title: "Pedestal σ", value: a.offsetSigma, range: -20...20, defaultValue: 0, format: "%.1f", help: "Adds a constant in units of the reference background sigma.")
-                if pre {
-                    SliderRow(title: "Target boost", value: a.stretchBoost, range: -0.15...0.4, defaultValue: 0, help: "Raises/lowers this channel's stretch target background.")
-                    SliderRow(title: "Black point", value: a.blackPoint, range: 0...0.5, defaultValue: 0, format: "%.3f", help: "Subtracted after the stretch.")
-                    SliderRow(title: "Gamma", value: a.gamma, range: 0.3...3, defaultValue: 1, logarithmic: true)
-                }
-            }
-        }
-        .padding(.vertical, 2)
-    }
-}
-
 
 enum ColorBandComponent: String, CaseIterable, Identifiable {
     case hue, saturation, lightness

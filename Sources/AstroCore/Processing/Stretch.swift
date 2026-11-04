@@ -23,34 +23,45 @@ public enum StretchMethod: String, Codable, CaseIterable, Identifiable {
 }
 
 /// User-facing stretch parameters.
+///
+/// The manual methods (MTF, arcsinh, GHS, log) are set **relative to the data**: their strength is
+/// in units of the channel's noise (MADN) on the black-point-to-white-point range, so the same
+/// slider position gives a similar picture on a deep, clean stack and on a short, noisy one, and the
+/// whole slider range is usable on linear data (absolute factors would need values in the thousands
+/// for one stack and in the tens for another). `ResolvedStretch` holds the absolute numbers.
 public struct StretchSettings: Codable, Equatable, Hashable {
     public var method: StretchMethod = .autoSTF
     /// Auto STF: where the median lands (PixInsight default 0.25).
     public var targetBackground: Float = 0.2
-    /// Auto black point in units of MADN below the median (PixInsight default -2.8).
+    /// Auto black point in units of MADN below the median (PixInsight default -2.8). Every method.
     public var shadowsClipping: Float = -2.8
-    /// Highlight clipping as a percentile in [0,1]; 1 = none.
+    /// Highlight clipping as a percentile in [0,1]; 1 = none. Every method.
     public var highlightsPercentile: Float = 1
     /// Use the same transform for all channels (computed from the averaged statistics).
     public var linked: Bool = true
-    // Manual MTF (applied in the normalised [0,1] domain after the automatic black point).
-    public var mtfShadows: Float = 0
-    public var mtfMidtones: Float = 0.5
-    public var mtfHighlights: Float = 1
-    // Arcsinh
-    public var arcsinhStretch: Float = 200
-    // GHS
-    public var ghsLogD: Float = 5      // D = exp(logD) - 1
+    /// Manual MTF: midtones balance in noise units (absolute midtones = this × MADN on the range).
+    /// The sky, 2.8 noises above the default black point, lands near 2.8 / (2.8 + this): 10 → ≈ 0.22.
+    public var mtfMidtonesSigma: Float = 10
+    /// Arcsinh: stretch factor in inverse noise units (absolute factor = this / MADN on the range).
+    public var arcsinhStrength: Float = 1
+    /// GHS: stretch factor D in inverse noise units (absolute D = this / MADN on the range).
+    public var ghsStrength: Float = 0.1
     public var ghsB: Float = 2
-    public var ghsSP: Float = 0
-    public var ghsLP: Float = 0
-    public var ghsHP: Float = 1
-    // Log
-    public var logK: Float = 2000
+    /// GHS symmetry point, shadow and highlight protection points as percentiles of the image
+    /// (0…100: the share of pixels darker; 50 ≈ the sky background, 100 = the brightest pixel).
+    public var ghsSPPercentile: Float = 0
+    public var ghsLPPercentile: Float = 0
+    public var ghsHPPercentile: Float = 100
+    /// Log: k in inverse noise units (absolute k = this / MADN on the range).
+    public var logStrength: Float = 1
     /// Output gamma after the stretch (1 = none).
     public var gamma: Float = 1
 
     public init() {}
+
+    /// The parameters each method uses (the stretch block shows only these).
+    public var usesTargetBackground: Bool { method == .autoSTF }
+    public var usesClipping: Bool { method != .none }
 }
 
 /// A stretch resolved for one channel: fixed numbers, ready to be applied.
@@ -287,7 +298,8 @@ public enum Stretch {
 
     /// Resolve the settings for a channel with the given (already normalised) statistics.
     public static func resolve(_ s: StretchSettings, stats: ChannelStats) -> ResolvedStretch {
-        resolve(s, median: stats.median, madn: stats.madn, highlight: stats.percentile(Double(s.highlightsPercentile)), max: stats.max)
+        resolve(s, median: stats.median, madn: stats.madn, highlight: stats.percentile(Double(s.highlightsPercentile)), max: stats.max,
+                percentile: { stats.percentile($0) })
     }
 
     /// Linked resolution: statistics are averaged across channels.
@@ -297,10 +309,14 @@ public enum Stretch {
         let madn = stats.map(\.madn).reduce(0, +) / Float(stats.count)
         let hl = stats.map { $0.percentile(Double(s.highlightsPercentile)) }.max() ?? 1
         let mx = stats.map(\.max).max() ?? 1
-        return resolve(s, median: med, madn: madn, highlight: hl, max: mx)
+        return resolve(s, median: med, madn: madn, highlight: hl, max: mx,
+                       percentile: { q in stats.map { $0.percentile(q) }.reduce(0, +) / Float(stats.count) })
     }
 
-    public static func resolve(_ s: StretchSettings, median: Float, madn: Float, highlight: Float, max: Float) -> ResolvedStretch {
+    /// `percentile(q)` (q in 0…1) gives the image's value below which that share of the pixels lies
+    /// (GHS points); without it the GHS points fall back to the black point / the white point.
+    public static func resolve(_ s: StretchSettings, median: Float, madn: Float, highlight: Float, max: Float,
+                               percentile: ((Double) -> Float)? = nil) -> ResolvedStretch {
         var r = ResolvedStretch()
         r.method = s.method
         r.gamma = s.gamma
@@ -314,16 +330,27 @@ public enum Stretch {
         } else {
             r.midtones = auto.midtones
         }
+        // The noise on the normalised range: the unit of the manual methods' strengths.
+        let range = Swift.max(r.c1 - r.c0, 1e-12)
+        let sigma = madn > 0 ? Swift.min(Swift.max(madn / range, 1e-7), 1) : 1e-3
+        /// A point of the image (percentile 0…100) on the normalised range.
+        func point(_ pct: Float, _ fallback: Float) -> Float {
+            guard let percentile else { return fallback }
+            if pct <= 0 { return 0 }
+            if pct >= 100 { return 1 }
+            return Swift.min(Swift.max((percentile(Double(pct) / 100) - r.c0) / range, 0), 1)
+        }
         switch s.method {
         case .mtf:
-            r.midtones = s.mtfMidtones
-            r.mtfShadows = s.mtfShadows
-            r.mtfHighlights = s.mtfHighlights
-        case .arcsinh: r.arcsinhStretch = s.arcsinhStretch
+            r.midtones = Swift.min(Swift.max(s.mtfMidtonesSigma * sigma, 1e-7), 0.999)
+        case .arcsinh: r.arcsinhStretch = Swift.max(s.arcsinhStrength, 0) / sigma
         case .ghs:
-            r.ghsD = exp(s.ghsLogD) - 1
-            r.ghsB = s.ghsB; r.ghsSP = s.ghsSP; r.ghsLP = s.ghsLP; r.ghsHP = s.ghsHP
-        case .log: r.logK = s.logK
+            r.ghsD = Swift.max(s.ghsStrength, 0) / sigma
+            r.ghsB = s.ghsB
+            r.ghsSP = point(s.ghsSPPercentile, 0)
+            r.ghsLP = Swift.min(point(s.ghsLPPercentile, 0), r.ghsSP)
+            r.ghsHP = Swift.max(point(s.ghsHPPercentile, 1), r.ghsSP)
+        case .log: r.logK = Swift.max(s.logStrength, 0) / sigma
         default: break
         }
         return r

@@ -51,10 +51,13 @@ extension StretchSettings {
         method = c.value("method", d.method); targetBackground = c.value("targetBackground", d.targetBackground)
         shadowsClipping = c.value("shadowsClipping", d.shadowsClipping); highlightsPercentile = c.value("highlightsPercentile", d.highlightsPercentile)
         linked = c.value("linked", d.linked)
-        mtfShadows = c.value("mtfShadows", d.mtfShadows); mtfMidtones = c.value("mtfMidtones", d.mtfMidtones); mtfHighlights = c.value("mtfHighlights", d.mtfHighlights)
-        arcsinhStretch = c.value("arcsinhStretch", d.arcsinhStretch)
-        ghsLogD = c.value("ghsLogD", d.ghsLogD); ghsB = c.value("ghsB", d.ghsB); ghsSP = c.value("ghsSP", d.ghsSP); ghsLP = c.value("ghsLP", d.ghsLP); ghsHP = c.value("ghsHP", d.ghsHP)
-        logK = c.value("logK", d.logK); gamma = c.value("gamma", d.gamma)
+        // The absolute manual parameters of before 1.16 (mtfMidtones, arcsinhStretch, ghsLogD, ghsSP…, logK)
+        // have no data-independent equivalent: such projects get the relative defaults.
+        mtfMidtonesSigma = c.value("mtfMidtonesSigma", d.mtfMidtonesSigma)
+        arcsinhStrength = c.value("arcsinhStrength", d.arcsinhStrength)
+        ghsStrength = c.value("ghsStrength", d.ghsStrength); ghsB = c.value("ghsB", d.ghsB)
+        ghsSPPercentile = c.value("ghsSPPercentile", d.ghsSPPercentile); ghsLPPercentile = c.value("ghsLPPercentile", d.ghsLPPercentile); ghsHPPercentile = c.value("ghsHPPercentile", d.ghsHPPercentile)
+        logStrength = c.value("logStrength", d.logStrength); gamma = c.value("gamma", d.gamma)
     }
 }
 

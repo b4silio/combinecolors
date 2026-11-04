@@ -218,6 +218,10 @@ final class ProjectModel {
     var histogramStorage: [[Int]] = []
     var viewport = Viewport(visibleRect: .zero, scale: 1) { didSet { if viewport != oldValue { viewportChanged() } } }
     var highQualityPreview = false { didSet { scheduleRender() } }
+    /// Tab: the side panes and the preview's crop / zoom toolbars are hidden, leaving the preview
+    /// and the processing strip. Never saved: every launch starts with the panes shown (a
+    /// `-hidePanes YES` launch argument starts hidden, for screenshots).
+    var panesHidden = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)["hidePanes"].map { "\($0)" == "YES" || "\($0)" == "1" } ?? false
     private(set) var isRendering = false
     private(set) var renderError: String? = nil
     private(set) var lastRenderMillis: Double = 0

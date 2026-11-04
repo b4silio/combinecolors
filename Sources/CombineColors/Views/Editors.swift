@@ -5,7 +5,8 @@ import AstroCore
 
 struct MatrixEditorView: View {
     @Bindable var model: ProjectModel
-    @Environment(\.dismiss) private var dismiss
+    /// Closes the editor's panel (Done).
+    var close: () -> Void = {}
 
     private var kinds: [ChannelKind] {
         ChannelKind.allCases.filter { model.sources[$0] != nil || model.settings.matrix.weights[$0] != nil }
@@ -13,7 +14,6 @@ struct MatrixEditorView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Combination matrix").font(.title3).bold()
             Text("Each output channel is a weighted sum of the (stretched or linear) input channels.").font(.caption).foregroundStyle(.secondary)
             Grid(alignment: .trailing, horizontalSpacing: 10, verticalSpacing: 6) {
                 GridRow {
@@ -47,7 +47,7 @@ struct MatrixEditorView: View {
                 .help("Scales the weights so every output column sums to 1.")
                 Button("Clear") { model.settings.matrix = .empty }
                 Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+                Button("Done") { close() }.keyboardShortcut(.defaultAction)
             }
             .controlSize(.small)
         }
@@ -60,7 +60,8 @@ struct MatrixEditorView: View {
 
 struct PixelMathEditorView: View {
     @Bindable var model: ProjectModel
-    @Environment(\.dismiss) private var dismiss
+    /// Closes the editor's panel (Done).
+    var close: () -> Void = {}
     @State private var program: PixelMathProgram = PixelMathProgram(red: "", green: "", blue: "")
     @State private var error: String? = nil
     @State private var presetName = ""
@@ -74,7 +75,6 @@ struct PixelMathEditorView: View {
         HStack(alignment: .top, spacing: 14) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("Pixel Math").font(.title3).bold()
                     Spacer()
                     Menu("Presets") {
                         Section("Built-in") {
@@ -114,7 +114,7 @@ struct PixelMathEditorView: View {
                         Button("Delete") { var p = userPresets; p.removeValue(forKey: presetName); presetsData = (try? JSONEncoder().encode(p)) ?? Data() }
                     }
                     Spacer()
-                    Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+                    Button("Done") { close() }.keyboardShortcut(.defaultAction)
                 }
                 .controlSize(.small)
             }

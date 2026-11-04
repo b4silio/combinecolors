@@ -4,8 +4,6 @@ import AstroCore
 /// Palette previews (right pane): a header row of controls, then the thumbnails grouped by family.
 struct PaletteGridView: View {
     @Bindable var model: ProjectModel
-    @Binding var showMatrixEditor: Bool
-    @Binding var showPixelMath: Bool
     /// Thumbnail width in points (zoom).
     @AppStorage("paletteThumbSize") private var thumbSize: Double = 100
 
@@ -27,8 +25,9 @@ struct PaletteGridView: View {
                     Image(systemName: "photo").font(.system(size: 12)).foregroundStyle(.secondary)
                 }
                 HStack(spacing: 6) {
-                    Button("Matrix…") { showMatrixEditor = true }
-                    Button("Pixel Math…") { showPixelMath = true }
+                    // Movable panels, not sheets: the preview stays visible while editing.
+                    Button("Matrix…") { EditorPanels.shared.show("matrix", title: "Combination Matrix") { MatrixEditorView(model: model, close: $0) } }
+                    Button("Pixel Math…") { EditorPanels.shared.show("pixelMath", title: "Pixel Math") { PixelMathEditorView(model: model, close: $0) } }
                     Text(hiddenCount == 0 ? "" : "\(hiddenCount) hidden").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                     Spacer(minLength: 0)
                     Button("Reset all") { model.resetAllProcessing() }

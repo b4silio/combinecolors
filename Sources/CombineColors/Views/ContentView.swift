@@ -5,8 +5,6 @@ import AstroCore
 struct ContentView: View {
     @Bindable var model: ProjectModel
     @Environment(\.undoManager) private var undoManager
-    @State private var showMatrixEditor = false
-    @State private var showPixelMath = false
     @State private var dropTargeted = false
     @State private var zoomRequest: (ZoomAction, Int)? = nil
     @State private var zoomCounter = 0
@@ -15,23 +13,31 @@ struct ContentView: View {
         VStack(spacing: 0) {
             HSplitView {
                 HStack(spacing: 0) {
-                    ChannelStripView(model: model)
-                    Divider()
+                    if !model.panesHidden {
+                        ChannelStripView(model: model)
+                        Divider()
+                    }
                     ZStack(alignment: .topTrailing) {
                         PreviewView(model: model, zoomRequest: $zoomRequest)
                         if model.sources.isEmpty { if model.activeLayer == .stars { emptyStarsState } else { emptyState } }
-                        previewToolbar
+                        // Tab mode hides the crop / rotate toolbar, unless an editor or the crop is open.
+                        if !model.panesHidden || model.editingTool != nil || model.cropEditing { previewToolbar }
                     }
-                    .overlay(alignment: .bottomTrailing) { zoomToolbar }
+                    .overlay(alignment: .bottomTrailing) { if !model.panesHidden { zoomToolbar } }
                 }
                 .frame(minWidth: 560)
                 .layoutPriority(1)
-                VStack(spacing: 0) {
-                    PaletteGridView(model: model, showMatrixEditor: $showMatrixEditor, showPixelMath: $showPixelMath)
-                    Divider()
-                    PresetBarView(model: model)
+                if !model.panesHidden {
+                    VStack(spacing: 0) {
+                        PaletteGridView(model: model)
+                        Divider()
+                        // Weights next to the palettes: together they make the colour combination.
+                        ChannelMixView(model: model)
+                        Divider()
+                        PresetBarView(model: model)
+                    }
+                    .frame(minWidth: 380, idealWidth: 460, maxWidth: 760)
                 }
-                .frame(minWidth: 380, idealWidth: 460, maxWidth: 760)
             }
             Divider()
             ControlsStripView(model: model)
@@ -39,6 +45,7 @@ struct ContentView: View {
             StatusBar(model: model)
         }
         .frame(minWidth: 1100, minHeight: 700)
+        .background(TabKeyMonitor { model.panesHidden.toggle() })
         .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
             DropHelpers.urls(from: providers) { urls in model.loadFiles(DropHelpers.expandDirectories(urls)) }
             return true
@@ -50,8 +57,6 @@ struct ContentView: View {
         }
         .onAppear { model.undoManager = undoManager }
         .onChange(of: undoManager) { _, um in model.undoManager = um }
-        .sheet(isPresented: $showMatrixEditor) { MatrixEditorView(model: model) }
-        .sheet(isPresented: $showPixelMath) { PixelMathEditorView(model: model) }
         .sheet(isPresented: $model.exportRequested) { ExportSheet(model: model) }
         .sheet(isPresented: $model.starRemovalRequested) { StarRemovalSheet(model: model) }
         .sheet(item: $model.pendingColorFile) { pending in
@@ -63,7 +68,6 @@ struct ContentView: View {
         .alert("Error", isPresented: Binding(get: { model.errorMessage != nil }, set: { if !$0 { model.errorMessage = nil } })) {
             Button("OK") { model.errorMessage = nil }
         } message: { Text(model.errorMessage ?? "") }
-        .toolbar { toolbarContent }
         .navigationTitle(model.projectURL?.deletingPathExtension().lastPathComponent ?? "CombineColors")
     }
 
@@ -464,13 +468,6 @@ struct ContentView: View {
         .opacity(model.sources.isEmpty ? 0 : 1)
     }
 
-    @ToolbarContentBuilder private var toolbarContent: some ToolbarContent {
-        ToolbarItemGroup(placement: .primaryAction) {
-            Button { Panels.openImages { model.loadFiles($0) } } label: { Label("Add images", systemImage: "plus") }.help("Add channel images")
-            Button { model.exportRequested = true } label: { Label("Export", systemImage: "square.and.arrow.up") }.disabled(model.sources.isEmpty)
-        }
-    }
-
     private func zoom(_ a: ZoomAction) { zoomCounter += 1; zoomRequest = (a, zoomCounter) }
 
     private func assignSheet(_ pending: PendingFile) -> some View {
@@ -488,4 +485,31 @@ struct ContentView: View {
         }
         .padding(16).frame(width: 420)
     }
+}
+
+/// Watches the window for a plain Tab (no modifiers) and calls `action`, unless a text field is
+/// being edited (Tab then moves between fields as usual) or a sheet is open.
+struct TabKeyMonitor: NSViewRepresentable {
+    var action: () -> Void
+
+    final class MonitorView: NSView {
+        var action: () -> Void = {}
+        private var token: Any? = nil
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let t = token { NSEvent.removeMonitor(t); token = nil }
+            guard window != nil else { return }
+            token = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self, let window = self.window, event.window === window, event.keyCode == 48,
+                      event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+                      window.attachedSheet == nil, !(window.firstResponder is NSTextView) else { return event }
+                if !event.isARepeat { self.action() }
+                return nil
+            }
+        }
+        deinit { if let t = token { NSEvent.removeMonitor(t) } }
+    }
+
+    func makeNSView(context: Context) -> MonitorView { let v = MonitorView(); v.action = action; return v }
+    func updateNSView(_ v: MonitorView, context: Context) { v.action = action }
 }

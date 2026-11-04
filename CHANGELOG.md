@@ -5,6 +5,17 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 (`scripts/bump.sh`). The version lives in `VERSION` and is stamped into the app at build time;
 `scripts/release.sh` tags it and publishes the DMG as a GitHub release.
 
+## [1.16.0] – 2026-11-04
+
+- Channel mix: the channel weights moved from the processing strip to the right pane, under the palettes (one compact row per channel; the chevron opens gain, pedestal and the per-channel stretch tweaks)
+- Tab hides the side panes and the crop / zoom toolbars, leaving the preview and the processing strip (View ▸ Hide Side Panels); every launch starts with them shown
+- Manual stretches are set relative to the data's noise, so their sliders cover the useful range on any linear stack: MTF midtones, arcsinh and log strength, GHS stretch; GHS SP / LP / HP are percentiles of the image (50 % ≈ the sky); the absolute PixInsight-style values are shown under the block. Projects saved with manual stretch values get the new defaults
+- The Stretch block shows only the parameters of the chosen method (Target bg for Auto STF only); Highlights is the share of pixels clipped to white (0–2 %) and no longer burns the image
+- Pixel Math and Matrix editors open as movable panels instead of dialogs over the preview, so edits are seen live
+- No window toolbar (Add Images ⌘O and Export ⌘E stay in the File menu): a lower title bar
+- Hα is shown in orange and SII in red
+- These changes are in the macOS app only; the Windows / Linux builds are unchanged
+
 ## [1.15.1] – 2026-11-04
 
 - Fix: Generate produced no gradient points on a channel without a model (after switching channels in the gradient editor, or after Remove model): the samples model is now created on Generate or when a grid parameter changes

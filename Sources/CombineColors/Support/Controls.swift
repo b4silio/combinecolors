@@ -15,17 +15,21 @@ struct SliderRow: View {
     /// Small grey note after the title, e.g. the radius of a filter.
     var note: String? = nil
     var labelWidth: CGFloat = 70
+    /// Linear sliders only: the value follows position^curve (> 1 gives finer control near the
+    /// lower end, e.g. small clipping percentages).
+    var curve: Float = 1
 
     private var position: Binding<Double> {
         Binding(
             get: {
                 if logarithmic { return Double(log(max(value, range.lowerBound)) - log(range.lowerBound)) / Double(log(range.upperBound) - log(range.lowerBound)) }
-                return Double((value - range.lowerBound) / (range.upperBound - range.lowerBound))
+                let t = min(max((value - range.lowerBound) / (range.upperBound - range.lowerBound), 0), 1)
+                return Double(curve == 1 ? t : pow(t, 1 / curve))
             },
             set: { p in
                 let t = Float(min(max(p, 0), 1))
                 if logarithmic { value = exp(log(range.lowerBound) + t * (log(range.upperBound) - log(range.lowerBound))) }
-                else { value = range.lowerBound + t * (range.upperBound - range.lowerBound) }
+                else { value = range.lowerBound + (curve == 1 ? t : pow(t, curve)) * (range.upperBound - range.lowerBound) }
             })
     }
 
@@ -266,9 +270,9 @@ extension Float {
 extension ChannelKind {
     var tint: Color {
         switch self {
-        case .ha: return .red
+        case .ha: return .orange
         case .oiii: return .teal
-        case .sii: return .orange
+        case .sii: return .red
         case .hb: return .blue
         case .red: return Color(red: 1, green: 0.3, blue: 0.3)
         case .green: return Color(red: 0.3, green: 0.9, blue: 0.3)

@@ -55,14 +55,19 @@ export at full resolution.
   dynamic Pixel-Math palettes (Foraxx SHO/HOO, line-ratio, OIII-protected, …),
   broadband RGB / LRGB / HαRGB, and a Monochrome palette (weighted average of
   every loaded channel). Every palette is editable:
-  matrix palettes open in a weight table, dynamic ones in the Pixel Math editor.
+  matrix palettes open in a weight table, dynamic ones in the Pixel Math editor
+  (both are movable panels, so the preview stays in view while editing).
 * **Pixel Math**: expressions per output channel (R, G, B, optional L) with
   `+ - * / % ^ ~`, comparisons, `?:`, 40 functions (`mtf`, `iif`, `lerp`,
   `clamp`, `med`, `smoothstep`, …) and whole-channel statistics
   (`cmed(Ha)`, `cbg(OIII)`, `cnoise`, `cpct(x, q)`). Vectorised with Accelerate.
 * **Stretch** (PixInsight-style ScreenTransferFunction and more): Auto STF
   (median → target background, shadows clipping in MADN units), manual MTF,
-  arcsinh, generalised hyperbolic (GHS), logarithmic; linked or unlinked;
+  arcsinh, generalised hyperbolic (GHS), logarithmic; linked or unlinked.
+  The manual methods are set relative to the data's noise, so their sliders
+  cover the useful range on any linear stack (the absolute PixInsight-style
+  values are shown under them); GHS points are percentiles of the image
+  (50 % ≈ the sky). The block shows only the parameters of the chosen method;
   applied **per channel before combining** or **to the colour image after a
   linear combination** (both orders are available because they give different
   results — see below).
@@ -324,10 +329,14 @@ release with the changelog section as notes.
    you never use with the eye button (Favourites / All switch shows them again).
    *Reset all* removes all processing (no stretch, normalisation, luminance,
    colour, contrast, balance, denoise or detail); the *Default* button left of
-   *Save preset* brings back the palette's default look.
-4. **Tune** in the strip of blocks under the preview (Channels, Stretch,
+   *Save preset* brings back the palette's default look. Under the palettes,
+   **Channel mix** sets each channel's weight (checkbox = used or not); the
+   chevron of a row opens its gain, pedestal and per-channel stretch tweaks.
+4. **Tune** in the strip of blocks under the preview (Stretch,
    Normalisation, Luminance, Colour bands, Colour, Balance, Contrast, Denoise, Detail, Combine stars —
-   the order in which they run):
+   the order in which they run). **Tab** hides the side panes and the
+   crop / zoom toolbars, leaving the preview and the strip (Tab again brings
+   them back; every launch starts with them shown):
    click a block's vertical title to collapse or expand it, its ↺ icon (top
    right) resets it, scroll sideways or
    drag on empty space to reach the others. Everything updates live; double-click a slider label to reset
@@ -338,7 +347,7 @@ release with the changelog section as notes.
    the Stars tab; the first use guides through downloading StarNet2 and
    accepting its license. Work on each tab (*BG* / *Stars*) on its own, then
    *Combine BG and Stars* in the Combine stars block of the Background tab.
-5. **Export** (⌘E, File menu or toolbar) at full resolution; *HQ* in the
+5. **Export** (⌘E or the File menu) at full resolution; *HQ* in the
    preview toolbar renders the preview with more pixels.
 6. **Save the project** (⌘S) to come back later; *File ▸ Close Image* clears
    everything (both tabs, crop, settings, presets) for the next target.
@@ -449,6 +458,9 @@ function and auto-STF constants (shadows clipping −2.8 MADN, target
 background 0.25) are PixInsight's; arcsinh and logarithmic stretches are the
 usual forms; the generalised hyperbolic stretch is the Payne/Siril formulation
 (`1 − (1 + D·b·x)^(−1/b)`, mirrored about SP, linear below LP and above HP).
+The manual strengths are scaled by the noise on the black-to-white range
+(σ = MADN / (white − black)): arcsinh factor = strength / σ, log k = strength / σ,
+GHS D = strength / σ, MTF midtones = value × σ.
 
 ## Layout of the code
 

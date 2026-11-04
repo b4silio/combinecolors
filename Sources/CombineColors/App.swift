@@ -27,6 +27,8 @@ struct CombineColorsApp: App {
                 }
         }
         .defaultSize(width: 1500, height: 950)
+        // No toolbar (Add Images ⌘O and Export ⌘E are in the File menu): a plain, low title bar.
+        .windowToolbarStyle(.unifiedCompact)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("Add Images…") { Panels.openImages { model.loadFiles($0) } }.keyboardShortcut("o")
@@ -67,6 +69,9 @@ struct CombineColorsApp: App {
                 Button("Stars Tab") { model.switchLayer(to: .stars) }.keyboardShortcut("2")
                 Divider()
                 Button("Fit to Window") { model.fitRequest += 1 }.keyboardShortcut("0")
+                // Tab itself is caught by the window (ContentView's TabKeyMonitor): a menu shortcut
+                // on a plain Tab would also take it from the text fields.
+                Button(model.panesHidden ? "Show Side Panels  (Tab)" : "Hide Side Panels  (Tab)") { model.panesHidden.toggle() }
                 Toggle("High Quality Preview", isOn: Binding(get: { model.highQualityPreview }, set: { model.highQualityPreview = $0 }))
                 Picker("Crop Limits", selection: Binding(get: { model.cropOverlay }, set: { model.cropOverlay = $0 })) {
                     ForEach(CropOverlayMode.allCases) { Text($0.displayName).tag($0) }

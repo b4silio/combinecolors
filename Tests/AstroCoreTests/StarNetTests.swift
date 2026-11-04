@@ -126,15 +126,13 @@ final class StarNetTests: XCTestCase {
         for method in StretchMethod.allCases {
             var s = StretchSettings()
             s.method = method
-            if method == .mtf { s.mtfShadows = 0.05; s.mtfMidtones = 0.2; s.mtfHighlights = 0.9 }
-            if method == .ghs { s.ghsSP = 0.02 }
+            if method == .ghs { s.ghsSPPercentile = 30 }
             s.gamma = method == .log ? 0.8 : 1
             let r = Stretch.resolve(s, stats: stats)
             let inv = InverseStretch(r)
             let lo = method == .none ? 0 : r.c0, hi = method == .none ? 1 : r.c1
-            // The inverse is only defined where the stretch is not clipped (between the black and white points;
-            // for the manual MTF also inside its own shadows / highlights).
-            let a = method == .mtf ? lo + 0.05 * (hi - lo) : lo, b = method == .mtf ? lo + 0.9 * (hi - lo) : hi
+            // The inverse is only defined where the stretch is not clipped (between the black and white points).
+            let a = lo, b = hi
             var worst: Float = 0
             for i in 1..<200 {
                 let x = a + (b - a) * Float(i) / 200

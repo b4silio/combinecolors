@@ -369,7 +369,7 @@ final class TolerantDecodingTests: XCTestCase {
     func testMissingAndUnknownKeysFallBackToDefaults() throws {
         let json = """
         {"version": 1, "channels": [{"kind": "Ha", "path": "/x/ha.fits"}],
-         "settings": {"paletteID": "hoo", "mode": "matrix", "stars": {"enabled": true}, "stretch": {"method": "ghs", "ghsLogD": 3.5, "bogus": 1},
+         "settings": {"paletteID": "hoo", "mode": "matrix", "stars": {"enabled": true}, "stretch": {"method": "ghs", "ghsStrength": 3.5, "bogus": 1},
                       "normalization": {"method": "noSuchMethod"}, "post": {"saturation": 1.5}, "channels": {"OIII": {"gain": 2}}},
          "crop": {"x": 1, "y": 2, "width": 30, "height": 40}}
         """
@@ -380,7 +380,7 @@ final class TolerantDecodingTests: XCTestCase {
         XCTAssertTrue(doc.settings.stars.enabled)
         XCTAssertEqual(doc.settings.stars.stretch, .auto)            // missing key → default
         XCTAssertEqual(doc.settings.stretch.method, .ghs)
-        XCTAssertEqual(doc.settings.stretch.ghsLogD, 3.5)
+        XCTAssertEqual(doc.settings.stretch.ghsStrength, 3.5)
         XCTAssertEqual(doc.settings.stretch.targetBackground, StretchSettings().targetBackground)
         XCTAssertEqual(doc.settings.normalization.method, NormalizationSettings().method)   // unknown value → default
         XCTAssertEqual(doc.rotation, 0)                                                    // missing → no rotation
