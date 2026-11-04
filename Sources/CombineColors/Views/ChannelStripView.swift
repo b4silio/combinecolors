@@ -42,7 +42,8 @@ struct ChannelStripView: View {
                 }
             }
             .padding(.horizontal, Self.padding).padding(.top, Self.padding)
-            // Star removal (StarNet2) replaces the channels by their starless versions.
+            // Star removal (StarNet2) replaces the channels by their starless versions (Background
+            // tab only; kept in place on the Stars tab so the tabs below do not move).
             Button { model.starRemovalRequested = true } label: {
                 Label("Remove Stars…", systemImage: "star.slash")
                     .font(.system(size: 10))
@@ -51,9 +52,34 @@ struct ChannelStripView: View {
                     .background(model.isRemovingStars ? Color.accentColor.opacity(0.35) : Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 4))
             }
             .buttonStyle(.plain)
-            .disabled(model.sources.isEmpty)
-            .help("Remove the stars of the channels with StarNet2 (a free program, downloaded once): writes _bg and _stars files and switches the channels to the _bg ones")
+            .disabled(model.sources.isEmpty || model.activeLayer == .stars)
+            .help("Remove the stars of the Background channels with StarNet2 (a free program, downloaded once): writes _bg and _stars files, switches the channels to the _bg ones and puts the stars on the Stars tab")
             .padding(.horizontal, Self.padding).padding(.top, 3)
+            // Background / Stars tabs: two sets of channels, each with its own settings.
+            HStack(spacing: 2) {
+                ForEach(ImageLayer.allCases) { layer in
+                    let active = model.activeLayer == layer
+                    let count = model.layerSources(layer).count
+                    Button { model.switchLayer(to: layer) } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: layer.symbol).font(.system(size: 10))
+                            Text(layer == .background ? "BG" : "Stars").font(.system(size: 11, weight: active ? .bold : .regular))
+                            if count > 0 { Text("\(count)").font(.system(size: 9)).foregroundStyle(.secondary) }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                        .background(active ? Color.accentColor.opacity(0.45) : Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 5))
+                        .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(active ? Color.accentColor : .clear, lineWidth: 1))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!active && !model.canSwitchLayer)
+                    .help(layer == .background
+                          ? "Background: the starless channels and their settings (⌘1). The Combine stars block blends the Stars tab in."
+                          : "Stars: the star channels with settings of their own (⌘2) — from Remove Stars, Load RGB stars or dropped here.")
+                }
+            }
+            .padding(.horizontal, Self.padding).padding(.top, 5)
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: Self.slotSpacing) {
                     ForEach(order) { kind in

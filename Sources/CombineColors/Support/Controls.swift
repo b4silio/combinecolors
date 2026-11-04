@@ -121,6 +121,8 @@ struct ControlBlock<Content: View>: View {
     var dragScroll: ScrollDragState? = nil
     /// Visible height of the block (the content stretches to it so empty space stays draggable).
     var minHeight: CGFloat = 0
+    /// The block's reset (icon at the top right); nil = none.
+    var reset: BlockReset? = nil
     @ViewBuilder var content: Content
 
     @ViewBuilder private func dragBackground(_ color: Color) -> some View {
@@ -149,11 +151,24 @@ struct ControlBlock<Content: View>: View {
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 2) { content }
                         .padding(.horizontal, 6)
-                        .padding(.vertical, 5)
+                        .padding(.top, reset == nil ? 5 : 16)
+                        .padding(.bottom, 5)
                         .frame(width: width, alignment: .leading)
                         // Fill the block so that a drag on the empty space below the controls scrolls the strip too.
                         .frame(minHeight: minHeight, alignment: .top)
                         .background { dragBackground(Color.clear) }
+                }
+                .overlay(alignment: .topTrailing) {
+                    if let r = reset {
+                        Button { r.action() } label: {
+                            Image(systemName: "arrow.counterclockwise").font(.system(size: 10, weight: .semibold))
+                                .frame(width: 16, height: 14).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(!r.enabled)
+                        .help(r.help)
+                        .padding(.top, 2).padding(.trailing, 4)
+                    }
                 }
             }
         }
@@ -161,6 +176,13 @@ struct ControlBlock<Content: View>: View {
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(0.08)))
     }
+}
+
+/// The reset of one processing block.
+struct BlockReset {
+    var enabled: Bool
+    var help: String
+    var action: () -> Void
 }
 
 enum DropHelpers {
@@ -207,13 +229,26 @@ enum Panels {
         p.begin { r in if r == .OK { completion(DropHelpers.expandDirectories(p.urls)) } }
     }
 
+    /// Save panel for one file type. The extension is enforced: FITS has no system type
+    /// ("public.fits" is not registered), so a type without its own extension takes the one of the
+    /// proposed name, and a name typed without it gets it appended.
     static func save(name: String, type: UTType, message: String, completion: @escaping (URL) -> Void) {
         let p = NSSavePanel()
+        let nameExt = (name as NSString).pathExtension
+        let ext = type.preferredFilenameExtension ?? (nameExt.isEmpty ? nil : nameExt)
+        let resolved = type.preferredFilenameExtension == nil ? ext.flatMap { UTType(filenameExtension: $0) } ?? type : type
         p.nameFieldStringValue = name
-        p.allowedContentTypes = [type]
+        p.allowedContentTypes = [resolved]
         p.message = message
         p.canCreateDirectories = true
-        p.begin { r in if r == .OK, let u = p.url { completion(u) } }
+        p.begin { r in
+            guard r == .OK, var u = p.url else { return }
+            let aliases: [String: Set<String>] = ["fits": ["fits", "fit", "fts"], "tif": ["tif", "tiff"], "jpg": ["jpg", "jpeg"]]
+            if let ext, !ext.isEmpty, !(aliases[ext.lowercased()] ?? [ext.lowercased()]).contains(u.pathExtension.lowercased()) {
+                u = u.appendingPathExtension(ext)
+            }
+            completion(u)
+        }
     }
 
     static func openProject(completion: @escaping (URL) -> Void) {

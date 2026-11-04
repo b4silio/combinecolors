@@ -125,6 +125,14 @@ extension ProjectModelTests {
         XCTAssertEqual(Set(m.recentSets.first?.entries.map { ($0.path as NSString).lastPathComponent } ?? []), ["x-Ha_bg.fits", "x-OIII_bg.fits"])
         XCTAssertTrue(m.starRemovalItems().allSatisfy(\.alreadyStarless))
         XCTAssertTrue(m.statusText.contains("stars removed"), m.statusText)
+        // The stars fill the Stars tab (not shown) and the combination is on.
+        await wait { m.layerSources(.stars).count == 2 && m.starsLayer != nil && !m.starsCompositeBusy }
+        XCTAssertEqual(m.activeLayer, .background)
+        XCTAssertEqual(Set(m.layerSources(.stars).values.compactMap { $0.url?.lastPathComponent }), ["x-Ha_stars.fits", "x-OIII_stars.fits"])
+        XCTAssertTrue(m.settings.stars.enabled)
+        XCTAssertFalse(m.settings.stars.useMask)
+        XCTAssertNotNil(m.starsLayer)
+        XCTAssertEqual(m.projectDocument().starsLayer?.channels.count, 2)
     }
 
     func testStoppingStarRemovalLeavesTheChannelsAlone() async throws {

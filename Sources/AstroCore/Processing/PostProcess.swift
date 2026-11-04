@@ -13,20 +13,69 @@ public struct DetailOverview {
 /// Colour post-processing on stretched [0,1] RGB data. Everything is point-wise.
 public enum PostProcess {
 
+    /// The Colour block: hue, vibrance, saturation, SCNR (the levels are in `applyTone`).
     public static func apply(_ s: PostSettings, to img: RGBImage) {
         if s.hueShift != 0 { hueShift(img, degrees: s.hueShift) }
         if s.vibrance != 0 { vibrance(img, amount: s.vibrance) }
         if s.saturation != 1 { saturation(img, factor: s.saturation) }
         if s.scnrGreen > 0 { scnr(img, amount: s.scnrGreen) }
-        if s.blackPoint != 0 || s.whitePoint != 1 {
-            let a = 1 / max(s.whitePoint - s.blackPoint, 1e-4)
-            for p in img.planes { p.affine(scale: a, offset: -s.blackPoint * a) }
-        }
         img.clamp01()
-        if s.gamma != 1 && s.gamma > 0 {
-            var g = s.gamma
-            for p in img.planes { var n = Int32(p.count); vvpowsf(p.pointer, &g, p.pointer, &n) }
+    }
+
+    /// The Contrast block, per channel: exposure (gain), black / white point, shadows, highlights,
+    /// contrast, brightness, then gamma — one 4096-entry curve after the gain.
+    public static func applyTone(_ t: ToneSettings, levels l: PostSettings, to img: RGBImage) {
+        guard !t.isNeutral || !l.levelsAreNeutral else { return }
+        img.clamp01()
+        if t.exposure != 0 {
+            let g = pow(2, t.exposure)
+            for p in img.planes { p.affine(scale: g, offset: 0) }
+            img.clamp01()
         }
+        let curveNeutral = t.brightness == 0 && t.contrast == 0 && t.highlights == 0 && t.shadows == 0 && l.levelsAreNeutral
+        guard !curveNeutral else { return }
+        let n = 4096
+        let lut = (0..<n).map { toneCurve(Float($0) / Float(n - 1), tone: t, levels: l) }
+        let last = Float(n - 1)
+        for p in img.planes {
+            let ptr = p.pointer
+            DispatchQueue.concurrentPerform(iterations: max(1, min(16, p.count / 65536))) { c in
+                let chunks = max(1, min(16, p.count / 65536))
+                let start = c * p.count / chunks, end = (c + 1) * p.count / chunks
+                for i in start..<end {
+                    let x = min(max(ptr[i], 0), 1) * last
+                    let k = min(Int(x), n - 2)
+                    let f = x - Float(k)
+                    ptr[i] = lut[k] + f * (lut[k + 1] - lut[k])
+                }
+            }
+        }
+    }
+
+    /// The tone curve on [0, 1] (exposure excluded): levels, shadows / highlights bumps (sine
+    /// lobes on [0, ½] and [½, 1], so black, mid-tone and white stay put and the curve stays
+    /// monotonic), contrast (smoothstep S-curve, or its inverse for negative values), brightness (midtones
+    /// transfer function), gamma.
+    public static func toneCurve(_ x0: Float, tone t: ToneSettings, levels l: PostSettings) -> Float {
+        var x = (x0 - l.blackPoint) / max(l.whitePoint - l.blackPoint, 1e-4)
+        x = min(max(x, 0), 1)
+        if t.shadows != 0, x < 0.5 { x += 0.15 * t.shadows * sin(2 * .pi * x) }
+        if t.highlights != 0, x > 0.5 { x += 0.15 * t.highlights * sin(2 * .pi * (x - 0.5)) }
+        if t.contrast > 0 {
+            let s = x * x * (3 - 2 * x)
+            x += t.contrast * (s - x)
+        } else if t.contrast < 0 {
+            // Inverse S: flatter mid-tones, black and white kept.
+            let s = x * x * (3 - 2 * x)
+            x += -t.contrast * (x - s)
+        }
+        if t.brightness != 0 {
+            // MTF with the mid-tones balance moved from ½: positive brightens.
+            x = Stretch.mtf(0.5 - 0.4 * t.brightness, min(max(x, 0), 1))
+        }
+        x = min(max(x, 0), 1)
+        if l.gamma != 1 && l.gamma > 0 { x = pow(x, l.gamma) }
+        return x
     }
 
     /// Luma-preserving saturation: c' = Y + f (c - Y).
@@ -110,7 +159,8 @@ public enum PostProcess {
     // MARK: - Selective colour (HSL bands)
 
     /// Per-band hue/saturation/lightness. Band weights interpolate linearly between the band
-    /// centres around the hue circle and fade out for nearly neutral pixels.
+    /// centres around the hue circle (widened and S-shaped with `softness`) and fade out for
+    /// nearly neutral pixels.
     public static func colorBands(_ img: RGBImage, settings s: ColorBandsSettings) {
         guard !s.isNeutral else { return }
         let bands = ColorBand.allCases
@@ -126,12 +176,13 @@ public enum PostProcess {
             for k in 0..<bands.count {
                 let a = adj[k]
                 if a.isNeutral { continue }
-                let w = bandWeight(hue: h, index: k, centers: centers)
+                let w = bandWeight(hue: h, index: k, centers: centers, softness: s.softness)
                 if w <= 0 { continue }
                 dh += w * a.hue; ds += w * a.saturation; dl += w * a.lightness
             }
             if dh == 0 && ds == 0 && dl == 0 { continue }
-            let t = min(sat / 0.25, 1)
+            // Softer bands also fade in more gradually from grey.
+            let t = min(sat / (0.25 + 0.25 * s.softness), 1)
             let f = t * t * (3 - 2 * t)          // fade for nearly grey pixels
             h = fmodf(h + f * dh + 360, 360)
             sat = min(max(sat * (1 + f * ds), 0), 1)
@@ -141,15 +192,22 @@ public enum PostProcess {
         }
     }
 
-    /// Piecewise-linear interpolation weight of band `index` at `hue` (degrees).
-    static func bandWeight(hue: Float, index: Int, centers: [Float]) -> Float {
+    /// Weight of band `index` at `hue` (degrees): 1 at its centre, falling to 0 at the
+    /// neighbouring centres (piecewise linear, a partition of unity) at softness 0; with softness
+    /// the reach grows up to 2× and the fall-off turns into a smoothstep.
+    static func bandWeight(hue: Float, index: Int, centers: [Float], softness: Float = 0) -> Float {
         let c = centers[index]
         let prev = centers[(index + centers.count - 1) % centers.count]
         let next = centers[(index + 1) % centers.count]
-        let toPrev = fmodf(c - prev + 360, 360), toNext = fmodf(next - c + 360, 360)
+        let widen = 1 + min(max(softness, 0), 1)
+        let toPrev = fmodf(c - prev + 360, 360) * widen, toNext = fmodf(next - c + 360, 360) * widen
         let d = fmodf(hue - c + 540, 360) - 180      // signed distance in (−180, 180]
-        if d >= 0 { return toNext > 0 ? max(0, 1 - d / toNext) : 0 }
-        return toPrev > 0 ? max(0, 1 + d / toPrev) : 0
+        let lin: Float
+        if d >= 0 { lin = toNext > 0 ? max(0, 1 - d / toNext) : 0 }
+        else { lin = toPrev > 0 ? max(0, 1 + d / toPrev) : 0 }
+        guard softness > 0 else { return lin }
+        let smooth = lin * lin * (3 - 2 * lin)
+        return lin + min(softness, 1) * (smooth - lin)
     }
 
     @inline(__always) static func rgbToHSL(_ r: Float, _ g: Float, _ b: Float) -> (Float, Float, Float) {

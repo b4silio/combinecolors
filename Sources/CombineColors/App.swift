@@ -47,25 +47,34 @@ struct CombineColorsApp: App {
                 Divider()
                 Button("Export Combined Image…") { model.exportRequested = true }.keyboardShortcut("e").disabled(model.sources.isEmpty)
                 Divider()
-                Button("Remove All Channels") { model.removeAll() }.disabled(model.sources.isEmpty)
+                Button("Close Image") { model.closeImage() }
+                    .disabled((model.sources.isEmpty && !model.hasStars && model.projectURL == nil) || model.isRemovingStars)
             }
             CommandGroup(after: .pasteboard) {
                 Button("Copy Preview Image") { model.copyPreviewToPasteboard() }.keyboardShortcut("c", modifiers: [.command, .shift]).disabled(model.frame == nil)
             }
             CommandMenu("Tools") {
-                Button("Remove Stars with StarNet2…") { model.starRemovalRequested = true }
+                Button("Remove Stars with StarNet2…") {
+                    // Star removal works on the Background tab's channels.
+                    if model.activeLayer == .stars { model.switchLayer(to: .background) }
+                    model.starRemovalRequested = model.activeLayer == .background
+                }
             }
             CommandMenu("View") {
+                // Always enabled: a disabled item would let ⌘1 / ⌘2 through to the preview as plain keys.
+                Button("Background Tab") { model.switchLayer(to: .background) }.keyboardShortcut("1")
+                Button("Stars Tab") { model.switchLayer(to: .stars) }.keyboardShortcut("2")
+                Divider()
                 Button("Fit to Window") { model.fitRequest += 1 }.keyboardShortcut("0")
                 Toggle("High Quality Preview", isOn: Binding(get: { model.highQualityPreview }, set: { model.highQualityPreview = $0 }))
                 Picker("Crop Limits", selection: Binding(get: { model.cropOverlay }, set: { model.cropOverlay = $0 })) {
                     ForEach(CropOverlayMode.allCases) { Text($0.displayName).tag($0) }
                 }
                 Divider()
-                Button("Rotate Clockwise") { model.rotateClockwise() }.keyboardShortcut("r").disabled(model.sources.isEmpty || model.isLoading)
-                Button("Flip Horizontal") { model.flipHorizontal() }.keyboardShortcut("h", modifiers: [.command, .shift]).disabled(model.sources.isEmpty || model.isLoading)
-                Button("Flip Vertical") { model.flipVertical() }.keyboardShortcut("v", modifiers: [.command, .shift]).disabled(model.sources.isEmpty || model.isLoading)
-                Button("Auto Trim Borders") { model.autoCrop() }.disabled(model.sources.isEmpty)
+                Button("Rotate Clockwise") { model.rotateClockwise() }.keyboardShortcut("r").disabled(model.sources.isEmpty || model.isLoading || model.editingTool != nil)
+                Button("Flip Horizontal") { model.flipHorizontal() }.keyboardShortcut("h", modifiers: [.command, .shift]).disabled(model.sources.isEmpty || model.isLoading || model.editingTool != nil)
+                Button("Flip Vertical") { model.flipVertical() }.keyboardShortcut("v", modifiers: [.command, .shift]).disabled(model.sources.isEmpty || model.isLoading || model.editingTool != nil)
+                Button("Auto Trim Borders") { model.autoCrop() }.disabled(model.sources.isEmpty || model.editingTool != nil)
             }
         }
     }

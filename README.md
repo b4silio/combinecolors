@@ -17,13 +17,25 @@ export at full resolution.
   Channel slots are filled automatically from the FITS `FILTER` keyword (also
   inside XISF files) or the file name (`Hydrogen-alpha`, `O3`, `SII`, `_R`,
   `Lum`, …); unknown files ask.
+* **Background and Stars tabs** (above the channel column, ⌘1 / ⌘2): two
+  sets of channels, each with its own palette, stretch, normalisation, colour,
+  detail, presets, dust spots, gradient models and corrections; crop and
+  rotation are shared. The **Combine stars** block of the Background tab
+  blends the Stars tab, rendered with its own settings, on top (Screen /
+  Lighten / Add, amount, brightness, contrast, saturation; before or after
+  denoise & detail); the same checkbox on the Stars tab shows the stars being
+  edited over the background. Switching tabs keeps zoom and pan. The Stars tab is filled by dropping star channels on it,
+  by *Remove Stars…* (the `_stars` files) or by *Load RGB stars…* (an already
+  processed stars image, without leaving the Background tab). Projects and
+  recent sets keep both tabs.
 * **Star removal with StarNet2** (*Remove Stars…* above the channel column, or
   Tools ▸ Remove Stars with StarNet2): runs the free [StarNet2](https://starnetastro.com/cli-tools/starnet/)
   command-line program by Mikita Misiura on the channel files, writes
   `<name>_bg` (starless) and `<name>_stars` next to each one and switches the
   channels to the `_bg` files (dust spots, gradient models, crop and painted
   corrections carry over; the originals are untouched and come back through
-  File ▸ Open Recent Set). StarNet2 is **not bundled**: the first time, the
+  File ▸ Open Recent Set); the `_stars` files go to the Stars tab and the
+  combination is switched on. StarNet2 is **not bundled**: the first time, the
   window downloads the official package for this Mac from starnetastro.com
   (checked against the SHA-256 of the site's release feed) into
   `~/Library/Application Support/CombineColors/StarNet2` — no Terminal, no
@@ -67,7 +79,8 @@ export at full resolution.
   injected via L*a*b* or RGB ratio with an amount slider. Works in both stretch
   stages (stretched channels mixed, or linear mix auto-stretched).
 * **Colour bands** (Camera Raw style selective colour): hue, saturation and
-  lightness per band — reds, oranges, yellows, greens, teals, blues, magentas.
+  lightness per band — reds, oranges, yellows, greens, teals, blues, magentas;
+  *Softness* feathers the bands into their neighbours.
 * **Denoise**: luminance noise reduction by starlet wavelet thresholding (the
   classic astronomical method), non-local means, a guided filter or BM3D
   (block matching + collaborative 3-D filtering, the strongest classical
@@ -78,10 +91,16 @@ export at full resolution.
   on a 40 MP export). BM3D measures the noise per DCT frequency, so the
   correlated noise of stacked, resampled data is thresholded correctly.
   Without a Metal device non-local means falls back to the CPU and BM3D to
-  the wavelets.
-* **Colour**: saturation, vibrance, SCNR green removal, hue rotation,
-  black/white point, gamma. **Balance** (Photoshop-style, applied after Colour and before
-  Denoise / Detail): *Color Balance* with cyan–red, magenta–green and yellow–blue sliders for the
+  the wavelets. *Hot pixels* replaces isolated single-pixel spikes (often
+  brought out by strong colour edits) by their neighbours' median, at full
+  resolution (1:1 preview and export).
+* **Colour**: saturation, vibrance, SCNR green removal, hue rotation.
+  **Contrast** (after Balance, so the colour controls stay together): exposure
+  (stops), brightness (mid-tones), contrast (S-curve, or its inverse),
+  highlights and shadows (bright / dark tones with black, mid-tone and white
+  fixed), black / white point and gamma — one per-channel curve.
+  **Balance** (Photoshop-style, applied after Colour and before Contrast,
+  Denoise and Detail; a switch shows one tool at a time): *Color Balance* (±50) with cyan–red, magenta–green and yellow–blue sliders for the
   shadows, midtones and highlights (overlapping lightness masks, *Preserve luminosity*), and
   *Selective Color* for the whites, neutrals and blacks (cyan, magenta, yellow and black ink,
   *Relative* or *Absolute*; the hue ranges are the Colour bands block). **Detail**: local contrast at five scales — micro-structures (0.2 % of the
@@ -191,17 +210,16 @@ export at full resolution.
   image as `<image>.<channel>.ccmask.png` (16-bit; in *Application Support* when the
   folder is read-only; one map per channel, so a colour file split into R, G and B keeps
   three) and comes back with the image; its strength lives in the project.
-* **RGB stars**: the R, G and B channels, or an RGB image kept whole as a
-  **stars layer** (drop a colour file and choose *Keep as RGB (stars)*, or
-  *Load RGB stars…* in the block — a stars-only image from a star-removal tool,
-  or any RGB frame whose stars are wanted on top of the narrowband result), are
+* **Combine stars** (Background tab): the Stars tab, rendered with its own
+  settings (drop a colour file and choose *Stars tab (RGB)*, or *Load RGB
+  stars…* in the block, to put a stars-only image or any RGB frame there), is
   blended into the result: *Screen* (default, adds without clipping), *Lighten*
   (max) or *Add*; *Brightness* (stops) and *Contrast* (spread around the
   mid-tone, positive darkens faint halos) of the star layer; *Brightest stars to
   white* scales the layer so its brightest stars reach the brightest values of
   the result; star saturation, the luminance mask (threshold / softness, off for
-  stars-only images) and the stretch decision for linear data. CLI:
-  `--stars-file`, `--stars-blend`, `--stars-brightness`, `--stars-contrast`,
+  stars-only images). The CLI blends one RGB stars image (with the stretch
+  decision for linear data): `--stars-file`, `--stars-blend`, `--stars-brightness`, `--stars-contrast`,
   `--stars-white`.
 * **Formula read-out**: the palette panel shows the current combination as one
   PixelMath-style expression per output (`R: 0.5*Ha + 0.5*SII`, …) with a copy
@@ -216,7 +234,7 @@ export at full resolution.
   (⇧⌘H / ⇧⌘V) mirror them. The resulting orientation is stored in the project
   and applied to channels added later.
 * **Preview**: scroll or pinch to zoom around the pointer, drag (or ⌘-scroll)
-  to pan, hold the space bar to pan inside any editor, double-click toggles 1:1/fit, press-and-hold a channel thumbnail to see that
+  to pan, hold the space bar to pan inside any editor, double-click fits the picture (and goes to 1:1 when it is already fitted), press-and-hold a channel thumbnail to see that
   channel alone (keep the button down and move over the other slots to switch),
   pixel read-out of every channel and of the result under the cursor, a
   histogram under the channel column, a **preset row** under the palettes (Save
@@ -289,8 +307,8 @@ release with the changelog section as notes.
    file on a specific slot (left column) to force its channel. A colour file
    opens a dialog: split it into R, G, B (broadband), split it as a dual-band
    image (choose the filter pair, e.g. Hα + OIII, with live previews of both
-   lines; the weights and cross-talk are under *Advanced*), or keep it whole as
-   the RGB stars layer.
+   lines; the weights and cross-talk are under *Advanced*), or put it on the
+   Stars tab as R, G, B.
 2. **Crop** (optional but recommended for registered stacks with empty
    borders) — *Auto trim* finds the borders; or press the crop button, drag a
    rectangle, adjust it with the handles, press Return. The crop applies to all
@@ -303,19 +321,25 @@ release with the changelog section as notes.
    top changes their size). They are re-rendered with the current settings from
    the whole image, the crop or the current view (*From* menu). Hide palettes
    you never use with the eye button (Favourites / All switch shows them again).
-   *Reset all* returns every setting to the palette defaults.
+   *Reset all* removes all processing (no stretch, normalisation, luminance,
+   colour, contrast, balance, denoise or detail); the *Default* button left of
+   *Save preset* brings back the palette's default look.
 4. **Tune** in the strip of blocks under the preview (Channels, Stretch,
-   Normalisation, Luminance, Colour bands, Colour, Balance, Denoise, Detail, RGB stars, Crop):
-   click a block's vertical title to collapse or expand it, scroll sideways or
+   Normalisation, Luminance, Colour bands, Colour, Balance, Contrast, Denoise, Detail, Combine stars):
+   click a block's vertical title to collapse or expand it, its ↺ icon (top
+   right) resets it, scroll sideways or
    drag on empty space to reach the others. Everything updates live; double-click a slider label to reset
    it; ⌘Z undoes. *Save preset* keeps a look in the row under the palettes to
    compare later.
    *Remove Stars…* (above the channel column) runs StarNet2 on the channel
-   files and switches them to the starless `_bg` versions; the first use guides
-   through downloading StarNet2 and accepting its license.
+   files, switches them to the starless `_bg` versions and puts the stars on
+   the Stars tab; the first use guides through downloading StarNet2 and
+   accepting its license. Work on each tab (*BG* / *Stars*) on its own, then
+   *Combine BG and Stars* in the Combine stars block of the Background tab.
 5. **Export** (⌘E, File menu or toolbar) at full resolution; *HQ* in the
    preview toolbar renders the preview with more pixels.
-6. **Save the project** (⌘S) to come back later.
+6. **Save the project** (⌘S) to come back later; *File ▸ Close Image* clears
+   everything (both tabs, crop, settings, presets) for the next target.
 
 ### Pixel Math quick reference
 
@@ -445,9 +469,9 @@ See `PLAN.md` for the phase plan and the test matrix.
 
 ## Limitations / ideas
 
-* Star removal needs StarNet2 (downloaded on first use); the RGB star blend
-  takes an RGB stars-only image, the per-channel `_stars` files are not yet
-  combined into one. The Windows / Linux builds do not have star removal yet.
+* Star removal needs StarNet2 (downloaded on first use). The Windows / Linux
+  builds have neither star removal nor the Background / Stars tabs yet (they
+  still blend one RGB stars image).
 * Gradients are not corrected; the normalisation assumes a flat sky.
 * Only the primary HDU of a FITS file is read; compressed FITS (`.fz`) is not
   supported, nor are Zstandard-compressed or distributed XISF files.

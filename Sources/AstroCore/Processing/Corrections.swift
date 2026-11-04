@@ -83,6 +83,29 @@ public final class CorrectionMap {
         version += 1
     }
 
+    /// A stroke segment with even spacing across segments: a dab every quarter radius of *path*,
+    /// however the mouse events cut the path. `carry` is the distance travelled since the last dab
+    /// (start a stroke with `strokeStart(radius:)` so its first point gets a dab). Without it, a
+    /// slow drag (one tiny segment per mouse event, each ending in a dab) piled up hundreds of dabs
+    /// on the same pixels and the flow looked far stronger than set.
+    public func stroke(from a: CGPoint, to b: CGPoint, radius: Double, amount: Float, hardness: Float, carry: inout Double) {
+        let step = max(radius / 4, 0.5)
+        let d = Double(hypot(b.x - a.x, b.y - a.y))
+        var pos = step - carry            // distance along this segment to the next dab
+        if pos < 0 { pos = 0 }
+        var last: Double? = nil
+        while pos <= d {
+            let t = d > 0 ? pos / d : 0
+            dab(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, radius: radius, amount: amount, hardness: hardness)
+            last = pos
+            pos += step
+        }
+        carry = last.map { d - $0 } ?? carry + d
+    }
+
+    /// The `carry` that starts a stroke: its first point gets a dab.
+    public static func strokeStart(radius: Double) -> Double { max(radius / 4, 0.5) }
+
     /// A stroke segment: dabs every quarter radius from `from` to `to` (both image points).
     public func stroke(from a: CGPoint, to b: CGPoint, radius: Double, amount: Float, hardness: Float) {
         let d = hypot(b.x - a.x, b.y - a.y)

@@ -19,7 +19,7 @@ struct ContentView: View {
                     Divider()
                     ZStack(alignment: .topTrailing) {
                         PreviewView(model: model, zoomRequest: $zoomRequest)
-                        if model.sources.isEmpty { emptyState }
+                        if model.sources.isEmpty { if model.activeLayer == .stars { emptyStarsState } else { emptyState } }
                         previewToolbar
                     }
                     .overlay(alignment: .bottomTrailing) { zoomToolbar }
@@ -67,6 +67,20 @@ struct ContentView: View {
         .navigationTitle(model.projectURL?.deletingPathExtension().lastPathComponent ?? "CombineColors")
     }
 
+    private var emptyStarsState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "sparkles").font(.system(size: 48)).foregroundStyle(.secondary)
+            Text("Stars tab").font(.title2)
+            Text("Drop the star channels here (stars-only images, one per filter, or an RGB stars image).\nThey get settings of their own; the Combine stars block of the Background tab blends them in.\nRemove Stars… and Load RGB stars… on the Background tab fill this tab too.")
+                .multilineTextAlignment(.center).foregroundStyle(.secondary)
+            HStack {
+                Button("Open star images…") { Panels.openImages { model.loadFiles($0) } }
+                Button("Back to the Background tab") { model.switchLayer(to: .background) }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private var emptyState: some View {
         VStack(spacing: 10) {
             Image(systemName: "photo.stack").font(.system(size: 48)).foregroundStyle(.secondary)
@@ -109,7 +123,8 @@ struct ContentView: View {
             if model.gradientEditing != nil { gradientToolbar }
             if model.correctionEditing != nil { correctionToolbar }
             HStack(spacing: 4) {
-                if model.dustEditing != nil || model.gradientEditing != nil {
+                // No crop, rotation or flips while an editor (dust, gradient, corrections) is open.
+                if model.editingTool != nil {
                     EmptyView()
                 } else if model.cropEditing {
                     Button("Apply") { model.commitCropEditing() }.keyboardShortcut(.return, modifiers: [])

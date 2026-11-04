@@ -13,9 +13,20 @@ public struct SettingsPreset: Codable, Identifiable, Equatable {
     }
 }
 
+/// One set of channels with its own settings (the Stars tab of a project).
+public struct LayerDocument: Codable, Equatable {
+    public var channels: [ProjectDocument.ChannelRef] = []
+    public var settings: CombineSettings = CombineSettings()
+    public var dust: DustSettings = DustSettings()
+    public var gradient: GradientSettings = GradientSettings()
+    public var corrections: CorrectionSettings = CorrectionSettings()
+    public var presets: [SettingsPreset] = []
+    public init() {}
+}
+
 /// Saved project: channel file paths + settings.
 public struct ProjectDocument: Codable {
-    public struct ChannelRef: Codable {
+    public struct ChannelRef: Codable, Equatable {
         public var kind: ChannelKind
         public var path: String
         public var bookmark: Data?
@@ -39,6 +50,9 @@ public struct ProjectDocument: Codable {
     public var gradient: GradientSettings = GradientSettings()
     /// Strength of the hand-painted corrections per channel and the brush defaults (the maps are sidecar files).
     public var corrections: CorrectionSettings = CorrectionSettings()
+    /// The Stars tab: star channels processed on their own and combined with the background
+    /// (the fields above) by the "Combine stars" block. Crop and orientation are shared.
+    public var starsLayer: LayerDocument? = nil
 
     public var orientation: Orientation {
         get { Orientation(rotation: rotation, flipped: flipped) }

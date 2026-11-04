@@ -144,6 +144,23 @@ public struct LuminanceSettings: Codable, Equatable, Hashable {
     }
 }
 
+/// The Contrast block (with `PostSettings.blackPoint / whitePoint / gamma`): tone controls on the
+/// stretched image, per channel, after the colour controls and the Balance block.
+public struct ToneSettings: Codable, Equatable, Hashable {
+    /// Gain in stops (−3…3).
+    public var exposure: Float = 0
+    /// Mid-tones up / down (−1…1), black and white stay.
+    public var brightness: Float = 0
+    /// S-curve around the mid-tone (−1…1; negative flattens).
+    public var contrast: Float = 0
+    /// Bright tones up / down (−1…1), white and the mid-tone stay.
+    public var highlights: Float = 0
+    /// Dark tones up / down (−1…1), black and the mid-tone stay.
+    public var shadows: Float = 0
+    public init() {}
+    public var isNeutral: Bool { exposure == 0 && brightness == 0 && contrast == 0 && highlights == 0 && shadows == 0 }
+}
+
 public struct PostSettings: Codable, Equatable, Hashable {
     public var saturation: Float = 1
     public var scnrGreen: Float = 0
@@ -153,6 +170,9 @@ public struct PostSettings: Codable, Equatable, Hashable {
     public var whitePoint: Float = 1
     public var vibrance: Float = 0       // boosts low-saturation pixels only
     public init() {}
+    /// The colour part (the Colour block); black / white point and gamma belong to the Contrast block.
+    public var colourIsNeutral: Bool { saturation == 1 && scnrGreen == 0 && hueShift == 0 && vibrance == 0 }
+    public var levelsAreNeutral: Bool { gamma == 1 && blackPoint == 0 && whitePoint == 1 }
 }
 
 public enum StarsBlendMode: String, Codable, CaseIterable, Identifiable {
@@ -200,6 +220,9 @@ public struct ColorBandAdjust: Codable, Equatable, Hashable {
 
 public struct ColorBandsSettings: Codable, Equatable, Hashable {
     public var bands: [ColorBand: ColorBandAdjust] = [:]
+    /// 0…1 feathering of the bands: 0 = each band fades out linearly at its neighbours' centres,
+    /// 1 = bands reach twice as far with a smooth (S-shaped) fall-off, so edits blend across colours.
+    public var softness: Float = 0
     public init() {}
     public func adjust(_ b: ColorBand) -> ColorBandAdjust { bands[b] ?? ColorBandAdjust() }
     public mutating func set(_ b: ColorBand, _ a: ColorBandAdjust) { if a.isNeutral { bands.removeValue(forKey: b) } else { bands[b] = a } }
@@ -318,8 +341,11 @@ public struct DenoiseSettings: Codable, Equatable, Hashable {
     public var protectBright: Float = 0.5
     /// 0…1 chroma (colour mottling) smoothing.
     public var color: Float = 0
+    /// 0…1: single-pixel outliers (hot pixels, often brought out by strong colour edits) replaced
+    /// by their neighbours' median; 0 = off. Full-resolution renders only (1:1 preview, export).
+    public var hotPixels: Float = 0
     public init() {}
-    public var isNeutral: Bool { amount == 0 && color == 0 }
+    public var isNeutral: Bool { amount == 0 && color == 0 && hotPixels == 0 }
 }
 
 public enum StarsStretchMode: String, Codable, CaseIterable, Identifiable {
@@ -391,6 +417,7 @@ public struct CombineSettings: Codable, Equatable, Hashable {
     public var colorBands = ColorBandsSettings()
     public var post = PostSettings()
     public var grading = ColorGradingSettings()
+    public var tone = ToneSettings()
     public var detail = DetailSettings()
     public var denoise = DenoiseSettings()
     public var stars = StarsBlendSettings()

@@ -18,7 +18,22 @@ struct ControlsStripView: View {
     }
     private var contentHeight: CGFloat { Self.height - scrollerHeight }
 
-    private var hasRGB: Bool { model.sources[.red] != nil && model.sources[.green] != nil && model.sources[.blue] != nil }
+    /// A block reset on the shown tab's settings.
+    private func reset(_ neutral: Bool, _ what: String, _ apply: @escaping (inout CombineSettings) -> Void) -> BlockReset {
+        BlockReset(enabled: !neutral, help: "Reset " + what) { var s = model.settings; apply(&s); model.settings = s }
+    }
+
+    /// The Combine stars reset keeps the combination on or off (only the blend parameters reset;
+    /// the luminance mask goes off, as for any stars-only tab).
+    private var starsReset: BlockReset {
+        let current = model.combineStars
+        var neutral = StarsBlendSettings()
+        neutral.enabled = current.enabled
+        neutral.useMask = false
+        return BlockReset(enabled: current != neutral, help: "Reset the blend (amount, brightness, contrast, saturation, mode, mask)") {
+            model.combineStars = neutral
+        }
+    }
 
     private func binding(_ id: String) -> Binding<Bool> {
         Binding(get: { !collapsed.split(separator: ",").contains(Substring(id)) },
@@ -32,17 +47,33 @@ struct ControlsStripView: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: true) {
             HStack(alignment: .top, spacing: 6) {
-                ControlBlock(title: "Channels", width: 250, expanded: binding("channels"), dragScroll: dragScroll, minHeight: contentHeight - 12) { channelsSection }
-                ControlBlock(title: "Stretch", width: 262, expanded: binding("stretch"), dragScroll: dragScroll, minHeight: contentHeight - 12) { stretchSection }
-                ControlBlock(title: "Normalisation", width: 290, expanded: binding("normalisation"), dragScroll: dragScroll, minHeight: contentHeight - 12) { normalizationSection }
-                ControlBlock(title: "Luminance", width: 250, expanded: binding("luminance"), dragScroll: dragScroll, minHeight: contentHeight - 12) { luminanceSection }
-                ControlBlock(title: "Colour bands", width: 226, expanded: binding("bands"), dragScroll: dragScroll, minHeight: contentHeight - 12) { colorBandsSection }
-                ControlBlock(title: "Colour", width: 250, expanded: binding("colour"), dragScroll: dragScroll, minHeight: contentHeight - 12) { colourSection }
-                ControlBlock(title: "Balance", width: 262, expanded: binding("balance"), dragScroll: dragScroll, minHeight: contentHeight - 12) { balanceSection }
-                ControlBlock(title: "Denoise", width: 330, expanded: binding("denoise"), dragScroll: dragScroll, minHeight: contentHeight - 12) { denoiseSection }
-                ControlBlock(title: "Detail", width: 262, expanded: binding("detail"), dragScroll: dragScroll, minHeight: contentHeight - 12) { detailSection }
-                // Stays collapsed while no R, G and B channels are loaded (nothing to blend).
-                ControlBlock(title: "RGB stars", width: 250, expanded: binding("stars"), dragScroll: dragScroll, minHeight: contentHeight - 12) { starsSection }
+                ControlBlock(title: "Channels", width: 250, expanded: binding("channels"), dragScroll: dragScroll, minHeight: contentHeight - 12,
+                             reset: reset(model.settings.channels.values.allSatisfy(\.isNeutral), "the channel weights and gains") { $0.channels = [:] }) { channelsSection }
+                ControlBlock(title: "Stretch", width: 262, expanded: binding("stretch"), dragScroll: dragScroll, minHeight: contentHeight - 12,
+                             reset: reset(model.settings.stretch == StretchSettings() && model.settings.stretchStage == .preCombine, "the stretch") { $0.stretch = StretchSettings(); $0.stretchStage = .preCombine }) { stretchSection }
+                ControlBlock(title: "Normalisation", width: 290, expanded: binding("normalisation"), dragScroll: dragScroll, minHeight: contentHeight - 12,
+                             reset: reset(model.settings.normalization == NormalizationSettings(), "the normalisation") { $0.normalization = NormalizationSettings() }) { normalizationSection }
+                ControlBlock(title: "Luminance", width: 250, expanded: binding("luminance"), dragScroll: dragScroll, minHeight: contentHeight - 12,
+                             reset: reset(model.settings.luminance == LuminanceSettings(), "the luminance injection") { $0.luminance = LuminanceSettings() }) { luminanceSection }
+                ControlBlock(title: "Colour bands", width: 226, expanded: binding("bands"), dragScroll: dragScroll, minHeight: contentHeight - 12,
+                             reset: reset(model.settings.colorBands == ColorBandsSettings(), "every colour band and the softness") { $0.colorBands = ColorBandsSettings() }) { colorBandsSection }
+                ControlBlock(title: "Colour", width: 250, expanded: binding("colour"), dragScroll: dragScroll, minHeight: contentHeight - 12,
+                             reset: reset(model.settings.post.colourIsNeutral, "saturation, vibrance, SCNR and hue") {
+                                 $0.post.saturation = 1; $0.post.vibrance = 0; $0.post.scnrGreen = 0; $0.post.hueShift = 0
+                             }) { colourSection }
+                ControlBlock(title: "Balance", width: 262, expanded: binding("balance"), dragScroll: dragScroll, minHeight: contentHeight - 12,
+                             reset: reset(model.settings.grading == ColorGradingSettings(), "the colour balance and the selective colour") { $0.grading = ColorGradingSettings() }) { balanceSection }
+                ControlBlock(title: "Contrast", width: 250, expanded: binding("contrast"), dragScroll: dragScroll, minHeight: contentHeight - 12,
+                             reset: reset(model.settings.tone.isNeutral && model.settings.post.levelsAreNeutral, "exposure, brightness, contrast, highlights, shadows, black / white point and gamma") {
+                                 $0.tone = ToneSettings(); $0.post.blackPoint = 0; $0.post.whitePoint = 1; $0.post.gamma = 1
+                             }) { contrastSection }
+                ControlBlock(title: "Denoise", width: 330, expanded: binding("denoise"), dragScroll: dragScroll, minHeight: contentHeight - 12,
+                             reset: reset(model.settings.denoise == DenoiseSettings(), "the noise reduction") { $0.denoise = DenoiseSettings() }) { denoiseSection }
+                ControlBlock(title: "Detail", width: 262, expanded: binding("detail"), dragScroll: dragScroll, minHeight: contentHeight - 12,
+                             reset: reset(model.settings.detail == DetailSettings(), "local contrast and sharpening") { $0.detail = DetailSettings() }) { detailSection }
+                // Blends the Stars tab into the background (both tabs show it).
+                ControlBlock(title: "Combine stars", width: 250, expanded: binding("stars"), dragScroll: dragScroll, minHeight: contentHeight - 12,
+                             reset: starsReset) { starsSection }
             }
             .padding(.horizontal, 6)
             .padding(.top, 6)
@@ -68,12 +99,12 @@ struct ControlsStripView: View {
                 ForEach(ColorBandComponent.allCases) { c in Text(c.shortName).tag(c.rawValue) }
             }
             .pickerStyle(.segmented).labelsHidden().controlSize(.mini)
-            Button { model.settings.colorBands = ColorBandsSettings() } label: { Image(systemName: "arrow.counterclockwise") }
-                .controlSize(.mini).buttonStyle(.borderless).help("Reset all bands").disabled(model.settings.colorBands.isNeutral)
         }
         ForEach(ColorBand.allCases) { band in
             ColorBandRow(model: model, band: band, component: bandComponent)
         }
+        SliderRow(title: "Softness", value: $model.settings.colorBands.softness, range: 0...1, defaultValue: 0,
+                  help: "Feathers the bands: each one reaches further into its neighbours (up to twice as far) with a smooth fall-off, and fades in more gradually from grey, so an edit blends across colour edges instead of stopping at them.")
     }
 
     // MARK: Balance (Color Balance + Selective Color)
@@ -92,57 +123,55 @@ struct ControlsStripView: View {
                 set: { var a = model.settings.grading.selective(range); a[keyPath: kp] = $0 / 100; model.settings.grading.setSelective(range, a) })
     }
 
+    @AppStorage("balanceMode") private var balanceModeRaw = "balance"
+
     @ViewBuilder var balanceSection: some View {
         let g = $model.settings.grading
         let tone = ToneRange(rawValue: balanceToneRaw) ?? .midtones
         let range = SelectiveRange(rawValue: selectiveRangeRaw) ?? .neutrals
         let lw: CGFloat = 92
-        HStack(spacing: 4) {
-            Text("Colour balance").font(.caption.bold())
-            Spacer()
-            Button { model.settings.grading.balance = [:] } label: { Image(systemName: "arrow.counterclockwise") }
-                .controlSize(.mini).buttonStyle(.borderless).help("Reset the colour balance of every tone range")
-                .disabled(model.settings.grading.balanceIsNeutral)
+        // One of the two tools at a time (• = adjusted).
+        Picker("", selection: $balanceModeRaw) {
+            Text("Color Balance" + (model.settings.grading.balanceIsNeutral ? "" : " •")).tag("balance")
+            Text("Selective Color" + (model.settings.grading.selectiveIsNeutral ? "" : " •")).tag("selective")
         }
-        Picker("", selection: $balanceToneRaw) {
-            ForEach(ToneRange.allCases) { t in Text(t.displayName + (model.settings.grading.balance(t).isNeutral ? "" : " •")).tag(t.rawValue) }
-        }
-        .pickerStyle(.segmented).labelsHidden().controlSize(.mini).fixedSize()
+        .pickerStyle(.segmented).labelsHidden().controlSize(.small).fixedSize()
         .frame(maxWidth: .infinity, alignment: .center)
-        .padding(.vertical, 3)
-        .help("Tone range the three sliders act on (• = adjusted); the ranges overlap smoothly by lightness, as in Photoshop")
-        SliderRow(title: "Cyan – Red", value: balanceBinding(tone, \.cyanRed), range: -100...100, defaultValue: 0, format: "%.0f", help: "Negative towards cyan, positive towards red, in the \(tone.displayName.lowercased())", labelWidth: lw)
-        SliderRow(title: "Magenta – Green", value: balanceBinding(tone, \.magentaGreen), range: -100...100, defaultValue: 0, format: "%.0f", help: "Negative towards magenta, positive towards green", labelWidth: lw)
-        SliderRow(title: "Yellow – Blue", value: balanceBinding(tone, \.yellowBlue), range: -100...100, defaultValue: 0, format: "%.0f", help: "Negative towards yellow, positive towards blue", labelWidth: lw)
-        Toggle("Preserve luminosity", isOn: g.preserveLuminosity).toggleStyle(.checkbox).font(.caption)
-            .help("Keep each pixel's lightness: only hue and saturation move (Photoshop's default)")
-        Divider().padding(.vertical, 8)
-        HStack(spacing: 4) {
-            Text("Selective colour").font(.caption.bold())
-            Spacer()
-            Button { model.settings.grading.selective = [:] } label: { Image(systemName: "arrow.counterclockwise") }
-                .controlSize(.mini).buttonStyle(.borderless).help("Reset the selective colour of every range")
-                .disabled(model.settings.grading.selectiveIsNeutral)
+        .padding(.bottom, 4)
+        if balanceModeRaw != "selective" {
+            Picker("", selection: $balanceToneRaw) {
+                ForEach(ToneRange.allCases) { t in Text(t.displayName + (model.settings.grading.balance(t).isNeutral ? "" : " •")).tag(t.rawValue) }
+            }
+            .pickerStyle(.segmented).labelsHidden().controlSize(.mini).fixedSize()
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.vertical, 3)
+            .help("Tone range the three sliders act on (• = adjusted); the ranges overlap smoothly by lightness, as in Photoshop")
+            SliderRow(title: "Cyan – Red", value: balanceBinding(tone, \.cyanRed), range: -50...50, defaultValue: 0, format: "%.0f", help: "Negative towards cyan, positive towards red, in the \(tone.displayName.lowercased())", labelWidth: lw)
+            SliderRow(title: "Magenta – Green", value: balanceBinding(tone, \.magentaGreen), range: -50...50, defaultValue: 0, format: "%.0f", help: "Negative towards magenta, positive towards green", labelWidth: lw)
+            SliderRow(title: "Yellow – Blue", value: balanceBinding(tone, \.yellowBlue), range: -50...50, defaultValue: 0, format: "%.0f", help: "Negative towards yellow, positive towards blue", labelWidth: lw)
+            Toggle("Preserve luminosity", isOn: g.preserveLuminosity).toggleStyle(.checkbox).font(.caption)
+                .help("Keep each pixel's lightness: only hue and saturation move (Photoshop's default)")
+        } else {
+            Picker("", selection: $selectiveRangeRaw) {
+                ForEach(SelectiveRange.allCases) { r in Text(r.displayName + (model.settings.grading.selective(r).isNeutral ? "" : " •")).tag(r.rawValue) }
+            }
+            .pickerStyle(.segmented).labelsHidden().controlSize(.mini).fixedSize()
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.vertical, 3)
+            .help("Whites: the brightest nearly-grey pixels; Neutrals: greys around mid-tone; Blacks: the darkest. The hue ranges are the Colour bands block")
+            SliderRow(title: "Cyan", value: selectiveBinding(range, \.cyan), range: -100...100, defaultValue: 0, format: "%.0f", help: "More cyan ink (less red) in the \(range.displayName.lowercased()); negative removes it", labelWidth: lw)
+            SliderRow(title: "Magenta", value: selectiveBinding(range, \.magenta), range: -100...100, defaultValue: 0, format: "%.0f", help: "More magenta ink (less green); negative removes it", labelWidth: lw)
+            SliderRow(title: "Yellow", value: selectiveBinding(range, \.yellow), range: -100...100, defaultValue: 0, format: "%.0f", help: "More yellow ink (less blue); negative removes it", labelWidth: lw)
+            SliderRow(title: "Black", value: selectiveBinding(range, \.black), range: -100...100, defaultValue: 0, format: "%.0f", help: "Darkens (positive) or lightens (negative) the range", labelWidth: lw)
+            HStack {
+                Text("Method").font(.caption)
+                Spacer()
+                Picker("", selection: g.relative) { Text("Relative").tag(true); Text("Absolute").tag(false) }
+                    .pickerStyle(.segmented).labelsHidden().controlSize(.mini).fixedSize()
+                    .help("Relative changes the ink by a fraction of what is there (pure white cannot be touched); Absolute adds the amount outright")
+            }
+            .padding(.top, 3)
         }
-        Picker("", selection: $selectiveRangeRaw) {
-            ForEach(SelectiveRange.allCases) { r in Text(r.displayName + (model.settings.grading.selective(r).isNeutral ? "" : " •")).tag(r.rawValue) }
-        }
-        .pickerStyle(.segmented).labelsHidden().controlSize(.mini).fixedSize()
-        .frame(maxWidth: .infinity, alignment: .center)
-        .padding(.vertical, 3)
-        .help("Whites: the brightest nearly-grey pixels; Neutrals: greys around mid-tone; Blacks: the darkest. The hue ranges are the Colour bands block")
-        SliderRow(title: "Cyan", value: selectiveBinding(range, \.cyan), range: -100...100, defaultValue: 0, format: "%.0f", help: "More cyan ink (less red) in the \(range.displayName.lowercased()); negative removes it", labelWidth: lw)
-        SliderRow(title: "Magenta", value: selectiveBinding(range, \.magenta), range: -100...100, defaultValue: 0, format: "%.0f", help: "More magenta ink (less green); negative removes it", labelWidth: lw)
-        SliderRow(title: "Yellow", value: selectiveBinding(range, \.yellow), range: -100...100, defaultValue: 0, format: "%.0f", help: "More yellow ink (less blue); negative removes it", labelWidth: lw)
-        SliderRow(title: "Black", value: selectiveBinding(range, \.black), range: -100...100, defaultValue: 0, format: "%.0f", help: "Darkens (positive) or lightens (negative) the range", labelWidth: lw)
-        HStack {
-            Text("Method").font(.caption)
-            Spacer()
-            Picker("", selection: g.relative) { Text("Relative").tag(true); Text("Absolute").tag(false) }
-                .pickerStyle(.segmented).labelsHidden().controlSize(.mini).fixedSize()
-                .help("Relative changes the ink by a fraction of what is there (pure white cannot be touched); Absolute adds the amount outright")
-        }
-        .padding(.top, 3)
     }
 
     // MARK: Denoise
@@ -164,12 +193,8 @@ struct ControlsStripView: View {
         }
         SliderRow(title: "Protect", value: d.protectBright, range: 0...1, defaultValue: 0.5, help: "Keeps bright structures (stars, nebula cores) untouched.")
         SliderRow(title: "Colour", value: d.color, range: 0...1, defaultValue: 0, help: "Smooths colour mottling (chroma only, luminance untouched).")
-        HStack(alignment: .bottom, spacing: 4) {
-            Text(model.settings.denoise.method.summary).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Button { model.settings.denoise = DenoiseSettings() } label: { Image(systemName: "arrow.counterclockwise") }
-                .controlSize(.mini).buttonStyle(.borderless).help("Reset the denoise settings")
-                .disabled(model.settings.denoise == DenoiseSettings())
-        }
+        SliderRow(title: "Hot pixels", value: d.hotPixels, range: 0...1, defaultValue: 0, help: "Replaces isolated single-pixel spikes (often brought out by strong colour edits) by their neighbours' median, channel by channel; stars, which are wider than one pixel, are kept. Higher catches fainter spikes. Works at full resolution: visible at 1:1 and in the export.")
+        Text(model.settings.denoise.method.summary).font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
     }
 
     // MARK: Detail
@@ -187,11 +212,6 @@ struct ControlsStripView: View {
         SliderRow(title: "Sharpen", value: d.sharpen, range: 0...2, defaultValue: 0, help: "Unsharp mask on the luminance (stars excluded from the blur). The radius is in full-resolution pixels, so judge it at 1:1 with HQ on; a fitted preview shows little of it.", labelWidth: lw)
         SliderRow(title: "Radius", value: d.sharpenRadius, range: 0.5...5, defaultValue: 1.5, format: "%.1f", help: "Sharpening radius in full-resolution pixels.", note: "px", labelWidth: lw)
         SliderRow(title: "Masking", value: d.sharpenMasking, range: 0...1, defaultValue: 0, help: "Protects flat, noisy areas: only detail above this fraction of the noise level is sharpened (like Camera Raw's Masking).", labelWidth: lw)
-        HStack {
-            Spacer()
-            Button("Reset") { model.settings.detail = DetailSettings() }.controlSize(.small)
-                .disabled(model.settings.detail == DetailSettings())
-        }
     }
 
     // MARK: Stretch
@@ -309,46 +329,75 @@ struct ControlsStripView: View {
     @ViewBuilder var colourSection: some View {
         let p = $model.settings.post
         SliderRow(title: "Saturation", value: p.saturation, range: 0...3, defaultValue: 1)
-        SliderRow(title: "Vibrance", value: p.vibrance, range: -1...2, defaultValue: 0)
+        SliderRow(title: "Vibrance", value: p.vibrance, range: -1...2, defaultValue: 0, help: "Saturation boost that acts mostly on the less saturated colours.")
         SliderRow(title: "SCNR green", value: p.scnrGreen, range: 0...1, defaultValue: 0, help: "Average-neutral green removal.")
         SliderRow(title: "Hue shift", value: p.hueShift, range: -180...180, defaultValue: 0, format: "%.0f")
-        SliderRow(title: "Black point", value: p.blackPoint, range: 0...0.5, defaultValue: 0, format: "%.3f")
-        SliderRow(title: "White point", value: p.whitePoint, range: 0.5...1, defaultValue: 1, format: "%.3f")
-        SliderRow(title: "Gamma", value: p.gamma, range: 0.3...3, defaultValue: 1, logarithmic: true)
-        HStack {
-            Button("Reset colour") { model.settings.post = PostSettings() }.controlSize(.small)
-            Button("Classic SHO look") {
-                model.settings.post.scnrGreen = 0.8; model.settings.post.saturation = 1.3; model.settings.post.hueShift = -10
-            }.controlSize(.small).help("SCNR 0.8, saturation 1.3, hue −10°")
-        }
+    }
+
+    // MARK: Contrast (tone, after Balance)
+
+    @ViewBuilder var contrastSection: some View {
+        let t = $model.settings.tone, p = $model.settings.post
+        let lw: CGFloat = 76
+        SliderRow(title: "Exposure", value: t.exposure, range: -3...3, defaultValue: 0, format: "%.2f", help: "Gain in stops on the stretched image (clipped at white).", note: "EV", labelWidth: lw)
+        SliderRow(title: "Brightness", value: t.brightness, range: -1...1, defaultValue: 0, format: "%.2f", help: "Lifts (positive) or lowers the mid-tones; black and white stay.", labelWidth: lw)
+        SliderRow(title: "Contrast", value: t.contrast, range: -1...1, defaultValue: 0, format: "%.2f", help: "S-curve around the mid-tone: darker darks and brighter brights; negative flattens.", labelWidth: lw)
+        SliderRow(title: "Highlights", value: t.highlights, range: -1...1, defaultValue: 0, format: "%.2f", help: "Brightens (positive) or recovers (negative) the bright tones; white and the mid-tone stay.", labelWidth: lw)
+        SliderRow(title: "Shadows", value: t.shadows, range: -1...1, defaultValue: 0, format: "%.2f", help: "Opens up (positive) or deepens (negative) the dark tones; black and the mid-tone stay.", labelWidth: lw)
+        SliderRow(title: "Black point", value: p.blackPoint, range: 0...0.5, defaultValue: 0, format: "%.3f", labelWidth: lw)
+        SliderRow(title: "White point", value: p.whitePoint, range: 0.5...1, defaultValue: 1, format: "%.3f", labelWidth: lw)
+        SliderRow(title: "Gamma", value: p.gamma, range: 0.3...3, defaultValue: 1, logarithmic: true, labelWidth: lw)
     }
 
     // MARK: Stars
 
     @ViewBuilder var starsSection: some View {
-        let s = $model.settings.stars
+        if model.activeLayer == .stars {
+            Text("Stars tab: with Combine on, the preview shows these stars over the Background tab.")
+                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        combineStarsControls
+    }
+
+    @ViewBuilder private var combineStarsControls: some View {
+        // The Background tab's blend settings, also editable from the Stars tab.
+        let s = $model.combineStars
         let lw: CGFloat = 70
+        let stars = model.layerSources(.stars)
         HStack(spacing: 6) {
-            if let layer = model.starsLayer {
+            if !stars.isEmpty && model.activeLayer == .background {
                 Image(systemName: "sparkles").foregroundStyle(.secondary)
-                Text(layer.fileName).font(.caption).lineLimit(1).truncationMode(.middle)
-                    .help("Stars layer: \(layer.fileName) (\(layer.formatDescription)), kept as an RGB image and blended on top")
+                Text("Stars tab: " + ChannelKind.allCases.filter { stars[$0] != nil }.map(\.shortName).joined(separator: ", "))
+                    .font(.caption).lineLimit(1).truncationMode(.tail)
+                    .help(stars.values.map(\.fileName).sorted().joined(separator: "\n"))
                 Spacer(minLength: 0)
-                Button { model.removeStarsLayer() } label: { Image(systemName: "xmark.circle") }.buttonStyle(.borderless).controlSize(.small).help("Remove the stars layer")
-            } else {
-                Button("Load RGB stars…") {
-                    Panels.openImages { urls in if let u = urls.first { Task { @MainActor in model.loadStarsLayer(from: u) } } }
-                }.controlSize(.small)
-                    .help("An RGB image kept whole (not split into channels) and blended as stars: a stars-only image, or any RGB frame. Dropping a colour file offers the same choice.")
-                if hasRGB { Text("or the R, G, B channels").font(.caption2).foregroundStyle(.secondary) }
+                Button { model.switchLayer(to: .stars) } label: { Image(systemName: "arrow.right.circle") }
+                    .buttonStyle(.borderless).controlSize(.small).disabled(!model.canSwitchLayer).help("Show the Stars tab (⌘2)")
+                Button { model.removeStarsLayer() } label: { Image(systemName: "xmark.circle") }
+                    .buttonStyle(.borderless).controlSize(.small).help("Empty the Stars tab")
             }
         }
-        Toggle("Blend RGB stars into the result", isOn: s.enabled).disabled(!model.hasStars)
-        if !model.hasStars { Text("Load a stars layer, or R, G and B channels, to enable.").font(.caption2).foregroundStyle(.secondary) }
-        if model.settings.stars.enabled {
+        if model.activeLayer == .background {
+            Button("Load RGB stars…") {
+                Panels.openImages { urls in if let u = urls.first { Task { @MainActor in model.loadStarsLayer(from: u) } } }
+            }
+            .controlSize(.small)
+        .help("Puts an already processed stars image on the Stars tab (as R, G, B; a grey image as L), replacing what is there, and switches the combination on. The tab shown does not change.")
+        }
+        Toggle("Combine BG and Stars", isOn: s.enabled).disabled(!model.hasStars || model.layerSources(.background).isEmpty)
+        if !model.hasStars {
+            Text("Fill the Stars tab first: drop star channels on it, use Remove Stars…, or Load RGB stars….").font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        if model.starsCompositeBusy || model.backgroundCompositeBusy {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text(model.activeLayer == .background ? "Rendering the Stars tab…" : "Rendering the Background tab…").font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        if model.combineStars.enabled && model.hasStars {
             // One column, scrolled: the layer's look, then the blend.
             SliderRow(title: "Amount", value: s.amount, range: 0...1, defaultValue: 1, labelWidth: lw)
-            SliderRow(title: "Brightness", value: s.brightness, range: -2...2, defaultValue: 0, format: "%.2f", help: "Gain of the star layer in stops, after its stretch", note: "EV", labelWidth: lw)
+            SliderRow(title: "Brightness", value: s.brightness, range: -2...2, defaultValue: 0, format: "%.2f", help: "Gain of the star layer in stops", note: "EV", labelWidth: lw)
             SliderRow(title: "Contrast", value: s.contrast, range: -1...1, defaultValue: 0, format: "%.2f", help: "Spreads the star layer around the mid-tone: positive darkens faint halos and keeps the cores, negative softens", labelWidth: lw)
             SliderRow(title: "Star sat.", value: s.saturation, range: 0...3, defaultValue: 1.3, labelWidth: lw)
             Toggle("Brightest stars to white", isOn: s.normalize).toggleStyle(.checkbox).font(.caption)
@@ -358,9 +407,9 @@ struct ControlsStripView: View {
                 .help("Screen: adds without clipping, soft on bright nebulae (default).\nLighten: the brighter of the two.\nAdd: sum, clipped.")
             MenuPicker(title: "Blend at", selection: s.stage, options: StarsBlendStage.allCases) { $0.displayName }
                 .help("After denoise & detail: the stars are not denoised, sharpened or haloed (the starless workflow), and a star slider re-blends only.\nBefore: the stars go through denoise and detail with the nebula.")
-            MenuPicker(title: "Star data", selection: s.stretch, options: StarsStretchMode.allCases) { $0.displayName }
-            Toggle("Mask by luminance", isOn: s.useMask).toggleStyle(.checkbox).font(.caption).help("Off for star-only images from StarNet/StarXTerminator.")
-            if model.settings.stars.useMask {
+            Toggle("Mask by luminance", isOn: s.useMask).toggleStyle(.checkbox).font(.caption)
+                .help("Only the parts of the Stars tab brighter than the threshold are blended — for a full RGB frame on the Stars tab. Off for stars-only images.")
+            if model.combineStars.useMask {
                 SliderRow(title: "Threshold", value: s.threshold, range: 0...1, defaultValue: 0.15, labelWidth: lw)
                 SliderRow(title: "Softness", value: s.softness, range: 0.01...1, defaultValue: 0.25, labelWidth: lw)
             }

@@ -13,6 +13,7 @@ import AstroCore
 //      --linked               linked stretch
 //      --max <pixels>         preview pixel budget (default 2000000); 0 = full resolution
 //      --scnr <0..1>          green removal amount
+//      --exposure <EV>  --brightness <-1..1>  --contrast <-1..1>  --highlights <-1..1>  --shadows <-1..1>   Contrast block
 //      --sat <factor>         saturation
 //      --hue <deg>            hue shift
 //      --balance-shadows <cr,mg,yb>   Photoshop-style colour balance of the shadows (−100..100 each: cyan–red, magenta–green, yellow–blue);
@@ -111,6 +112,12 @@ case "render":
     let scnr = Float(option("--scnr") ?? "0") ?? 0
     let sat = Float(option("--sat") ?? "1") ?? 1
     let hue = Float(option("--hue") ?? "0") ?? 0
+    var tone = ToneSettings()
+    if let v = option("--exposure").flatMap(Float.init) { tone.exposure = v }
+    if let v = option("--brightness").flatMap(Float.init) { tone.brightness = v }
+    if let v = option("--contrast").flatMap(Float.init) { tone.contrast = v }
+    if let v = option("--highlights").flatMap(Float.init) { tone.highlights = v }
+    if let v = option("--shadows").flatMap(Float.init) { tone.shadows = v }
     let texture = Float(option("--texture") ?? "0") ?? 0
     let clarity = Float(option("--clarity") ?? "0") ?? 0
     let dehaze = Float(option("--dehaze") ?? "0") ?? 0
@@ -256,6 +263,7 @@ case "render":
     if let sm = stretchArg, let m = StretchMethod(rawValue: sm) { settings.stretch.method = m }
     settings.stretch.linked = linked
     settings.post.scnrGreen = scnr
+    if !tone.isNeutral { settings.tone = tone }
     settings.post.saturation = sat
     settings.post.hueShift = hue
     settings.detail.texture = texture; settings.detail.clarity = clarity; settings.detail.dehaze = dehaze

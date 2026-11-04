@@ -162,8 +162,12 @@ public enum Denoise {
     // MARK: - Entry point
 
     /// Applies the configured noise reduction to `img` in place.
-    public static func apply(_ img: RGBImage, settings d: DenoiseSettings) {
+    public static func apply(_ img: RGBImage, settings d: DenoiseSettings, scale: Float = 1) {
         guard !d.isNeutral else { return }
+        // Hot pixels are single full-resolution pixels: below 1:1 they are averaged away anyway
+        // (and small stars become single pixels), so the filter runs at full resolution only.
+        if d.hotPixels > 0, scale >= 0.99 { removeHotPixels(img, amount: d.hotPixels) }
+        guard d.amount > 0 || d.color > 0 else { return }
         let n = img.width * img.height
         let y = img.luma()
         let sigma = noiseSigma(y)
@@ -232,5 +236,46 @@ extension PlanarImage {
     /// A vImage buffer view of this image (the image must outlive the buffer).
     var vBuffer: vImage_Buffer {
         vImage_Buffer(data: pointer, height: vImagePixelCount(height), width: vImagePixelCount(width), rowBytes: width * MemoryLayout<Float>.stride)
+    }
+}
+
+// MARK: - Hot pixels
+
+extension Denoise {
+    /// Replaces isolated single-pixel peaks, channel by channel, by the median of their 8
+    /// neighbours. A pixel counts as hot when it stands above *every* neighbour by more than k·σ
+    /// (σ: the channel's noise, k from 12 at amount 0 down to 3 at amount 1) and that step is most
+    /// of its height above the neighbourhood median — a star core is wider than one pixel, so its
+    /// brightest neighbour stays close to it and the core is kept.
+    public static func removeHotPixels(_ img: RGBImage, amount: Float) {
+        let w = img.width, h = img.height
+        guard amount > 0, w >= 3, h >= 3 else { return }
+        let a = min(max(amount, 0), 1)
+        let k = 12 - 9 * a
+        let isolation = 0.92 - 0.12 * a
+        for plane in img.planes {
+            let sigma = noiseSigma(plane)
+            guard sigma > 0 else { continue }
+            let threshold = k * sigma
+            let src = plane.copy()
+            let s = src.pointer, out = plane.pointer
+            DispatchQueue.concurrentPerform(iterations: h - 2) { row in
+                let y = row + 1
+                var nb = [Float](repeating: 0, count: 8)
+                for x in 1..<(w - 1) {
+                    let i = y * w + x
+                    let v = s[i]
+                    let up = i - w, dn = i + w
+                    let m = max(max(max(s[up - 1], s[up]), max(s[up + 1], s[i - 1])), max(max(s[i + 1], s[dn - 1]), max(s[dn], s[dn + 1])))
+                    guard v - m > threshold else { continue }
+                    nb[0] = s[up - 1]; nb[1] = s[up]; nb[2] = s[up + 1]; nb[3] = s[i - 1]
+                    nb[4] = s[i + 1]; nb[5] = s[dn - 1]; nb[6] = s[dn]; nb[7] = s[dn + 1]
+                    nb.sort()
+                    let med = (nb[3] + nb[4]) / 2
+                    guard v - med > 0, (v - m) / (v - med) > isolation else { continue }
+                    out[i] = med
+                }
+            }
+        }
     }
 }

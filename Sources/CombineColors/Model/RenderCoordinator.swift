@@ -36,6 +36,10 @@ struct PreviewRequest {
     var stars: StarsLayer? = nil
     /// Live hand-painted correction of one channel (the corrections editor).
     var correction: (map: CorrectionMap, strength: Float, kind: ChannelKind)? = nil
+    /// Stars tab with the combination on: the rendered Background tab the result is blended onto,
+    /// with the Background tab's settings (its Combine stars block).
+    var background: StarsLayer? = nil
+    var backgroundSettings: CombineSettings? = nil
 }
 
 /// Serial, latest-wins background renderer.
@@ -121,8 +125,18 @@ final class RenderCoordinator {
         } else {
             result = try Renderer.render(request)
         }
-        guard let cg = RasterWriter.makeDisplayImage(rgb: result.image) else { throw RenderError.noOutput }
-        return PreviewFrame(cgImage: cg, rgb: result.image, level: level, rect: rect, millis: result.millis, ranFrom: result.ranFrom, reusedChannels: result.reusedChannels, postStretch: result.postStretch, channelStretch: result.channelStretch, settings: req.settings)
+        var shown = result.image
+        if let bg = req.background, let bs = req.backgroundSettings, bg.width == fullW, bg.height == fullH {
+            let base = bg.input(level: level, x: x0, y: y0, width: cw, height: ch).planes
+            if base.count == 3, base[0].width == cw, base[0].height == ch {
+                let img = RGBImage(r: base[0].copy(), g: base[1].copy(), b: base[2].copy())
+                let stats = result.image.planes.map { Statistics.compute(image: $0) }
+                Renderer.blendProcessedStars(onto: img, stars: result.image, stats: stats, settings: bs)
+                shown = img
+            }
+        }
+        guard let cg = RasterWriter.makeDisplayImage(rgb: shown) else { throw RenderError.noOutput }
+        return PreviewFrame(cgImage: cg, rgb: shown, level: level, rect: rect, millis: result.millis, ranFrom: result.ranFrom, reusedChannels: result.reusedChannels, postStretch: result.postStretch, channelStretch: result.channelStretch, settings: req.settings)
     }
 }
 

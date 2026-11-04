@@ -5,6 +5,24 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 (`scripts/bump.sh`). The version lives in `VERSION` and is stamped into the app at build time;
 `scripts/release.sh` tags it and publishes the DMG as a GitHub release.
 
+## [1.14.0] – 2026-11-04
+
+- Background and Stars tabs: two sets of channels with their own settings; the Combine stars block (formerly RGB stars) blends the Stars tab rendered with its settings; Remove Stars fills both tabs, Load RGB stars fills the Stars tab without switching; projects and recent sets keep both tabs
+- The BG / Stars tabs sit under the editor and Remove Stars buttons; switching keeps zoom and pan
+- Combine BG and Stars also on the Stars tab: its preview shows the stars over the rendered Background tab, and the blend controls work from there
+- Colour bands: Softness slider (wider, S-shaped band fall-off and a gentler fade from grey)
+- Denoise: Hot pixels slider (isolated single-pixel spikes replaced by their neighbours' median; full resolution only)
+- Fix: ⌘1 / ⌘2 pressed on the tab already shown no longer reaches the preview as "1" (1:1 zoom)
+- Fix: save panels add the extension (.fits, …) when the name is typed without it
+- File ▸ Close Image clears both tabs, crop, settings, presets and the project
+- Default button (left of Save preset) restores the palette's default look; Reset all now removes all processing (stretch, normalisation and luminance included)
+- Contrast block after Balance (the colour controls stay together): exposure, brightness, contrast, highlights, shadows, black / white point, gamma; the Colour block keeps saturation, vibrance, SCNR and hue ("Classic SHO look" removed)
+- Balance block: a Color Balance / Selective Color switch shows one tool at a time; Color Balance sliders span −50…50
+- Every processing block has a reset icon at its top right
+- Double-click on the preview fits first, then goes to 1:1 from the fitted view
+- Fix: crop, rotation and flips are locked while an editor (dust, gradient, corrections) is open
+- Fix: the corrections brush spaces its dabs along the path across mouse events (a slow drag piled up dabs and painted far stronger than the flow)
+
 ## [1.13.0] – 2026-11-04
 
 - Star removal with StarNet2: Remove Stars… downloads the official StarNet2 package on first use (license shown and accepted in the app), runs it on the channel files, writes <name>_bg and <name>_stars and switches the channels to the starless files; linear data stay linear (StarNet2 linear mode with the project's Auto STF values, or the project's stretch undone afterwards); CLI starnet command

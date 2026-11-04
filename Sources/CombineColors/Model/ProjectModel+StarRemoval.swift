@@ -112,16 +112,29 @@ extension ProjectModel {
             }
         }
         let entries = done.flatMap { item, r in item.kinds.map { ($0, r.starless.path) } }
+        let starEntries = done.flatMap { item, r in item.kinds.map { ($0, r.stars.path) } }
+        let stretchedStars = done.allSatisfy { $0.1.processing == .alreadyStretched }
         let count = entries.count
         let stretchedNote = done.contains { $0.1.processing == .alreadyStretched } ? " (already-stretched data processed as they are)" : ""
         isLoading = true
         loadingMessage = "Loading the starless channels…"
         Task.detached(priority: .userInitiated) {
             let (items, errs) = ProjectModel.loadEntries(entries)
+            let (starItems, starErrs) = ProjectModel.loadEntries(starEntries)
             await MainActor.run {
-                if !errs.isEmpty { self.errorMessage = errs.joined(separator: "\n") }
-                self.statusHint = "stars removed from \(count) channel\(count == 1 ? "" : "s") with StarNet2\(stretchedNote); the _stars files are next to the _bg files"
-                if items.isEmpty { self.isLoading = false } else { self.addChannels(items) }
+                let allErrs = errs + starErrs
+                if !allErrs.isEmpty { self.errorMessage = allErrs.joined(separator: "\n") }
+                self.statusHint = "stars removed from \(count) channel\(count == 1 ? "" : "s") with StarNet2\(stretchedNote); the stars are on the Stars tab"
+                guard !items.isEmpty else { self.isLoading = false; return }
+                // The starless files replace the Background channels, the stars fill the Stars tab
+                // (not shown) and the combination is switched on.
+                self.loadIntoLayer(.background, items: items) { [weak self] in
+                    self?.loadIntoLayer(.stars, items: starItems, stretchedStars: stretchedStars) { [weak self] in
+                        guard let self, self.activeLayer == .background else { return }
+                        self.settings.stars.useMask = false
+                        if !self.settings.stars.enabled { self.settings.stars.enabled = true } else { self.updateStarsComposite() }
+                    }
+                }
             }
         }
     }

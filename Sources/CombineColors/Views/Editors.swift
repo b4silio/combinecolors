@@ -203,14 +203,14 @@ struct ColorFileSheet: View {
             Picker("", selection: $modeRaw) {
                 Text("Split RGB").tag(Mode.rgb.rawValue)
                 Text("Dual-band").tag(Mode.dualBand.rawValue)
-                Text("Keep as RGB (stars)").tag(Mode.stars.rawValue)
+                Text("Stars tab (RGB)").tag(Mode.stars.rawValue)
             }
             .pickerStyle(.segmented).labelsHidden().frame(width: 360)
             if mode == .rgb {
                 Text("The red, green and blue planes become the R, G and B channels (broadband colour).")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             } else if mode == .stars {
-                Text("The image stays an RGB image and is blended on top of the result as stars (a stars-only image from a star-removal tool, or any RGB frame whose stars are wanted); the channel slots are untouched. Brightness, contrast, blend mode and the luminance mask are in the RGB stars block.")
+                Text("The image goes to the Stars tab as R, G and B (a stars-only image from a star-removal tool, or any RGB frame whose stars are wanted) and is blended on top of the background by the Combine stars block; the Background channels are untouched and the tab shown does not change.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             } else {
                 Text("One-shot-colour images taken through a dual-band filter hold one emission line in the red channel and the other in green/blue. They are extracted into two monochrome channels.")

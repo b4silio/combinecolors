@@ -338,6 +338,16 @@ final class ZoomPanNSView: NSView {
         onViewportChange?(visibleImageRect, Double(zoom * backing))
     }
 
+    /// The zoom of "Fit" (the crop, else the whole image, with a small margin).
+    var fitZoom: CGFloat {
+        let r = crop?.cgRect ?? CGRect(origin: .zero, size: imageSize)
+        guard r.width > 0, r.height > 0 else { return zoom }
+        return min(bounds.width / r.width, bounds.height / r.height) * 0.97
+    }
+
+    /// The view shows the fitted picture (zoom within 1 % of the fit zoom).
+    var isFitted: Bool { fitZoom > 0 && abs(zoom - fitZoom) / fitZoom < 0.01 }
+
     func fit(rect: CGRect) {
         guard rect.width > 0, rect.height > 0, bounds.width > 0 else { return }
         zoom = min(bounds.width / rect.width, bounds.height / rect.height) * 0.97
@@ -827,6 +837,8 @@ final class ZoomPanNSView: NSView {
     override func mouseExited(with event: NSEvent) { onHover?(nil); brushPoint = nil; brushLayer.isHidden = true }
 
     override func keyDown(with event: NSEvent) {
+        // ⌘/⌃/⌥ combinations are menu shortcuts (⌘1 / ⌘2 switch tabs), never the plain keys below.
+        if !event.modifierFlags.intersection([.command, .control, .option]).isEmpty { super.keyDown(with: event); return }
         switch event.charactersIgnoringModifiers {
         case "+", "=": perform(.zoomIn)
         case "-": perform(.zoomOut)
@@ -867,7 +879,8 @@ struct PreviewView: NSViewRepresentable {
         v.onBrushRadiusChange = { r in Task { @MainActor in model.correctionBrushRadius = Double(r) } }
         v.onDoubleClick = { [weak v] in
             guard let v else { return }
-            if abs(v.zoom * v.backing - 1) < 0.01 { v.perform(.fit) } else { v.perform(.actualSize) }
+            // Fit first; from the fitted view, 1:1.
+            if v.isFitted { v.perform(.actualSize) } else { v.perform(.fit) }
         }
         return v
     }

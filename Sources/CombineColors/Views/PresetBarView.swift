@@ -9,6 +9,21 @@ struct PresetBarView: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            // The default look of the current palette, as a fixed first "preset".
+            let isDefault = !model.sources.isEmpty && model.settings == model.defaultSettings()
+            Button {
+                model.applyDefaultSettings()
+            } label: {
+                VStack(spacing: 2) {
+                    Image(systemName: "wand.and.rays").font(.title3)
+                    Text("Default").font(.caption2)
+                }
+                .frame(width: 70, height: 62)
+            }
+            .buttonStyle(.bordered)
+            .tint(isDefault ? .accentColor : nil)
+            .disabled(model.sources.isEmpty)
+            .help("The default settings of the current palette (stretch, normalisation, luminance… as on a fresh load); crop, presets and the stars combination stay")
             Button {
                 model.savePreset()
             } label: {

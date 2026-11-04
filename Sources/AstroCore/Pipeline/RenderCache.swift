@@ -43,7 +43,7 @@ public final class RenderCache {
     private let channels = ChannelPlaneStore()
     private var combined: (settings: CombineSettings, developed: Renderer.Developed)? = nil
     private var developed: (settings: CombineSettings, image: RGBImage, overview: DetailOverview?)? = nil
-    private var denoised: (settings: DenoiseSettings, image: RGBImage)? = nil
+    private var denoised: (settings: DenoiseSettings, scale: Float, image: RGBImage)? = nil
     /// The detail stage's output, kept only when the stars go in after it (a star slider re-blends only).
     private var detailed: (settings: DetailSettings, scale: Float, base: RGBImage, image: RGBImage)? = nil
 
@@ -54,7 +54,7 @@ public final class RenderCache {
     /// Settings as far as the combined stage sees them (later stages neutral).
     static func combineSettings(_ s: CombineSettings) -> CombineSettings {
         var c = developSettings(s)
-        c.colorBands = ColorBandsSettings(); c.post = PostSettings(); c.grading = ColorGradingSettings(); c.stars = StarsBlendSettings()
+        c.colorBands = ColorBandsSettings(); c.post = PostSettings(); c.tone = ToneSettings(); c.grading = ColorGradingSettings(); c.stars = StarsBlendSettings()
         return c
     }
 
@@ -109,12 +109,12 @@ public final class RenderCache {
         let afterDenoise: RGBImage
         if s.denoise.isNeutral {
             afterDenoise = developed!.image
-        } else if let d = denoised, d.settings == s.denoise {
+        } else if let d = denoised, d.settings == s.denoise, d.scale == req.scale {
             afterDenoise = d.image
         } else {
             let img = developed!.image.copy()
-            Denoise.apply(img, settings: s.denoise)
-            denoised = (s.denoise, img); detailed = nil
+            Denoise.apply(img, settings: s.denoise, scale: req.scale)
+            denoised = (s.denoise, req.scale, img); detailed = nil
             afterDenoise = img
             if ranFrom == .nothing { ranFrom = .denoise }
         }

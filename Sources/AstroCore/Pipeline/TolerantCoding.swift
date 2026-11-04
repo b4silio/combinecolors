@@ -117,7 +117,16 @@ extension CombineSettings {
         stretchStage = c.value("stretchStage", d.stretchStage); luminance = c.value("luminance", d.luminance)
         post = c.value("post", d.post); stars = c.value("stars", d.stars); grading = c.value("grading", d.grading)
         colorBands = c.value("colorBands", d.colorBands); detail = c.value("detail", d.detail)
-        denoise = c.value("denoise", d.denoise)
+        denoise = c.value("denoise", d.denoise); tone = c.value("tone", d.tone)
+    }
+}
+
+extension ToneSettings {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: AnyKey.self)
+        let d = ToneSettings()
+        exposure = c.value("exposure", d.exposure); brightness = c.value("brightness", d.brightness); contrast = c.value("contrast", d.contrast)
+        highlights = c.value("highlights", d.highlights); shadows = c.value("shadows", d.shadows)
     }
 }
 
@@ -153,7 +162,7 @@ extension ColorBandAdjust {
 extension ColorBandsSettings {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: AnyKey.self)
-        bands = c.value("bands", [:])
+        bands = c.value("bands", [:]); softness = c.value("softness", Float(0))
     }
 }
 
@@ -172,6 +181,7 @@ extension DenoiseSettings {
         method = c.value("method", d.method); amount = c.value("amount", d.amount); layers = c.value("layers", d.layers)
         search = c.value("search", d.search); radius = c.value("radius", d.radius); blockSearch = c.value("blockSearch", d.blockSearch)
         protectBright = c.value("protectBright", d.protectBright); color = c.value("color", d.color)
+        hotPixels = c.value("hotPixels", d.hotPixels)
     }
 }
 
@@ -199,6 +209,17 @@ extension ProjectDocument {
         dust = c.value("dust", d.dust)
         gradient = c.value("gradient", d.gradient)
         corrections = c.value("corrections", d.corrections)
+        starsLayer = c.optionalValue("starsLayer", d.starsLayer)
+    }
+}
+
+extension LayerDocument {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: AnyKey.self)
+        let d = LayerDocument()
+        channels = c.value("channels", d.channels); settings = c.value("settings", d.settings)
+        dust = c.value("dust", d.dust); gradient = c.value("gradient", d.gradient)
+        corrections = c.value("corrections", d.corrections); presets = c.value("presets", d.presets)
     }
 }
 

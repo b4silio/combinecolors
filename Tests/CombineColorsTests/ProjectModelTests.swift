@@ -160,14 +160,18 @@ final class ProjectModelTests: XCTestCase {
         try FITSWriter.write(planes: [PlanarImage(width: 200, height: 150, fill: 0.2), PlanarImage(width: 200, height: 150, fill: 0.3), PlanarImage(width: 200, height: 150, fill: 0.4)], to: stars)
         m.loadStarsLayer(from: stars)
         await wait { m.starsLayer != nil && !m.isLoading }
-        await wait(timeout: 5) { m.recentSets.first?.state?.starsFile == stars.path && m.recentSets.first?.state?.corrections.strength[.ha] == 2 }
+        XCTAssertEqual(m.activeLayer, .background, "the RGB stars go to the Stars tab without showing it")
+        XCTAssertEqual(Set(m.layerSources(.stars).keys), [.red, .green, .blue])
+        XCTAssertTrue(m.settings.stars.enabled)
+        await wait(timeout: 5) { m.recentSets.first?.state?.starsLayer?.channels.count == 3 && m.recentSets.first?.state?.corrections.strength[.ha] == 2 }
         XCTAssertEqual(m.recentSets.first?.state?.corrections.strength[.ha], 2, "strength saved with the set")
-        XCTAssertEqual(m.recentSets.first?.state?.starsFile, stars.path, "stars file saved with the set")
+        XCTAssertEqual(Set(m.recentSets.first?.state?.starsLayer?.channels.map(\.path) ?? []), [stars.path], "Stars tab saved with the set")
         // Reopened from the recent set: both are back.
         let m2 = ProjectModel(defaults: defaults)
         m2.openRecentSet(m2.recentSets[0])
         await wait(timeout: 5) { m2.sources.count == 3 && !m2.isLoading && m2.starsLayer != nil }
-        XCTAssertEqual(m2.starsLayer?.url?.path, stars.path)
+        XCTAssertEqual(Set(m2.layerSources(.stars).values.compactMap { $0.url?.path }), [stars.path])
+        XCTAssertNotNil(m2.starsLayer)
         XCTAssertEqual(m2.corrections.strength(for: .ha), 2)
         XCTAssertTrue(m2.hasCorrection(.ha))
         // And the editor tools: the buttons open on the first channel, a click on a slot switches, a second tool applies the first.

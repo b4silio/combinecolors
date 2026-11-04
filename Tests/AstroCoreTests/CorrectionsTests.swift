@@ -95,3 +95,25 @@ final class CorrectionsTests: XCTestCase {
         XCTAssertGreaterThan(a.image.r[128, 96], plain.image.r[128, 96], "brightened where painted (Ha drives red in HOO)")
     }
 }
+
+final class BrushSpacingTests: XCTestCase {
+    /// A slow drag (one-pixel mouse events) paints as much as one fast drag along the same path.
+    func testSlowDragPaintsLikeAFastOne() {
+        let slow = CorrectionMap(imageWidth: 400, imageHeight: 200), fast = CorrectionMap(imageWidth: 400, imageHeight: 200)
+        var c1 = CorrectionMap.strokeStart(radius: 40)
+        var p = CGPoint(x: 100, y: 100)
+        slow.stroke(from: p, to: p, radius: 40, amount: 0.02, hardness: 0.3, carry: &c1)
+        for _ in 0..<200 {
+            let q = CGPoint(x: p.x + 1, y: p.y)
+            slow.stroke(from: p, to: q, radius: 40, amount: 0.02, hardness: 0.3, carry: &c1)
+            p = q
+        }
+        var c2 = CorrectionMap.strokeStart(radius: 40)
+        fast.stroke(from: CGPoint(x: 100, y: 100), to: CGPoint(x: 100, y: 100), radius: 40, amount: 0.02, hardness: 0.3, carry: &c2)
+        fast.stroke(from: CGPoint(x: 100, y: 100), to: CGPoint(x: 300, y: 100), radius: 40, amount: 0.02, hardness: 0.3, carry: &c2)
+        XCTAssertEqual(slow.value(x: 200, y: 100), fast.value(x: 200, y: 100), accuracy: 1e-4)
+        // One pass at 2 % flow stays gentle (a dozen per cent of the full range at most).
+        XCTAssertLessThan(slow.value(x: 200, y: 100), 0.2)
+        XCTAssertGreaterThan(slow.value(x: 200, y: 100), 0.05)
+    }
+}

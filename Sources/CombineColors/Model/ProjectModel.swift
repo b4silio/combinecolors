@@ -74,7 +74,11 @@ final class ProjectModel {
     private(set) var sources: [ChannelKind: ChannelSource] = [:]
     var imageSize: CGSize? { sources.values.first.map { CGSize(width: $0.width, height: $0.height) } }
     /// Size a new file must have (the loaded size before the orientation is applied).
-    var requiredFileSize: CGSize? { imageSize.map { orientation.swapsAxes ? CGSize(width: $0.height, height: $0.width) : $0 } }
+    var requiredFileSize: CGSize? {
+        // Both tabs hold images of one size: an empty tab takes the other's.
+        guard let s = sources.values.first ?? inactiveLayer.sources.values.first else { return nil }
+        return orientation.swapsAxes ? CGSize(width: s.height, height: s.width) : CGSize(width: s.width, height: s.height)
+    }
     var availableKinds: Set<ChannelKind> { Set(sources.keys) }
     private(set) var slotThumbnails: [ChannelKind: CGImage] = [:]
     var pendingFiles: [PendingFile] = []
@@ -82,7 +86,7 @@ final class ProjectModel {
 
     // MARK: Settings
     var settings = CombineSettings() {
-        didSet { settingsChanged(from: oldValue) }
+        didSet { if !restoringLayer { settingsChanged(from: oldValue) } }
     }
     var crop: PixelRect? = nil {
         didSet { if crop != oldValue { cropChanged(); scheduleRecentStateSave() } }
@@ -109,16 +113,39 @@ final class ProjectModel {
     /// Bumped by every stroke so the views refresh (the map is a reference type).
     private(set) var correctionVersion = 0
     private var correctionUndo: [CorrectionMap] = []
+    /// Path length since the last brush dab (even dab spacing across mouse events).
+    private var strokeCarry: Double = 0
     /// Tint overlay of the map on the preview.
     var correctionShowMap = false
     /// Shows the edited channel without its corrections (before / after).
     var correctionBypass = false { didSet { if correctionBypass != oldValue, correctionEditing != nil { scheduleRender() } } }
 
-    // MARK: Stars layer
-    /// An RGB image kept whole and blended as stars (oriented like the channels).
+    // MARK: Layers (Background / Stars tabs)
+    /// The tab shown: its channels, settings and caches are the model's live properties.
+    private(set) var activeLayer: ImageLayer = .background
+    /// The other tab, swapped in by `switchLayer`.
+    private(set) var inactiveLayer = LayerState()
+    /// Set while a tab's state is put back (no undo, no re-render per property).
+    private var restoringLayer = false
+    /// Frames rendered for the tab left behind are dropped.
+    private var minFrameGeneration = 0
+    /// The Stars tab rendered at full resolution, blended by the Combine stars block of the
+    /// Background tab (processed: never stretched again). Oriented and sized like the channels.
     private(set) var starsLayer: StarsLayer? = nil
-    /// Whether the RGB stars block has something to blend: a stars layer or R, G and B channels.
-    var hasStars: Bool { starsLayer != nil || (sources[.red] != nil && sources[.green] != nil && sources[.blue] != nil) }
+    private var starsCompositeKey: StarsCompositeKey? = nil
+    private var starsCompositeGeneration = 0
+    /// The Stars tab is being rendered for the combination.
+    private(set) var starsCompositeBusy = false
+    /// The Background tab rendered at full resolution (stars off), under the Stars tab's preview
+    /// while the combination is on.
+    private(set) var backgroundImage: StarsLayer? = nil
+    private var backgroundCompositeKey: StarsCompositeKey? = nil
+    private var backgroundCompositeGeneration = 0
+    private(set) var backgroundCompositeBusy = false
+    /// Run once the channels being added are in (a project's Stars tab, the stars from StarNet2).
+    private var afterChannelsLoaded: [() -> Void] = []
+    /// Whether the Combine stars block has something to blend: channels on the Stars tab.
+    var hasStars: Bool { !layerSources(.stars).isEmpty }
 
     // MARK: Star removal (StarNet2)
     /// The StarNet2 program: found, downloaded, license accepted (preferences in `defaults`).
@@ -204,8 +231,6 @@ final class ProjectModel {
     private var presetThumbnailCache: [UUID: CGImage] = [:]
     /// Channel shown full-size while its slot thumbnail is pressed.
     var peekChannel: ChannelKind? = nil { didSet { if peekChannel != oldValue { scheduleRender() } } }
-    /// Stars layer of a project being opened, loaded once the channels are in (size check).
-    private var pendingStarsFile: URL? = nil
 
     /// Settings currently displayed (a single channel while peeking).
     var displayedSettings: CombineSettings {
@@ -273,6 +298,7 @@ final class ProjectModel {
         s.normalization.method = .none
         s.luminance.enabled = false
         s.post = PostSettings()
+        s.tone = ToneSettings()
         s.grading = ColorGradingSettings()
         s.detail = DetailSettings()
         s.denoise = DenoiseSettings()
@@ -341,7 +367,7 @@ final class ProjectModel {
         paletteFilter = PaletteFilter(rawValue: defaults.string(forKey: "paletteFilter") ?? "") ?? .favorites
         cropOverlay = CropOverlayMode(rawValue: defaults.string(forKey: "cropOverlay") ?? "") ?? .frame
         renderer.onFrame = { [weak self] frame, gen in
-            guard let self else { return }
+            guard let self, gen >= self.minFrameGeneration else { return }
             self.frame = frame
             self.isRendering = gen != self.renderGeneration
             self.renderError = nil
@@ -420,33 +446,33 @@ final class ProjectModel {
         addChannels([(kind, f.planes[0], f.fileName, f.url, f.formatDescription)])
     }
 
-    /// Keeps a colour file whole as the stars layer (blended on top; the channels stay as they are).
+    /// Puts a colour file on the Stars tab as R, G and B without showing that tab (the Background
+    /// channels stay as they are); the Combine stars block blends it.
     func assignColorFileAsStars(_ pending: PendingFile) {
         pendingColorFile = nil
-        setStarsLayer(pending.file)
+        loadStarsLayer(file: pending.file)
     }
 
-    /// Sets the stars layer from a colour file (oriented like the channels; the size must match the loaded channels).
-    func setStarsLayer(_ f: LoadedFile) {
-        guard f.planes.count >= 3 else { errorMessage = "\(f.fileName) is not a colour image."; return }
+    /// The Stars tab from one file: a colour file gives R, G and B, a grey one L. Already-stretched
+    /// star images are detected (no stretch on the Stars tab then). The combination is switched on.
+    func loadStarsLayer(file f: LoadedFile) {
         if let size = requiredFileSize, Int(size.width) != f.width || Int(size.height) != f.height {
             errorMessage = "\(f.fileName): \(f.width)×\(f.height) does not match the loaded channels (\(Int(size.width))×\(Int(size.height)))."
             return
         }
-        let orient = orientation
-        isLoading = true
-        loadingMessage = "Analysing stars layer…"
-        Task.detached(priority: .userInitiated) {
-            let layer = StarsLayer(planes: Array(f.planes.prefix(3)).map { orient.apply(to: $0) }, fileName: f.fileName, url: f.url, formatDescription: f.formatDescription)
-            await MainActor.run {
-                self.starsLayer = layer
-                if !self.settings.stars.enabled { self.settings.stars.enabled = true }
-                if self.settings.stars.useMask, f.fileName.lowercased().contains("star") { self.settings.stars.useMask = false }
-                self.isLoading = false
-                self.scheduleRender()
-                self.scheduleThumbnails(delay: 0.3)
-                self.scheduleRecentStateSave()
-            }
+        let items: [(ChannelKind, PlanarImage, String, URL?, String)] = f.isColor
+            ? zip([ChannelKind.red, .green, .blue], f.planes).map { ($0, $1, f.fileName, f.url, f.formatDescription) }
+            : [(.luminance, f.planes[0], f.fileName, f.url, f.formatDescription)]
+        if activeLayer == .stars { addChannels(items); return }
+        // The file replaces whatever the Stars tab held.
+        if !inactiveLayer.isEmpty {
+            inactiveLayer = LayerState()
+            starsLayer = nil; starsCompositeKey = nil; starsCompositeGeneration += 1; starsCompositeBusy = false
+        }
+        loadIntoLayer(.stars, items: items) { [weak self] in
+            guard let self, self.activeLayer == .background else { return }
+            if !self.settings.stars.enabled { self.settings.stars.enabled = true }
+            self.updateStarsComposite()
         }
     }
 
@@ -456,22 +482,25 @@ final class ProjectModel {
         Task.detached(priority: .userInitiated) {
             let result = Result { try ImageLoader.load(url: url) }
             await MainActor.run {
+                self.isLoading = false
                 switch result {
-                case .success(let f):
-                    self.isLoading = false
-                    if f.isColor { self.setStarsLayer(f) } else { self.errorMessage = "\(f.fileName) is not a colour image (a stars layer needs R, G and B)." }
-                case .failure(let e): self.isLoading = false; self.errorMessage = e.localizedDescription
+                case .success(let f): self.loadStarsLayer(file: f)
+                case .failure(let e): self.errorMessage = e.localizedDescription
                 }
             }
         }
     }
 
+    /// Empties the Stars tab (from the Background tab).
     func removeStarsLayer() {
-        guard starsLayer != nil else { return }
-        starsLayer = nil
-        if !hasStars { settings.stars.enabled = false }
-        scheduleRender()
-        scheduleThumbnails(delay: 0.3)
+        if activeLayer == .stars {
+            for k in Array(sources.keys) { removeChannel(k) }
+            return
+        }
+        guard !inactiveLayer.isEmpty || starsLayer != nil else { return }
+        inactiveLayer = LayerState()
+        starsLayer = nil; starsCompositeKey = nil; starsCompositeGeneration += 1; starsCompositeBusy = false
+        if settings.stars.enabled { settings.stars.enabled = false } else { scheduleRender(); scheduleThumbnails(delay: 0.3) }
         scheduleRecentStateSave()
     }
 
@@ -487,48 +516,84 @@ final class ProjectModel {
         isLoading = true
         loadingMessage = "Analysing \(items.map { $0.0.shortName }.joined(separator: ", "))…"
         let crop = self.crop, orient = orientation, dust = self.dust, gradient = self.gradient, corr = self.corrections
+        let layer = activeLayer
         Task.detached(priority: .userInitiated) {
-            var built: [ChannelSource?] = Array(repeating: nil, count: items.count)
-            var originals: [PlanarImage?] = Array(repeating: nil, count: items.count)
-            var maps: [ChannelKind: CorrectionMap] = [:]
-            let lock = NSLock()
-            DispatchQueue.concurrentPerform(iterations: items.count) { i in
-                let (kind, plane, name, url, fmt) = items[i]
-                let oriented = orient.apply(to: plane)
-                // A stored correction map (sidecar) comes in the file's orientation.
-                var map: CorrectionMap? = nil
-                if let u = url, let stored = CorrectionMap.read(for: u, kind: kind, imageWidth: plane.width, imageHeight: plane.height) {
-                    var m = stored
-                    if orient.flipped { m = m.applying(.flipHorizontal) }
-                    for _ in 0..<orient.rotation { m = m.applying(.rotateClockwise) }
-                    map = m
-                }
-                let healed = ProjectModel.process(oriented, kind: kind, dust: dust, gradient: gradient, correction: map.map { ($0, Float(corr.strength(for: kind))) })
-                let src = ChannelSource(kind: kind, image: healed, fileName: name, url: url, formatDescription: fmt)
-                lock.lock(); built[i] = src; originals[i] = oriented; if let m = map { maps[kind] = m }; lock.unlock()
-            }
-            let cropped: [ChannelSource] = built.compactMap { $0 }.map { crop == nil ? $0 : ChannelSource($0, region: crop) }
-            let thumbs = cropped.map { ($0.kind, ProjectModel.slotThumbnail($0)) }
-            let base = built.compactMap { $0 }
-            let origs = originals.compactMap { $0 }
-            let loadedMaps = maps
+            let built = ProjectModel.buildChannels(items, crop: crop, orientation: orient, dust: dust, gradient: gradient, corrections: corr)
             await MainActor.run {
-                for (b, c) in zip(base, cropped) { self.baseSources[b.kind] = b; self.sources[c.kind] = c }
-                for (b, o) in zip(base, origs) { self.originalImages[b.kind] = o }
-                for (k, m) in loadedMaps { self.correctionMaps[k] = m }
-                for b in base where loadedMaps[b.kind] == nil { self.correctionMaps.removeValue(forKey: b.kind) }
-                for (k, t) in thumbs { if let t { self.slotThumbnails[k] = t } }
+                // Tabs cannot be switched while loading; should it happen anyway, the channels go to their tab.
+                guard layer == self.activeLayer else {
+                    self.isLoading = false
+                    self.storeInactive(built, layer: layer, stretchedStars: nil, applyDefaults: true)
+                    return
+                }
+                let wasEmpty = self.baseSources.isEmpty
+                for (b, c) in zip(built.base, built.cropped) { self.baseSources[b.kind] = b; self.sources[c.kind] = c }
+                for (b, o) in zip(built.base, built.originals) { self.originalImages[b.kind] = o }
+                for (k, m) in built.maps { self.correctionMaps[k] = m }
+                for b in built.base where built.maps[b.kind] == nil { self.correctionMaps.removeValue(forKey: b.kind) }
+                for (k, t) in built.thumbs { if let t { self.slotThumbnails[k] = t } }
+                // First channels on the Stars tab: settings suited to star images.
+                if wasEmpty, layer == .stars {
+                    self.settings = ProjectModel.starsLayerDefaults(background: self.inactiveLayer.settings, kinds: Set(self.sources.keys),
+                                                                   stretched: ProjectModel.looksLikeStretchedStars(Array(self.sources.values)))
+                    self.inactiveLayer.settings.stars.useMask = false
+                }
                 self.isLoading = false
                 self.sourcesChanged()
                 self.openEditorFromLaunchArguments()
-                if let u = self.pendingStarsFile { self.pendingStarsFile = nil; self.loadStarsLayer(from: u) }
+                let after = self.afterChannelsLoaded
+                self.afterChannelsLoaded = []
+                after.forEach { $0() }
             }
         }
+    }
+
+    /// Channels built from loaded planes: oriented, healed / corrected, analysed, cropped, thumbnailed.
+    struct BuiltChannels {
+        var base: [ChannelSource] = []
+        var cropped: [ChannelSource] = []
+        var originals: [PlanarImage] = []
+        var maps: [ChannelKind: CorrectionMap] = [:]
+        var thumbs: [(ChannelKind, CGImage?)] = []
+    }
+
+    nonisolated static func buildChannels(_ items: [(ChannelKind, PlanarImage, String, URL?, String)], crop: PixelRect?, orientation orient: Orientation,
+                                          dust: DustSettings, gradient: GradientSettings, corrections corr: CorrectionSettings) -> BuiltChannels {
+        var built: [ChannelSource?] = Array(repeating: nil, count: items.count)
+        var originals: [PlanarImage?] = Array(repeating: nil, count: items.count)
+        var maps: [ChannelKind: CorrectionMap] = [:]
+        let lock = NSLock()
+        DispatchQueue.concurrentPerform(iterations: items.count) { i in
+            let (kind, plane, name, url, fmt) = items[i]
+            let oriented = orient.apply(to: plane)
+            // A stored correction map (sidecar) comes in the file's orientation.
+            var map: CorrectionMap? = nil
+            if let u = url, let stored = CorrectionMap.read(for: u, kind: kind, imageWidth: plane.width, imageHeight: plane.height) {
+                var m = stored
+                if orient.flipped { m = m.applying(.flipHorizontal) }
+                for _ in 0..<orient.rotation { m = m.applying(.rotateClockwise) }
+                map = m
+            }
+            let healed = ProjectModel.process(oriented, kind: kind, dust: dust, gradient: gradient, correction: map.map { ($0, Float(corr.strength(for: kind))) })
+            let src = ChannelSource(kind: kind, image: healed, fileName: name, url: url, formatDescription: fmt)
+            lock.lock(); built[i] = src; originals[i] = oriented; if let m = map { maps[kind] = m }; lock.unlock()
+        }
+        var out = BuiltChannels()
+        out.base = built.compactMap { $0 }
+        out.cropped = out.base.map { crop == nil ? $0 : ChannelSource($0, region: crop) }
+        out.thumbs = out.cropped.map { ($0.kind, ProjectModel.slotThumbnail($0)) }
+        out.originals = originals.compactMap { $0 }
+        out.maps = maps
+        return out
     }
 
     /// Developer switch for screenshots: `-openEditor gradient:Ha[:background]` (or `dust:Ha`) opens
     /// that editor once the channel is loaded.
     private func openEditorFromLaunchArguments() {
+        // `-openLayer stars` shows the Stars tab once both tabs are in (screenshots).
+        if let l = UserDefaults.standard.string(forKey: "openLayer"), let layer = ImageLayer(rawValue: l), layer != activeLayer {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.switchLayer(to: layer) }
+        }
         // `-openStarRemoval YES` opens the star removal sheet (screenshots of its steps).
         if !launchEditorOpened, UserDefaults.standard.bool(forKey: "openStarRemoval") { launchEditorOpened = true; starRemovalRequested = true; return }
         guard !launchEditorOpened, let v = UserDefaults.standard.string(forKey: "openEditor") else { return }
@@ -601,11 +666,25 @@ final class ProjectModel {
         if gradientEditing == kind { gradientEditing = nil; gradientDraft = nil; gradientFit = nil; gradientHealed = nil }
         correctionMaps.removeValue(forKey: kind); corrections.strength.removeValue(forKey: kind)
         if correctionEditing == kind { correctionEditing = nil; correctionDraft = nil; correctionUndo = [] }
-        if sources.isEmpty { frame = nil; crop = nil; cropDraft = nil; cropEditing = false }
+        if sources.isEmpty {
+            frame = nil; histogramStorage = []
+            // Crop and orientation are shared: they go only when both tabs are empty.
+            if inactiveLayer.isEmpty { crop = nil; cropDraft = nil; cropEditing = false }
+        }
         sourcesChanged()
     }
 
     func removeAll() {
+        // Both tabs go; the Background tab is shown again.
+        if activeLayer != .background {
+            restoreLayer(inactiveLayer)
+            activeLayer = .background
+            renderGeneration += 1; minFrameGeneration = renderGeneration
+        }
+        inactiveLayer = LayerState()
+        starsCompositeKey = nil; starsCompositeGeneration += 1; starsCompositeBusy = false
+        backgroundImage = nil; backgroundCompositeKey = nil; backgroundCompositeGeneration += 1; backgroundCompositeBusy = false
+        afterChannelsLoaded = []
         baseSources = [:]; sources = [:]; slotThumbnails = [:]; frame = nil; thumbnails = [:]
         crop = nil; cropDraft = nil; cropEditing = false; orientation = .identity
         originalImages = [:]; dust = DustSettings(); dustDraft = nil; dustEditing = nil; dustPreviewed = []
@@ -623,7 +702,7 @@ final class ProjectModel {
 
     /// Rotates or mirrors every channel (and the crop); statistics and star masks are rebuilt.
     func transform(_ op: Orientation.Op) {
-        guard !baseSources.isEmpty, !isLoading else { return }
+        guard !baseSources.isEmpty, !isLoading, editingTool == nil else { return }
         let base = baseSources
         let w = base.values.first!.width, h = base.values.first!.height
         orientation = orientation.applying(op)
@@ -643,11 +722,14 @@ final class ProjectModel {
         correctionMaps = correctionMaps.mapValues { $0.applying(op) }
         if let d = correctionDraft { correctionDraft = d.applying(op); correctionUndo = correctionUndo.map { $0.applying(op) }; correctionVersion += 1 }
         let maps = correctionMaps, corr = corrections
+        let other = inactiveLayer
         isLoading = true
         loadingMessage = op == .rotateClockwise ? "Rotating…" : "Flipping…"
         frame = nil
         Task.detached(priority: .userInitiated) {
             let newStars = stars?.applying(op)
+            // The other tab turns with this one (crop and orientation are shared).
+            let newOther = other.isEmpty ? other : ProjectModel.reoriented(other, op: op, width: w, height: h, crop: newCrop)
             let kinds = Array(base.keys)
             var newBase: [ChannelKind: ChannelSource] = [:], newCur: [ChannelKind: ChannelSource] = [:], newOrig: [ChannelKind: PlanarImage] = [:]
             let lock = NSLock()
@@ -669,6 +751,12 @@ final class ProjectModel {
                 self.sources = nc
                 self.originalImages = no
                 self.starsLayer = newStars
+                if let key = self.starsCompositeKey, newStars != nil {
+                    self.starsCompositeKey = StarsCompositeKey(sourceIDs: newOther.baseSources.values.map(\.id).sorted { $0.uuidString < $1.uuidString },
+                                                               settings: key.settings, crop: newCrop, orientation: self.orientation)
+                }
+                self.inactiveLayer = newOther
+                self.backgroundImage = nil; self.backgroundCompositeKey = nil
                 for (k, t) in thumbs { if let t { self.slotThumbnails[k] = t } }
                 self.isLoading = false
                 self.postStretchCache = [:]
@@ -678,6 +766,7 @@ final class ProjectModel {
                 self.rebuildContext()
                 self.fitRequest += 1
                 self.scheduleRecentStateSave()
+                self.updateComposites()
             }
         }
     }
@@ -732,7 +821,7 @@ final class ProjectModel {
         if sources.isEmpty {
             context = nil; analysisSamples = [:]; thumbnails = [:]
             renderer.clearCache()
-            statusText = "Drop FITS or TIFF images to begin."
+            statusText = activeLayer == .stars ? ProjectModel.emptyStarsText : "Drop FITS or TIFF images to begin."
             return
         }
         // Pick a sensible palette if the current one cannot be rendered.
@@ -753,10 +842,12 @@ final class ProjectModel {
     // MARK: - Recent sets
 
     private func recordRecentSet() {
-        guard !suppressRecent, !isLoading, !sources.isEmpty else { return }
-        let entries = sources.values.compactMap { s in s.url.map { RecentSet.Entry(kind: s.kind, path: $0.path) } }
+        // A set is the Background tab's files; the Stars tab is part of its saved state.
+        let bg = backgroundSources
+        guard !suppressRecent, !isLoading, !bg.isEmpty else { return }
+        let entries = bg.values.compactMap { s in s.url.map { RecentSet.Entry(kind: s.kind, path: $0.path) } }
         // Only complete sets (every channel backed by a file) are remembered.
-        guard entries.count == sources.count else { return }
+        guard entries.count == bg.count else { return }
         recentSets = recentStore.record(entries: entries)
         saveRecentState()
     }
@@ -773,10 +864,11 @@ final class ProjectModel {
 
     func saveRecentState() {
         stateSaveTimer?.invalidate()
-        guard !suppressRecent, !isLoading, !sources.isEmpty else { return }
+        let bg = backgroundSources
+        guard !suppressRecent, !isLoading, !bg.isEmpty else { return }
         // Only complete sets (every channel backed by a file; a split colour file backs three).
-        guard sources.values.allSatisfy({ $0.url != nil }) else { return }
-        let paths = Set(sources.values.compactMap { $0.url?.path })
+        guard bg.values.allSatisfy({ $0.url != nil }) else { return }
+        let paths = Set(bg.values.compactMap { $0.url?.path })
         var doc = projectDocument()
         doc.channels = []
         recentSets = recentStore.updateState(paths: paths, state: doc)
@@ -807,8 +899,8 @@ final class ProjectModel {
                     self.presets = st.presets
                     self.presetThumbnailCache = [:]
                 }
+                if let st = set.state { self.restoreStarsAfterLoading(st) }
                 self.addChannels(its)
-                if let p = set.state?.starsFile { self.pendingStarsFile = URL(fileURLWithPath: p) }
             }
         }
     }
@@ -876,12 +968,13 @@ final class ProjectModel {
                 self.postStretchCache = [:]
                 self.rebuildContext()
                 self.fitRequest += 1
+                self.updateComposites()
             }
         }
     }
 
     func autoCrop() {
-        guard !sources.isEmpty else { return }
+        guard !sources.isEmpty, editingTool == nil else { return }
         isLoading = true; loadingMessage = "Detecting empty borders…"
         let images = sources.values.map(\.image)
         Task.detached(priority: .userInitiated) {
@@ -899,6 +992,7 @@ final class ProjectModel {
     }
 
     func beginCropEditing() {
+        guard editingTool == nil else { return }
         if dustEditing != nil { cancelDustEditing() }
         if gradientEditing != nil { cancelGradientEditing() }
         cropDraft = crop ?? imageSize.map { PixelRect(x: Int($0.width * 0.1), y: Int($0.height * 0.1), width: Int($0.width * 0.8), height: Int($0.height * 0.8)) }
@@ -915,7 +1009,7 @@ final class ProjectModel {
     /// Keeps a draft around (the fields are hidden anyway) so bindings created while editing stay valid.
     func cancelCropEditing() { cropEditing = false; cropDraft = crop ?? cropDraft }
 
-    func clearCrop() { crop = nil; cropDraft = nil; cropEditing = false }
+    func clearCrop() { guard editingTool == nil else { return }; crop = nil; cropDraft = nil; cropEditing = false }
 
     // MARK: - Context / rendering
 
@@ -935,7 +1029,7 @@ final class ProjectModel {
                 self.postStretchCache = [:]
                 self.scheduleRender()
                 self.scheduleThumbnails(delay: 0.05)
-                self.statusText = "\(srcs.count) channel\(srcs.count == 1 ? "" : "s") loaded · \(String(srcs.values.first!.width)) × \(String(srcs.values.first!.height))" + (self.statusHint.map { " · " + $0 } ?? "")
+                self.statusText = self.loadedStatusText()
             }
         }
     }
@@ -943,6 +1037,7 @@ final class ProjectModel {
     private func settingsChanged(from old: CombineSettings) {
         guard settings != old else { return }
         registerUndo(old)
+        if activeLayer == .background, settings.stars.enabled, !old.stars.enabled { updateStarsComposite() }
         if settings.normalization != old.normalization {
             rebuildContext()
             scheduleRecentStateSave()
@@ -972,7 +1067,9 @@ final class ProjectModel {
         guard let ctx = context, !sources.isEmpty else { return }
         renderGeneration += 1
         isRendering = true
-        let shown = displayedSettings
+        var shown = displayedSettings
+        // Stars are blended on the Background tab only, from the rendered Stars tab (never from R, G, B channels).
+        if blendStars == nil { shown.stars.enabled = false }
         // The corrections editor paints on the channel live: the draft goes with the render (a
         // copy, the renderer runs while the next stroke lands), the committed map is bypassed by
         // rendering the original-based plane with the draft only. The channel's source holds the
@@ -988,17 +1085,24 @@ final class ProjectModel {
             let snapshotCtx = RenderContext.make(settings: shown.normalization, sources: sources)
             var req = PreviewRequest(sources: sources, settings: shown, context: snapshotCtx, analysisSamples: analysisSamples, fixedPostStretch: nil,
                                      visibleRect: viewport.visibleRect.isEmpty ? nil : viewport.visibleRect,
-                                     scale: viewport.scale, pixelBudget: highQualityPreview ? 12_000_000 : 3_000_000, generation: renderGeneration, stars: starsLayer)
+                                     scale: viewport.scale, pixelBudget: highQualityPreview ? 12_000_000 : 3_000_000, generation: renderGeneration, stars: blendStars)
             req.correction = correction
             renderer.submit(req)
             return
         }
         let key = PostStretchKey(shown, crop: crop, kinds: availableKinds)
+        var overlay: (StarsLayer, CombineSettings)? = nil
+        if activeLayer == .stars, peekChannel == nil, editingChannel == nil, let bg = backgroundImage,
+           inactiveLayer.settings.stars.enabled, backgroundCompositeKey == currentBackgroundCompositeKey() {
+            overlay = (bg, inactiveLayer.settings)
+        }
         var req = PreviewRequest(sources: sources, settings: shown, context: ctx, analysisSamples: analysisSamples,
                                  fixedPostStretch: shown.stretchStage == .postCombine ? postStretchCache[key] : nil,
                                  visibleRect: viewport.visibleRect.isEmpty ? nil : viewport.visibleRect,
-                                 scale: viewport.scale, pixelBudget: highQualityPreview ? 12_000_000 : 3_000_000, generation: renderGeneration, stars: starsLayer)
+                                 scale: viewport.scale, pixelBudget: highQualityPreview ? 12_000_000 : 3_000_000, generation: renderGeneration, stars: blendStars)
         req.correction = correction
+        req.background = overlay?.0
+        req.backgroundSettings = overlay?.1
         renderer.submit(req)
     }
 
@@ -1017,8 +1121,10 @@ final class ProjectModel {
         case .currentView: region = viewport.visibleRect.isEmpty ? crop?.cgRect : viewport.visibleRect
         case .crop: region = crop?.cgRect
         }
-        thumbnailGeneration = thumbnailer.submit(.init(palettes: Palettes.available(for: availableKinds), sources: sources, settings: settings, context: ctx,
-                                                       analysisSamples: analysisSamples, region: region, maxPixels: 90_000, stars: starsLayer))
+        var s = settings
+        if blendStars == nil { s.stars.enabled = false }
+        thumbnailGeneration = thumbnailer.submit(.init(palettes: Palettes.available(for: availableKinds), sources: sources, settings: s, context: ctx,
+                                                       analysisSamples: analysisSamples, region: region, maxPixels: 90_000, stars: blendStars))
     }
 
     // MARK: - Hover read-out
@@ -1091,6 +1197,7 @@ final class ProjectModel {
         if linear {
             s.stretch.method = .none
             s.post = PostSettings()
+            s.tone = ToneSettings()
             s.grading = ColorGradingSettings()
             s.colorBands = ColorBandsSettings()
             s.detail = DetailSettings()
@@ -1099,10 +1206,18 @@ final class ProjectModel {
         }
         let key = PostStretchKey(s, crop: crop, kinds: availableKinds)
         let fixed = postStretchCache[key]
-        let srcs = sources, crop = self.crop, stars = starsLayer
+        // The Background tab blends the rendered Stars tab (rendered now when the cached one is stale).
+        if blendStars == nil && !(activeLayer == .background && hasStars) { s.stars.enabled = false }
+        let cached = starsCompositeKey != nil && starsCompositeKey == currentStarsCompositeKey() ? starsLayer : nil
+        let needStars = s.stars.enabled && cached == nil
+        let other = inactiveLayer, starsSettings = currentStarsCompositeKey()?.settings
+        let srcs = sources, crop = self.crop
         exportProgress = 0
         Task.detached(priority: .userInitiated) {
             do {
+                var stars = cached
+                if needStars, let ss = starsSettings { stars = ProjectModel.renderStars(state: other, settings: ss, crop: crop) }
+                if stars == nil { s.stars.enabled = false }
                 let img = try Renderer.renderFull(sources: srcs, settings: s, context: ctx, postStretch: fixed, region: crop, stars: stars, progress: { p in
                     Task { @MainActor in self.exportProgress = p * 0.9 }
                 })
@@ -1127,18 +1242,25 @@ final class ProjectModel {
     // MARK: - Project persistence
 
     func projectDocument() -> ProjectDocument {
+        let bg = layerState(.background), st = layerState(.stars)
+        func refs(_ srcs: [ChannelKind: ChannelSource]) -> [ProjectDocument.ChannelRef] {
+            srcs.values.sorted { $0.kind.rawValue < $1.kind.rawValue }.compactMap { s in s.url.map { ProjectDocument.ChannelRef(kind: s.kind, path: $0.path) } }
+        }
         var doc = ProjectDocument()
-        doc.settings = settings
+        doc.settings = bg.settings
         doc.crop = crop
         doc.orientation = orientation
-        doc.dust = dust
-        doc.gradient = gradient
-        doc.corrections = corrections
-        doc.presets = presets
-        doc.channels = sources.values.sorted { $0.kind.rawValue < $1.kind.rawValue }.compactMap { s in
-            s.url.map { ProjectDocument.ChannelRef(kind: s.kind, path: $0.path) }
+        doc.dust = bg.dust
+        doc.gradient = bg.gradient
+        doc.corrections = bg.corrections
+        doc.presets = bg.presets
+        doc.channels = refs(bg.sources)
+        if !st.isEmpty {
+            var l = LayerDocument()
+            l.channels = refs(st.sources)
+            l.settings = st.settings; l.dust = st.dust; l.gradient = st.gradient; l.corrections = st.corrections; l.presets = st.presets
+            doc.starsLayer = l
         }
-        doc.starsFile = starsLayer?.url?.path
         return doc
     }
 
@@ -1169,8 +1291,8 @@ final class ProjectModel {
                     if !errs.isEmpty { self.errorMessage = errs.joined(separator: "\n") }
                     self.settings = doc.settings
                     self.crop = doc.crop
+                    self.restoreStarsAfterLoading(doc)
                     self.addChannels(its)
-                    if let p = doc.starsFile { self.pendingStarsFile = URL(fileURLWithPath: p) }
                 }
             }
         } catch {
@@ -1581,13 +1703,15 @@ extension ProjectModel {
     func paintCorrection(from a: CGPoint, to b: CGPoint, invert: Bool) {
         guard correctionEditing != nil, let d = correctionDraft else { return }
         let sign: Float = (corrections.darken != invert) ? -1 : 1
-        d.stroke(from: a, to: b, radius: correctionBrushRadius, amount: sign * Float(corrections.brushFlow), hardness: Float(1 - corrections.brushFeather))
+        d.stroke(from: a, to: b, radius: correctionBrushRadius, amount: sign * Float(corrections.brushFlow), hardness: Float(1 - corrections.brushFeather),
+                 carry: &strokeCarry)
         correctionVersion += 1
         scheduleRender()
     }
 
     /// Start of a stroke: the undo snapshot.
     func beginCorrectionStroke() {
+        strokeCarry = CorrectionMap.strokeStart(radius: correctionBrushRadius)
         guard let d = correctionDraft else { return }
         correctionUndo.append(d.copy())
         if correctionUndo.count > 24 { correctionUndo.removeFirst() }
@@ -1925,5 +2049,404 @@ extension ProjectModel {
                 self.scheduleRender()
             }
         }
+    }
+}
+
+// MARK: - Layers (Background / Stars tabs)
+
+/// The two sets of channels of a project: the background (starless) image and its stars, each
+/// with its own settings; the Combine stars block of the Background tab blends the Stars tab in.
+enum ImageLayer: String, CaseIterable, Identifiable {
+    case background, stars
+    var id: String { rawValue }
+    var displayName: String { self == .background ? "Background" : "Stars" }
+    var symbol: String { self == .background ? "cloud.fill" : "sparkles" }
+}
+
+/// Everything that belongs to one tab (the shown tab keeps it in the model's live properties).
+struct LayerState {
+    var baseSources: [ChannelKind: ChannelSource] = [:]
+    var sources: [ChannelKind: ChannelSource] = [:]
+    var slotThumbnails: [ChannelKind: CGImage] = [:]
+    var originalImages: [ChannelKind: PlanarImage] = [:]
+    var settings = CombineSettings()
+    var dust = DustSettings()
+    var gradient = GradientSettings()
+    var corrections = CorrectionSettings()
+    var correctionMaps: [ChannelKind: CorrectionMap] = [:]
+    var presets: [SettingsPreset] = []
+    var presetThumbnailCache: [UUID: CGImage] = [:]
+    var context: RenderContext? = nil
+    var analysisSamples: [ChannelKind: PlanarImage] = [:]
+    var postStretchCache: [PostStretchKey: [ResolvedStretch]] = [:]
+    var thumbnails: [String: CGImage] = [:]
+    var frame: PreviewFrame? = nil
+    var histogram: [[Int]] = []
+    var stretchHintShown = false
+    /// The crop the sources' statistics regions were built with (the crop is shared and may change meanwhile).
+    var crop: PixelRect? = nil
+
+    var isEmpty: Bool { baseSources.isEmpty }
+}
+
+/// What the rendered Stars tab depends on.
+struct StarsCompositeKey: Equatable {
+    var sourceIDs: [UUID]
+    var settings: CombineSettings
+    var crop: PixelRect?
+    var orientation: Orientation
+}
+
+extension ProjectModel {
+    static let emptyStarsText = "Stars tab: drop the star channels here, or use Remove Stars… or Load RGB stars… on the Background tab."
+
+    /// A tab's state, whichever is shown.
+    func layerState(_ l: ImageLayer) -> LayerState { l == activeLayer ? captureActiveLayer() : inactiveLayer }
+    func layerSources(_ l: ImageLayer) -> [ChannelKind: ChannelSource] { l == activeLayer ? sources : inactiveLayer.sources }
+    var backgroundSources: [ChannelKind: ChannelSource] { layerSources(.background) }
+
+    /// The stars the shown tab blends: the rendered Stars tab, on the Background tab only.
+    var blendStars: StarsLayer? { activeLayer == .background && hasStars ? starsLayer : nil }
+
+    var canSwitchLayer: Bool { editingTool == nil && !isLoading && !cropEditing && !isRemovingStars }
+
+    func loadedStatusText() -> String {
+        guard let first = sources.values.first else { return activeLayer == .stars ? ProjectModel.emptyStarsText : "Drop FITS or TIFF images to begin." }
+        let n = sources.count
+        let tab = activeLayer == .stars ? "Stars tab · " : (hasStars ? "Background tab · " : "")
+        return tab + "\(n) channel\(n == 1 ? "" : "s") loaded · \(String(first.width)) × \(String(first.height))" + (statusHint.map { " · " + $0 } ?? "")
+    }
+
+    private func captureActiveLayer() -> LayerState {
+        var st = LayerState()
+        st.baseSources = baseSources; st.sources = sources; st.slotThumbnails = slotThumbnails; st.originalImages = originalImages
+        st.settings = settings; st.dust = dust; st.gradient = gradient; st.corrections = corrections; st.correctionMaps = correctionMaps
+        st.presets = presets; st.presetThumbnailCache = presetThumbnailCache
+        st.context = context; st.analysisSamples = analysisSamples; st.postStretchCache = postStretchCache; st.thumbnails = thumbnails
+        st.frame = frame; st.histogram = histogramStorage; st.stretchHintShown = stretchHintShown; st.crop = crop
+        return st
+    }
+
+    /// Puts a tab's state into the live properties (no undo, no per-property side effects).
+    fileprivate func restoreLayer(_ st: LayerState) {
+        restoringLayer = true
+        baseSources = st.baseSources; sources = st.sources; slotThumbnails = st.slotThumbnails; originalImages = st.originalImages
+        settings = st.settings; dust = st.dust; gradient = st.gradient; corrections = st.corrections; correctionMaps = st.correctionMaps
+        presets = st.presets; presetThumbnailCache = st.presetThumbnailCache
+        context = st.context; analysisSamples = st.analysisSamples; postStretchCache = st.postStretchCache; thumbnails = st.thumbnails
+        frame = st.frame; histogramStorage = st.histogram; stretchHintShown = st.stretchHintShown
+        restoringLayer = false
+    }
+
+    /// Shows the other tab. Not while an editor, the crop, a load or a star removal is in progress.
+    func switchLayer(to layer: ImageLayer) {
+        guard layer != activeLayer, canSwitchLayer else { return }
+        let leaving = captureActiveLayer()
+        let target = inactiveLayer
+        peekChannel = nil
+        hover = nil
+        undoManager?.removeAllActions(withTarget: self)
+        undoSnapshot = nil
+        renderGeneration += 1
+        minFrameGeneration = renderGeneration
+        contextGeneration += 1
+        thumbnailGeneration = -1
+        restoreLayer(target)
+        inactiveLayer = leaving
+        activeLayer = layer
+        isRendering = false
+        if sources.isEmpty {
+            frame = nil; histogramStorage = []
+            statusText = loadedStatusText()
+        } else if target.crop != crop {
+            cropChanged()            // statistics regions follow the shared crop, then the context
+        } else if context == nil {
+            rebuildContext()
+        } else {
+            scheduleRender()
+            if thumbnails.isEmpty { scheduleThumbnails(delay: 0.05) }
+            statusText = loadedStatusText()
+        }
+        // Zoom and pan stay where they were (both tabs have the same geometry).
+        updateComposites()
+    }
+
+    /// Loads channels into a tab without showing it (the Stars tab from Remove Stars, Load RGB stars
+    /// or a project). `stretchedStars` says whether star images are already stretched (nil: guessed).
+    func loadIntoLayer(_ layer: ImageLayer, items: [(ChannelKind, PlanarImage, String, URL?, String)], stretchedStars: Bool? = nil,
+                       applyDefaults: Bool = true, completion: (() -> Void)? = nil) {
+        guard !items.isEmpty else { completion?(); return }
+        if layer == activeLayer {
+            if let completion { afterChannelsLoaded.append(completion) }
+            addChannels(items)
+            return
+        }
+        let st = inactiveLayer, crop = self.crop, orient = orientation
+        isLoading = true
+        loadingMessage = "Loading the \(layer.displayName.lowercased()) channels…"
+        Task.detached(priority: .userInitiated) {
+            let built = ProjectModel.buildChannels(items, crop: crop, orientation: orient, dust: st.dust, gradient: st.gradient, corrections: st.corrections)
+            await MainActor.run {
+                self.isLoading = false
+                self.storeInactive(built, layer: layer, stretchedStars: stretchedStars, applyDefaults: applyDefaults)
+                completion?()
+            }
+        }
+    }
+
+    /// Stores built channels on the tab that is not shown.
+    func storeInactive(_ built: BuiltChannels, layer: ImageLayer, stretchedStars: Bool?, applyDefaults: Bool) {
+        guard layer != activeLayer, let first = built.base.first else { return }
+        if let other = sources.values.first, other.width != first.width || other.height != first.height {
+            errorMessage = "\(first.fileName): \(first.width)×\(first.height) does not match the loaded channels (\(other.width)×\(other.height))."
+            return
+        }
+        let wasEmpty = inactiveLayer.isEmpty
+        for (b, c) in zip(built.base, built.cropped) { inactiveLayer.baseSources[b.kind] = b; inactiveLayer.sources[c.kind] = c }
+        for (b, o) in zip(built.base, built.originals) { inactiveLayer.originalImages[b.kind] = o }
+        for b in built.base { inactiveLayer.correctionMaps[b.kind] = built.maps[b.kind] }
+        for (k, t) in built.thumbs { inactiveLayer.slotThumbnails[k] = t }
+        inactiveLayer.context = nil; inactiveLayer.analysisSamples = [:]; inactiveLayer.postStretchCache = [:]
+        inactiveLayer.thumbnails = [:]; inactiveLayer.frame = nil; inactiveLayer.histogram = []
+        inactiveLayer.crop = crop
+        if wasEmpty, applyDefaults, layer == .stars {
+            let srcs = Array(inactiveLayer.sources.values)
+            inactiveLayer.settings = ProjectModel.starsLayerDefaults(background: settings, kinds: Set(inactiveLayer.sources.keys),
+                                                                    stretched: stretchedStars ?? ProjectModel.looksLikeStretchedStars(srcs))
+            settings.stars.useMask = false
+        }
+        statusText = loadedStatusText() + " · \(layer.displayName) tab: \(inactiveLayer.sources.count) channel\(inactiveLayer.sources.count == 1 ? "" : "s")"
+        if layer == .stars { updateStarsComposite() }
+        scheduleRecentStateSave()
+    }
+
+    /// A project's or recent set's Stars tab (or its legacy RGB stars file), loaded once the
+    /// Background channels are in.
+    func restoreStarsAfterLoading(_ doc: ProjectDocument) {
+        if let l = doc.starsLayer, !l.channels.isEmpty {
+            afterChannelsLoaded.append { [weak self] in
+                guard let self else { return }
+                self.inactiveLayer.settings = l.settings; self.inactiveLayer.dust = l.dust; self.inactiveLayer.gradient = l.gradient
+                self.inactiveLayer.corrections = l.corrections; self.inactiveLayer.presets = l.presets
+                let entries = l.channels.map { ($0.kind, $0.path) }
+                Task.detached(priority: .userInitiated) {
+                    let (items, errs) = ProjectModel.loadEntries(entries)
+                    await MainActor.run {
+                        if !errs.isEmpty { self.errorMessage = "Stars tab: " + errs.joined(separator: "\n") }
+                        self.loadIntoLayer(.stars, items: items, applyDefaults: false)
+                    }
+                }
+            }
+        } else if let p = doc.starsFile {
+            // Projects from before the tabs kept one RGB stars image: it becomes the Stars tab.
+            afterChannelsLoaded.append { [weak self] in self?.loadStarsLayer(from: URL(fileURLWithPath: p)) }
+        }
+    }
+
+    // MARK: Combination
+
+    func currentStarsCompositeKey() -> StarsCompositeKey? {
+        let st = layerState(.stars)
+        guard !st.isEmpty else { return nil }
+        var s = st.settings
+        s.stars.enabled = false
+        return StarsCompositeKey(sourceIDs: st.baseSources.values.map(\.id).sorted { $0.uuidString < $1.uuidString }, settings: s, crop: crop, orientation: orientation)
+    }
+
+    /// The settings of the Combine stars block (the Background tab's), from either tab. Set from the
+    /// Stars tab, the change re-blends that tab's preview over the background.
+    var combineStars: StarsBlendSettings {
+        get { activeLayer == .background ? settings.stars : inactiveLayer.settings.stars }
+        set {
+            if activeLayer == .background { settings.stars = newValue; return }
+            guard newValue != inactiveLayer.settings.stars else { return }
+            inactiveLayer.settings.stars = newValue
+            updateBackgroundComposite()
+            scheduleRender()
+            scheduleRecentStateSave()
+        }
+    }
+
+    /// Both renders the combination needs for the tab shown: the Stars tab under the Background tab,
+    /// or the Background tab under the Stars tab.
+    func updateComposites() {
+        updateStarsComposite()
+        updateBackgroundComposite()
+    }
+
+    func currentBackgroundCompositeKey() -> StarsCompositeKey? {
+        let bg = layerState(.background)
+        guard !bg.isEmpty else { return nil }
+        var s = bg.settings
+        s.stars.enabled = false
+        return StarsCompositeKey(sourceIDs: bg.baseSources.values.map(\.id).sorted { $0.uuidString < $1.uuidString }, settings: s, crop: crop, orientation: orientation)
+    }
+
+    /// Renders the Background tab (stars off) for the Stars tab's preview when the combination is on.
+    func updateBackgroundComposite() {
+        guard activeLayer == .stars, inactiveLayer.settings.stars.enabled, let key = currentBackgroundCompositeKey(), key != backgroundCompositeKey else { return }
+        backgroundCompositeGeneration += 1
+        let gen = backgroundCompositeGeneration
+        backgroundCompositeBusy = true
+        let bg = inactiveLayer, crop = self.crop
+        Task.detached(priority: .userInitiated) {
+            let image = ProjectModel.renderStars(state: bg, settings: key.settings, crop: crop)
+            await MainActor.run {
+                guard gen == self.backgroundCompositeGeneration else { return }
+                self.backgroundCompositeBusy = false
+                self.backgroundImage = image
+                self.backgroundCompositeKey = image == nil ? nil : key
+                if self.activeLayer == .stars { self.scheduleRender() }
+            }
+        }
+    }
+
+    /// Renders the Stars tab for the Combine stars block when it changed (Background tab, combination on).
+    func updateStarsComposite() {
+        guard activeLayer == .background else { return }
+        guard let key = currentStarsCompositeKey() else {
+            if starsLayer != nil { starsLayer = nil; starsCompositeKey = nil; scheduleRender(); scheduleThumbnails(delay: 0.1) }
+            return
+        }
+        guard settings.stars.enabled, key != starsCompositeKey else { return }
+        starsCompositeGeneration += 1
+        let gen = starsCompositeGeneration
+        starsCompositeBusy = true
+        let st = inactiveLayer, crop = self.crop
+        Task.detached(priority: .userInitiated) {
+            let layer = ProjectModel.renderStars(state: st, settings: key.settings, crop: crop)
+            await MainActor.run {
+                guard gen == self.starsCompositeGeneration else { return }
+                self.starsCompositeBusy = false
+                self.starsLayer = layer
+                self.starsCompositeKey = layer == nil ? nil : key
+                if self.activeLayer == .background { self.scheduleRender(); self.scheduleThumbnails(delay: 0.1) }
+            }
+        }
+    }
+
+    /// A tab at full resolution, as its preview shows it (`s` has the stars blend off).
+    nonisolated static func renderStars(state st: LayerState, settings s: CombineSettings, crop: PixelRect?) -> StarsLayer? {
+        guard !st.isEmpty else { return nil }
+        let srcs = st.crop == crop ? st.sources : st.baseSources.mapValues { crop == nil ? $0 : ChannelSource($0, region: crop) }
+        let ctx = (st.crop == crop && st.settings.normalization == s.normalization ? st.context : nil) ?? RenderContext.make(settings: s.normalization, sources: srcs)
+        let fixed = st.postStretchCache[PostStretchKey(s, crop: crop, kinds: Set(srcs.keys))]
+        guard let img = try? Renderer.renderFull(sources: srcs, settings: s, context: ctx, postStretch: fixed, region: nil) else { return nil }
+        return StarsLayer(planes: img.planes, fileName: "Stars tab", formatDescription: "rendered Stars tab", processed: true)
+    }
+
+    /// A tab turned with the other one: spots, models, maps and channels rebuilt (off the main thread).
+    nonisolated static func reoriented(_ st: LayerState, op: Orientation.Op, width w: Int, height h: Int, crop newCrop: PixelRect?) -> LayerState {
+        var out = st
+        out.dust.spots = st.dust.spots.mapValues { $0.map { $0.applying(op, imageWidth: w, imageHeight: h) } }
+        out.gradient = st.gradient.applying(op, imageWidth: w, imageHeight: h)
+        out.correctionMaps = st.correctionMaps.mapValues { $0.applying(op) }
+        out.baseSources = [:]; out.sources = [:]; out.originalImages = [:]; out.slotThumbnails = [:]
+        for (k, old) in st.baseSources {
+            let orig = (st.originalImages[k] ?? old.image).applying(op)
+            let healed = ProjectModel.process(orig, kind: k, dust: out.dust, gradient: out.gradient,
+                                              correction: out.correctionMaps[k].map { ($0, Float(out.corrections.strength(for: k))) })
+            let b = ChannelSource(kind: k, image: healed, fileName: old.fileName, url: old.url, formatDescription: old.formatDescription)
+            let c = newCrop == nil ? b : ChannelSource(b, region: newCrop)
+            out.baseSources[k] = b; out.sources[k] = c; out.originalImages[k] = orig
+            out.slotThumbnails[k] = ProjectModel.slotThumbnail(c)
+        }
+        out.context = nil; out.analysisSamples = [:]; out.postStretchCache = [:]; out.thumbnails = [:]; out.frame = nil; out.histogram = []
+        out.crop = newCrop
+        return out
+    }
+
+    /// Settings for a fresh Stars tab: the Background palette when the channels allow it (RGB for
+    /// R, G, B stars), no normalisation (a star image has no sky to match), no luminance injection,
+    /// and either no stretch (stretched star images) or a dark-sky Auto STF.
+    nonisolated static func starsLayerDefaults(background bg: CombineSettings, kinds: Set<ChannelKind>, stretched: Bool) -> CombineSettings {
+        let available = Palettes.available(for: kinds).map(\.id)
+        let pid: String
+        if kinds.isSuperset(of: [.red, .green, .blue]), available.contains("rgb") { pid = "rgb" }
+        else if available.contains(bg.paletteID) { pid = bg.paletteID }
+        else { pid = available.first ?? bg.paletteID }
+        var s = CombineSettings.defaultWith(palette: pid)
+        s.normalization.method = .none
+        s.luminance.enabled = false
+        s.stretch.linked = true
+        if stretched {
+            s.stretch.method = .none
+        } else {
+            s.stretch.method = .autoSTF
+            s.stretch.targetBackground = StarsDefaults.targetBackground
+            s.stretch.shadowsClipping = StarsDefaults.shadowsClipping
+        }
+        return s
+    }
+
+    enum StarsDefaults {
+        static let targetBackground: Float = 0.02
+        static let shadowsClipping: Float = -1.5
+    }
+
+    /// Stretched star images reach high values on their stars (linear star layers stay low).
+    nonisolated static func looksLikeStretchedStars(_ sources: [ChannelSource]) -> Bool {
+        sources.contains { $0.stats.median > 0.08 || $0.stats.percentile(0.999) > 0.15 }
+    }
+}
+
+// MARK: - Close, defaults, reset
+
+extension ProjectModel {
+    /// File ▸ Close Image: both tabs, crop, rotation, settings, presets and the project go; the app
+    /// is back at its start screen.
+    func closeImage() {
+        guard !isRemovingStars else { return }
+        if dustEditing != nil { cancelDustEditing() }
+        if gradientEditing != nil { cancelGradientEditing() }
+        if correctionEditing != nil { cancelCorrectionEditing() }
+        removeAll()
+        pendingFiles = []
+        pendingColorFile = nil
+        restoringLayer = true
+        settings = CombineSettings()
+        restoringLayer = false
+        presets = []
+        presetThumbnailCache = [:]
+        projectURL = nil
+        statusHint = nil
+        stretchHintShown = false
+        histogramStorage = []
+        hover = nil
+        undoManager?.removeAllActions(withTarget: self)
+        undoSnapshot = nil
+        statusText = "Drop FITS or TIFF images to begin."
+    }
+
+    /// The tab's default settings for the current palette (what a fresh load gives): the
+    /// "Default" button of the preset bar. Crop, presets and the stars combination stay.
+    func applyDefaultSettings() {
+        settings = defaultSettings()
+    }
+
+    func defaultSettings() -> CombineSettings {
+        var s: CombineSettings
+        if activeLayer == .stars {
+            s = ProjectModel.starsLayerDefaults(background: inactiveLayer.settings, kinds: availableKinds,
+                                                stretched: ProjectModel.looksLikeStretchedStars(Array(sources.values)))
+        } else {
+            s = CombineSettings.defaultWith(palette: settings.paletteID)
+            if sources.values.allSatisfy({ $0.stats.median > 0.08 }), !sources.isEmpty { s.stretch.method = .none }
+        }
+        if let p = currentPalette { s.select(palette: p) }
+        s.stars = settings.stars
+        return s
+    }
+
+    /// Reset All: no processing at all — no stretch, normalisation, luminance injection, colour,
+    /// tone, grading, denoise or detail; the palette, the channels and the stars combination stay.
+    func resetAllProcessing() {
+        var s = CombineSettings()
+        if let p = currentPalette { s.select(palette: p) }
+        s.stretch.method = .none
+        s.normalization.method = .none
+        s.luminance.enabled = false
+        s.stars = settings.stars
+        settings = s
     }
 }

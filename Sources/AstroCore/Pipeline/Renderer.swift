@@ -132,7 +132,7 @@ public enum Renderer {
         //    image), then the stars when they go in last.
         if req.applyDetail {
             let overview = try detailOverview(plan, req: req, postStretch: main.postStretch)
-            Denoise.apply(combined, settings: plan.settings.denoise)
+            Denoise.apply(combined, settings: plan.settings.denoise, scale: req.scale)
             PostProcess.detail(combined, settings: plan.settings.detail, scale: req.scale, overview: overview)
             if plan.settings.stars.enabled, plan.settings.stars.stage == .last {
                 starsStage(combined, plan, planes: req.planes, context: req.context, stars: req.stars)
@@ -352,12 +352,14 @@ public enum Renderer {
     static func colourStage(_ combined: RGBImage, _ plan: Plan, planes reqPlanes: [ChannelKind: PlanarImage], context: RenderContext, stars: StarsInput?) {
         let s = plan.settings
         let w = combined.width, h = combined.height
-        // 5. Colour post-processing: selective colour bands, the global controls, then the
-        //    Photoshop-style grading (Color Balance, Selective Color on whites / neutrals / blacks).
+        // 5. Colour post-processing in the order of the blocks: selective colour bands, the colour
+        //    controls, the Photoshop-style grading (Color Balance, Selective Color on whites /
+        //    neutrals / blacks), then the tone controls (Contrast).
         combined.clamp01()
         PostProcess.colorBands(combined, settings: s.colorBands)
         PostProcess.apply(s.post, to: combined)
         PostProcess.grade(combined, settings: s.grading)
+        PostProcess.applyTone(s.tone, levels: s.post, to: combined)
 
         // 6. RGB stars, when they go in before denoise and detail.
         if s.stars.enabled, s.stars.stage == .beforeDetail {
@@ -371,7 +373,7 @@ public enum Renderer {
         let s = plan.settings
         let w = combined.width, h = combined.height
         if let st = stars, st.planes.count == 3, st.planes[0].width == w, st.planes[0].height == h {
-            let img = starsImage(planes: st.planes.map { $0.copy() }, stats: st.stats, settings: s)
+            let img = starsImage(planes: st.planes.map { $0.copy() }, stats: st.stats, settings: s, processed: st.processed)
             PostProcess.blendStars(combined, stars: img, settings: s.stars)
         } else if let r = reqPlanes[.red], let g = reqPlanes[.green], let b = reqPlanes[.blue] {
             let img = starsImage(r: r, g: g, b: b, settings: s, context: context)
@@ -493,6 +495,15 @@ public enum Renderer {
         return Statistics.sample(image: p, options: o).0
     }
 
+    /// A rendered (processed) stars image blended onto `background` in place, as the Combine stars
+    /// block does it: brightness, contrast, white point, saturation, mask and blend mode of `s.stars`.
+    /// `stats` are the stars image's statistics (for the white point).
+    public static func blendProcessedStars(onto background: RGBImage, stars: RGBImage, stats: [ChannelStats], settings s: CombineSettings) {
+        let img = starsImage(planes: stars.planes.map { $0.copy() }, stats: stats, settings: s, processed: true)
+        PostProcess.blendStars(background, stars: img, settings: s.stars)
+        background.clamp01()
+    }
+
     /// Stars from the R, G and B channels (normalised like the channels).
     static func starsImage(r: PlanarImage, g: PlanarImage, b: PlanarImage, settings s: CombineSettings, context: RenderContext) -> RGBImage {
         var planes: [PlanarImage] = []
@@ -508,15 +519,16 @@ public enum Renderer {
 
     /// The star layer ready to blend: stretched when linear, scaled to white when asked, then the
     /// brightness (stops) and contrast (spread around the mid-tone). `planes` are consumed.
-    static func starsImage(planes: [PlanarImage], stats: [ChannelStats], settings s: CombineSettings) -> RGBImage {
+    static func starsImage(planes: [PlanarImage], stats: [ChannelStats], settings s: CombineSettings, processed: Bool = false) -> RGBImage {
         // Already-stretched star images (bright stars reach high values) must not be stretched again.
         let looksStretched = (stats.map { $0.percentile(0.999) }.max() ?? 0) > 0.15
-        let doStretch: Bool
+        var doStretch: Bool
         switch s.stars.stretch {
         case .auto: doStretch = !looksStretched
         case .none: doStretch = false
         case .autoSTF: doStretch = true
         }
+        if processed { doStretch = false }
         // The layer's brightest level (whole-image statistics, so a crop agrees with the export).
         var peak = stats.map { $0.percentile(0.9999) }.max() ?? 1
         if doStretch {

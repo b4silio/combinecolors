@@ -105,7 +105,7 @@ public enum RasterWriter {
             case .tiff16, .tiff32: return .tiff
             case .png16, .png8: return .png
             case .jpeg: return .jpeg
-            case .fits32, .fits16: return UTType("public.fits") ?? .data
+            case .fits32, .fits16: return UTType("public.fits") ?? UTType(filenameExtension: "fits") ?? .data
             }
         }
         public var isFITS: Bool { self == .fits32 || self == .fits16 }

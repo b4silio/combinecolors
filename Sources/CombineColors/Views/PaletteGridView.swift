@@ -31,10 +31,8 @@ struct PaletteGridView: View {
                     Button("Pixel Math…") { showPixelMath = true }
                     Text(hiddenCount == 0 ? "" : "\(hiddenCount) hidden").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                     Spacer(minLength: 0)
-                    Button("Reset all") {
-                        var s = CombineSettings(); if let pal = model.currentPalette { s.select(palette: pal) }; model.settings = s
-                    }
-                    .help("Reset all settings to the defaults for the current palette (the crop and presets stay).")
+                    Button("Reset all") { model.resetAllProcessing() }
+                        .help("Removes all processing: no stretch, normalisation, luminance injection, colour, contrast, balance, denoise or detail. The palette, channels, crop, presets and the stars combination stay. The Default button next to Save preset brings back the default look.")
                 }
             }
             .controlSize(.small)
