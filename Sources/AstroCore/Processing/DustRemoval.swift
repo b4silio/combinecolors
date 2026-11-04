@@ -34,6 +34,13 @@ public struct DustSpot: Codable, Equatable, Hashable, Identifiable {
         return s
     }
 
+    /// The spot after a fine rotation of the image by `degrees` (`FineRotation`).
+    public func rotated(byDegrees degrees: Double, imageWidth: Int, imageHeight: Int) -> DustSpot {
+        var s = self
+        (s.x, s.y) = FineRotation.rotate(x: x, y: y, degrees: degrees, width: imageWidth, height: imageHeight)
+        return s
+    }
+
     /// The spot after an unoriented image (`imageWidth` × `imageHeight`) is oriented (flip, then quarter turns).
     public func applying(_ o: Orientation, imageWidth: Int, imageHeight: Int) -> DustSpot {
         var s = o.flipped ? applying(.flipHorizontal, imageWidth: imageWidth, imageHeight: imageHeight) : self

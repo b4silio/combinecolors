@@ -33,6 +33,12 @@ public final class StarsLayer {
         StarsLayer(planes: planes.map { $0.applying(op) }, fileName: fileName, url: url, formatDescription: formatDescription, processed: processed)
     }
 
+    /// The layer after a fine rotation by `degrees` (`FineRotation`).
+    public func rotated(byDegrees degrees: Double) -> StarsLayer {
+        guard degrees != 0 else { return self }
+        return StarsLayer(planes: planes.map { $0.rotated(byDegrees: degrees) }, fileName: fileName, url: url, formatDescription: formatDescription, processed: processed)
+    }
+
     /// The planes at a pyramid level, cropped (the request a render needs).
     public func input(level: Int, x: Int, y: Int, width: Int, height: Int) -> StarsInput {
         let lvl = pyramids.map { $0.level(level) }

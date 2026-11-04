@@ -92,7 +92,22 @@ final class ProjectModel {
         didSet { if crop != oldValue { cropChanged(); scheduleRecentStateSave() } }
     }
     var cropEditing = false
-    var cropDraft: PixelRect? = nil
+    /// The crop being edited, in the picture turned by `cropAngleDraft`. A change made by the user
+    /// (not by the "constrain to image" shrinking) becomes the rectangle the constraint starts from.
+    var cropDraft: PixelRect? = nil {
+        didSet { if !constrainingCrop { cropBaseDraft = cropDraft } }
+    }
+    /// Rotation being edited with the crop (degrees, −180…180, clockwise, counted like
+    /// `orientation.angle`); the picture is turned under the upright crop on screen and resampled
+    /// on Apply, where whole quarter turns become exact ones and the rest (±45°) a fine rotation.
+    /// Equals `orientation.angle` otherwise.
+    var cropAngleDraft: Double = 0
+    /// While turning, shrink the crop (about its centre, keeping its shape) so it holds no corner
+    /// outside the turned picture.
+    var cropConstrain = true { didSet { if cropConstrain { constrainCropDraft() } } }
+    /// The user's crop before the constraint shrank it (it grows back as the angle returns).
+    private var cropBaseDraft: PixelRect? = nil
+    private var constrainingCrop = false
     /// How the crop limits are drawn (remembered in the preferences).
     var cropOverlay: CropOverlayMode = .frame { didSet { defaults.set(cropOverlay.rawValue, forKey: "cropOverlay") } }
     /// Rotation / mirroring applied to every channel. Stored in the project; new channels are oriented on load.
@@ -160,6 +175,10 @@ final class ProjectModel {
     /// Loaded (oriented) planes before dust healing; the same instance as the channel image when a
     /// channel has no spots.
     private(set) var originalImages: [ChannelKind: PlanarImage] = [:]
+    /// With a fine rotation (`orientation.angle`): each turned original (of either tab) with the
+    /// plane before the turn, so a new angle is always resampled once from the untouched data.
+    /// Looked up by identity; entries whose original is gone are pruned (`pruneUnrotated`).
+    var unrotatedPlanes: [(rotated: PlanarImage, unrotated: PlanarImage)] = []
     /// Spots applied to the channels (stored in the project).
     private(set) var dust = DustSettings()
     /// Working copy while the dust editor is open; changes are previewed on the edited channel.
@@ -533,6 +552,7 @@ final class ProjectModel {
                 let wasEmpty = self.baseSources.isEmpty
                 for (b, c) in zip(built.base, built.cropped) { self.baseSources[b.kind] = b; self.sources[c.kind] = c }
                 for (b, o) in zip(built.base, built.originals) { self.originalImages[b.kind] = o }
+                self.unrotatedPlanes += built.unrotated.map { (rotated: $0.0, unrotated: $0.1) }
                 for (k, m) in built.maps { self.correctionMaps[k] = m }
                 for b in built.base where built.maps[b.kind] == nil { self.correctionMaps.removeValue(forKey: b.kind) }
                 for (k, t) in built.thumbs { if let t { self.slotThumbnails[k] = t } }
@@ -558,6 +578,8 @@ final class ProjectModel {
         var cropped: [ChannelSource] = []
         var originals: [PlanarImage] = []
         var maps: [ChannelKind: CorrectionMap] = [:]
+        /// Turned originals with their planes before the fine rotation (see `unrotatedPlanes`).
+        var unrotated: [(PlanarImage, PlanarImage)] = []
         var thumbs: [(ChannelKind, CGImage?)] = []
     }
 
@@ -566,21 +588,22 @@ final class ProjectModel {
         var built: [ChannelSource?] = Array(repeating: nil, count: items.count)
         var originals: [PlanarImage?] = Array(repeating: nil, count: items.count)
         var maps: [ChannelKind: CorrectionMap] = [:]
+        var pairs: [(PlanarImage, PlanarImage)] = []
         let lock = NSLock()
         DispatchQueue.concurrentPerform(iterations: items.count) { i in
             let (kind, plane, name, url, fmt) = items[i]
-            let oriented = orient.apply(to: plane)
+            let unrotated = orient.withoutAngle.apply(to: plane)
+            let oriented = orient.angle == 0 ? unrotated : unrotated.rotated(byDegrees: orient.angle)
             // A stored correction map (sidecar) comes in the file's orientation.
             var map: CorrectionMap? = nil
             if let u = url, let stored = CorrectionMap.read(for: u, kind: kind, imageWidth: plane.width, imageHeight: plane.height) {
-                var m = stored
-                if orient.flipped { m = m.applying(.flipHorizontal) }
-                for _ in 0..<orient.rotation { m = m.applying(.rotateClockwise) }
-                map = m
+                map = stored.oriented(orient)
             }
             let healed = ProjectModel.process(oriented, kind: kind, dust: dust, gradient: gradient, correction: map.map { ($0, Float(corr.strength(for: kind))) }, mode: corr.mode)
             let src = ChannelSource(kind: kind, image: healed, fileName: name, url: url, formatDescription: fmt)
-            lock.lock(); built[i] = src; originals[i] = oriented; if let m = map { maps[kind] = m }; lock.unlock()
+            lock.lock(); built[i] = src; originals[i] = oriented; if let m = map { maps[kind] = m }
+            if oriented !== unrotated { pairs.append((oriented, unrotated)) }
+            lock.unlock()
         }
         var out = BuiltChannels()
         out.base = built.compactMap { $0 }
@@ -588,6 +611,7 @@ final class ProjectModel {
         out.thumbs = out.cropped.map { ($0.kind, ProjectModel.slotThumbnail($0)) }
         out.originals = originals.compactMap { $0 }
         out.maps = maps
+        out.unrotated = pairs
         return out
     }
 
@@ -602,6 +626,13 @@ final class ProjectModel {
         if !launchEditorOpened, UserDefaults.standard.bool(forKey: "openStarRemoval") { launchEditorOpened = true; starRemovalRequested = true; return }
         guard !launchEditorOpened, let v = UserDefaults.standard.string(forKey: "openEditor") else { return }
         let parts = v.split(separator: ":").map(String.init)
+        // `-openEditor crop[:<angle>]`: the crop editor, turned by that many degrees (screenshots).
+        if parts.first == "crop" {
+            launchEditorOpened = true
+            beginCropEditing()
+            if parts.count > 1, let a = Double(parts[1]) { setCropAngle(a) }
+            return
+        }
         guard parts.count >= 2, let k = ChannelKind(rawValue: parts[1]) ?? ChannelKind.fromPixelMathIdentifier(parts[1]), sources[k] != nil else { return }
         launchEditorOpened = true
         if parts[0] == "gradient" {
@@ -694,7 +725,7 @@ final class ProjectModel {
         afterChannelsLoaded = []
         baseSources = [:]; sources = [:]; slotThumbnails = [:]; frame = nil; thumbnails = [:]
         crop = nil; cropDraft = nil; cropEditing = false; orientation = .identity
-        originalImages = [:]; dust = DustSettings(); dustDraft = nil; dustEditing = nil; dustPreviewed = []
+        originalImages = [:]; unrotatedPlanes = []; dust = DustSettings(); dustDraft = nil; dustEditing = nil; dustPreviewed = []
         gradient = GradientSettings(); gradientDraft = nil; gradientEditing = nil; gradientPreviewed = []; gradientFit = nil; gradientHealed = nil
         starsLayer = nil
         corrections = CorrectionSettings(); correctionMaps = [:]; correctionEditing = nil; correctionDraft = nil; correctionUndo = []
@@ -724,6 +755,7 @@ final class ProjectModel {
         let dust = self.dust, draft = self.dustDraft, editing = self.dustEditing
         let gradient = self.gradient, gradientDraft = self.gradientDraft, gradientEditing = self.gradientEditing
         let originals = originalImages
+        let pairs = unrotatedPlanes
         let stars = starsLayer
         // Correction maps (and the draft being painted) turn with the image.
         correctionMaps = correctionMaps.mapValues { $0.applying(op) }
@@ -736,13 +768,17 @@ final class ProjectModel {
         Task.detached(priority: .userInitiated) {
             let newStars = stars?.applying(op)
             // The other tab turns with this one (crop and orientation are shared).
-            let newOther = other.isEmpty ? other : ProjectModel.reoriented(other, op: op, width: w, height: h, crop: newCrop)
+            var newPairs: [(rotated: PlanarImage, unrotated: PlanarImage)] = []
+            let newOther = other.isEmpty ? other : ProjectModel.reoriented(other, op: op, width: w, height: h, crop: newCrop, unrotated: pairs, newPairs: &newPairs)
             let kinds = Array(base.keys)
             var newBase: [ChannelKind: ChannelSource] = [:], newCur: [ChannelKind: ChannelSource] = [:], newOrig: [ChannelKind: PlanarImage] = [:]
             let lock = NSLock()
             DispatchQueue.concurrentPerform(iterations: kinds.count) { i in
                 let k = kinds[i], old = base[k]!
-                let orig = (originals[k] ?? old.image).applying(op)
+                let before = originals[k] ?? old.image
+                let orig = before.applying(op)
+                // The plane before the fine rotation turns the same way (the two commute).
+                if let un = ProjectModel.unrotated(before, in: pairs) { let p = (rotated: orig, unrotated: un.applying(op)); lock.lock(); newPairs.append(p); lock.unlock() }
                 // The edited channel keeps showing its draft spots / model.
                 let d = (k == editing ? draft : nil) ?? dust
                 let g = (k == gradientEditing ? gradientDraft : nil) ?? gradient
@@ -751,12 +787,13 @@ final class ProjectModel {
                 let c = newCrop == nil ? b : ChannelSource(b, region: newCrop)
                 lock.lock(); newBase[k] = b; newCur[k] = c; newOrig[k] = orig; lock.unlock()
             }
-            let nb = newBase, nc = newCur, no = newOrig
+            let nb = newBase, nc = newCur, no = newOrig, np = newPairs
             let thumbs = nc.values.map { ($0.kind, ProjectModel.slotThumbnail($0)) }
             await MainActor.run {
                 self.baseSources = nb
                 self.sources = nc
                 self.originalImages = no
+                self.unrotatedPlanes = np
                 self.starsLayer = newStars
                 if let key = self.starsCompositeKey, newStars != nil {
                     self.starsCompositeKey = StarsCompositeKey(sourceIDs: newOther.baseSources.values.map(\.id).sorted { $0.uuidString < $1.uuidString },
@@ -823,6 +860,7 @@ final class ProjectModel {
     }
 
     private func sourcesChanged() {
+        pruneUnrotated()
         postStretchCache = [:]
         recordRecentSet()
         if sources.isEmpty {
@@ -982,6 +1020,12 @@ final class ProjectModel {
 
     func autoCrop() {
         guard !sources.isEmpty, editingTool == nil else { return }
+        if cropEditing, cropAngleDraft != orientation.angle {
+            // The pixels of the pending turn do not exist yet: the whole turned canvas, shrunk to fit inside the picture.
+            cropDraft = PixelRect(cropEditBounds)
+            constrainCropDraft(force: true)
+            return
+        }
         isLoading = true; loadingMessage = "Detecting empty borders…"
         let images = sources.values.map(\.image)
         Task.detached(priority: .userInitiated) {
@@ -1003,18 +1047,32 @@ final class ProjectModel {
         if dustEditing != nil { cancelDustEditing() }
         if gradientEditing != nil { cancelGradientEditing() }
         cropDraft = crop ?? imageSize.map { PixelRect(x: Int($0.width * 0.1), y: Int($0.height * 0.1), width: Int($0.width * 0.8), height: Int($0.height * 0.8)) }
+        cropAngleDraft = orientation.angle
         cropEditing = true
     }
 
     func commitCropEditing() {
         cropEditing = false
-        if let d = cropDraft, let size = imageSize, let c = d.clamped(width: Int(size.width), height: Int(size.height)) {
-            crop = c == PixelRect.full(width: Int(size.width), height: Int(size.height)) ? nil : c
+        guard let size = imageSize else { return }
+        if cropAngleDraft != orientation.angle {
+            // The draft is placed on the turned canvas (`cropEditBounds`); into its own coordinates.
+            let b = cropEditBounds
+            let q = ProjectModel.split(cropAngleDraft).quarters
+            let w = q % 2 == 0 ? Int(size.width) : Int(size.height), h = q % 2 == 0 ? Int(size.height) : Int(size.width)
+            let moved = cropDraft.map { PixelRect(x: $0.x - Int(b.minX.rounded()), y: $0.y - Int(b.minY.rounded()), width: $0.width, height: $0.height) }
+            let c = moved?.clamped(width: w, height: h)
+            applyFineRotation(to: cropAngleDraft, crop: c == PixelRect.full(width: w, height: h) ? nil : c)
+            return
+        }
+        let full = PixelRect.full(width: Int(size.width), height: Int(size.height))
+        let c = cropDraft?.clamped(width: Int(size.width), height: Int(size.height))
+        if let c {
+            crop = c == full ? nil : c
         }
     }
 
     /// Keeps a draft around (the fields are hidden anyway) so bindings created while editing stay valid.
-    func cancelCropEditing() { cropEditing = false; cropDraft = crop ?? cropDraft }
+    func cancelCropEditing() { cropEditing = false; cropAngleDraft = orientation.angle; cropDraft = crop ?? cropDraft }
 
     func clearCrop() { guard editingTool == nil else { return }; crop = nil; cropDraft = nil; cropEditing = false }
 
@@ -2244,6 +2302,7 @@ extension ProjectModel {
         let wasEmpty = inactiveLayer.isEmpty
         for (b, c) in zip(built.base, built.cropped) { inactiveLayer.baseSources[b.kind] = b; inactiveLayer.sources[c.kind] = c }
         for (b, o) in zip(built.base, built.originals) { inactiveLayer.originalImages[b.kind] = o }
+        unrotatedPlanes += built.unrotated.map { (rotated: $0.0, unrotated: $0.1) }
         for b in built.base { inactiveLayer.correctionMaps[b.kind] = built.maps[b.kind] }
         for (k, t) in built.thumbs { inactiveLayer.slotThumbnails[k] = t }
         inactiveLayer.context = nil; inactiveLayer.analysisSamples = [:]; inactiveLayer.postStretchCache = [:]
@@ -2376,14 +2435,17 @@ extension ProjectModel {
     }
 
     /// A tab turned with the other one: spots, models, maps and channels rebuilt (off the main thread).
-    nonisolated static func reoriented(_ st: LayerState, op: Orientation.Op, width w: Int, height h: Int, crop newCrop: PixelRect?) -> LayerState {
+    nonisolated static func reoriented(_ st: LayerState, op: Orientation.Op, width w: Int, height h: Int, crop newCrop: PixelRect?,
+                                       unrotated pairs: [(rotated: PlanarImage, unrotated: PlanarImage)], newPairs: inout [(rotated: PlanarImage, unrotated: PlanarImage)]) -> LayerState {
         var out = st
         out.dust.spots = st.dust.spots.mapValues { $0.map { $0.applying(op, imageWidth: w, imageHeight: h) } }
         out.gradient = st.gradient.applying(op, imageWidth: w, imageHeight: h)
         out.correctionMaps = st.correctionMaps.mapValues { $0.applying(op) }
         out.baseSources = [:]; out.sources = [:]; out.originalImages = [:]; out.slotThumbnails = [:]
         for (k, old) in st.baseSources {
-            let orig = (st.originalImages[k] ?? old.image).applying(op)
+            let before = st.originalImages[k] ?? old.image
+            let orig = before.applying(op)
+            if let un = ProjectModel.unrotated(before, in: pairs) { newPairs.append((rotated: orig, unrotated: un.applying(op))) }
             let healed = ProjectModel.process(orig, kind: k, dust: out.dust, gradient: out.gradient,
                                               correction: out.correctionMaps[k].map { ($0, Float(out.corrections.strength(for: k))) }, mode: out.corrections.mode)
             let b = ChannelSource(kind: k, image: healed, fileName: old.fileName, url: old.url, formatDescription: old.formatDescription)
@@ -2488,5 +2550,207 @@ extension ProjectModel {
         s.luminance.enabled = false
         s.stars = settings.stars
         settings = s
+    }
+}
+
+// MARK: - Fine rotation (crop straightening)
+
+extension ProjectModel {
+    /// The plane `rotated` was turned from, if it carries a fine rotation.
+    nonisolated static func unrotated(_ rotated: PlanarImage, in pairs: [(rotated: PlanarImage, unrotated: PlanarImage)]) -> PlanarImage? {
+        pairs.first { $0.rotated === rotated }?.unrotated
+    }
+
+    /// Drops the entries whose turned original is no longer used by either tab.
+    func pruneUnrotated() {
+        guard !unrotatedPlanes.isEmpty else { return }
+        let live = Array(originalImages.values) + Array(inactiveLayer.originalImages.values)
+        unrotatedPlanes.removeAll { p in !live.contains { $0 === p.rotated } }
+    }
+
+    /// Sets the angle being edited with the crop (any angle, kept in −180…180) and, with
+    /// `cropConstrain`, keeps the crop inside the turned picture.
+    func setCropAngle(_ degrees: Double) {
+        var a = degrees.truncatingRemainder(dividingBy: 360)
+        if a > 180 { a -= 360 } else if a <= -180 { a += 360 }
+        a = (a * 100).rounded() / 100
+        guard a != cropAngleDraft else { return }
+        cropAngleDraft = a
+        constrainCropDraft()
+    }
+
+    /// An angle as whole quarter turns (0…3, clockwise) plus the rest in −45…45°.
+    nonisolated static func split(_ degrees: Double) -> (quarters: Int, rest: Double) {
+        let q = Int((degrees / 90).rounded())
+        return ((q % 4 + 4) % 4, degrees - Double(q) * 90)
+    }
+
+    /// Where the canvas of the turned picture lies while the crop is edited, in the coordinates of
+    /// the shown picture: centred on it, sideways after an odd number of quarter turns. The crop
+    /// being edited lives in this space (it may reach outside the shown picture).
+    var cropEditBounds: CGRect {
+        guard let size = imageSize else { return .zero }
+        let q = ProjectModel.split(cropAngleDraft).quarters
+        let w = q % 2 == 0 ? size.width : size.height, h = q % 2 == 0 ? size.height : size.width
+        return CGRect(x: (size.width - w) / 2, y: (size.height - h) / 2, width: w, height: h)
+    }
+
+    /// Shrinks the user's crop (`cropBaseDraft`) about its centre until its corners lie inside the
+    /// picture turned by `cropAngleDraft` (the original frame turned by the total angle).
+    func constrainCropDraft(force: Bool = false) {
+        guard cropEditing, cropConstrain || force, let base = cropBaseDraft, let size = imageSize else { return }
+        let fitted = ProjectModel.constrained(base, angle: cropAngleDraft, width: Int(size.width), height: Int(size.height), bounds: cropEditBounds)
+        constrainingCrop = true
+        cropDraft = fitted
+        constrainingCrop = false
+    }
+
+    /// `rect` scaled about its centre (never up) so that it fits inside the `width` × `height` frame
+    /// turned by `angle` degrees about the frame's centre, then kept inside `bounds` (default: the frame).
+    nonisolated static func constrained(_ rect: PixelRect, angle: Double, width: Int, height: Int, bounds: CGRect? = nil) -> PixelRect {
+        guard angle != 0 else { return rect }
+        let t = angle * .pi / 180, c = cos(t), s = sin(t)
+        let cx = Double(width) / 2, cy = Double(height) / 2
+        let hw = Double(width) / 2, hh = Double(height) / 2
+        var px = Double(rect.x) + Double(rect.width) / 2, py = Double(rect.y) + Double(rect.height) / 2
+        // The centre must be inside the turned frame; otherwise start from the frame's centre.
+        func local(_ x: Double, _ y: Double) -> (Double, Double) { let dx = x - cx, dy = y - cy; return (c * dx + s * dy, -s * dx + c * dy) }
+        let (lx, ly) = local(px, py)
+        if abs(lx) >= hw * 0.98 || abs(ly) >= hh * 0.98 { px = cx; py = cy }
+        let (ox, oy) = local(px, py)
+        var scale = 1.0
+        for (sx, sy) in [(-1.0, -1.0), (1, -1), (1, 1), (-1, 1)] {
+            let dx = sx * Double(rect.width) / 2, dy = sy * Double(rect.height) / 2
+            // The corner in the frame's own axes: (ox, oy) + k·(ux, uy), k = scale.
+            let ux = c * dx + s * dy, uy = -s * dx + c * dy
+            for (o, u, h) in [(ox, ux, hw), (oy, uy, hh)] where abs(u) > 1e-9 {
+                let limit = ((u > 0 ? h : -h) - o) / u
+                scale = min(scale, max(limit, 0))
+            }
+        }
+        let w = max(1, Int((Double(rect.width) * scale).rounded(.down))), h = max(1, Int((Double(rect.height) * scale).rounded(.down)))
+        let x = Int((px - Double(w) / 2).rounded()), y = Int((py - Double(h) / 2).rounded())
+        let b = bounds ?? CGRect(x: 0, y: 0, width: width, height: height)
+        let bx0 = Int(b.minX.rounded()), by0 = Int(b.minY.rounded()), bx1 = Int(b.maxX.rounded()), by1 = Int(b.maxY.rounded())
+        return PixelRect(x: min(max(x, bx0), max(bx0, bx1 - w)), y: min(max(y, by0), max(by0, by1 - h)), width: min(w, bx1 - bx0), height: min(h, by1 - by0))
+    }
+
+    /// Turns every channel of both tabs by `angle` degrees in all (counted like `orientation.angle`):
+    /// whole quarter turns are exact, the rest (±45°) is resampled once from the planes before any
+    /// fine rotation. `newCrop` is in the turned picture. Dust spots, gradient guides, samples and
+    /// protected regions turn with the picture, painted maps are re-read from their sidecars (or
+    /// turned when there is none). Statistics and star masks are rebuilt.
+    func applyFineRotation(to angle: Double, crop newCrop: PixelRect?) {
+        guard !baseSources.isEmpty, !isLoading, editingTool == nil else { return }
+        guard angle != orientation.angle else { crop = newCrop; return }
+        let (quarters, newAngle) = ProjectModel.split(angle)
+        let first = baseSources.values.first!
+        let w0 = first.width, h0 = first.height
+        // Canvas after the quarter turns; the fine part turns on it by `delta`.
+        let w = quarters % 2 == 0 ? w0 : h0, h = quarters % 2 == 0 ? h0 : w0
+        let delta = newAngle - orientation.angle
+        var o = orientation
+        for _ in 0..<quarters { o = o.applying(.rotateClockwise) }
+        let newOrientation = Orientation(rotation: o.rotation, flipped: o.flipped, angle: newAngle)
+        orientation = newOrientation
+        cropAngleDraft = newAngle
+        /// Exact quarter turns of something with coordinates on the current canvas.
+        func quartered<T>(_ x: T, _ f: (T, Orientation.Op, Int, Int) -> T) -> T {
+            var v = x, cw = w0, ch = h0
+            for _ in 0..<quarters { v = f(v, .rotateClockwise, cw, ch); swap(&cw, &ch) }
+            return v
+        }
+        func turned(_ d: DustSettings) -> DustSettings {
+            var m = d
+            m.spots = d.spots.mapValues { $0.map { s in quartered(s) { $0.applying($1, imageWidth: $2, imageHeight: $3) }.rotated(byDegrees: delta, imageWidth: w, imageHeight: h) } }
+            return m
+        }
+        func turned(_ g: GradientSettings) -> GradientSettings {
+            quartered(g) { $0.applying($1, imageWidth: $2, imageHeight: $3) }.rotated(byDegrees: delta, imageWidth: w, imageHeight: h)
+        }
+        dust = turned(dust)
+        gradient = turned(gradient)
+        gradientHealed = nil
+        // Painted maps: from the sidecar (exact, nothing lost at the corners) when there is one.
+        let rawW = newOrientation.swapsAxes ? h : w, rawH = newOrientation.swapsAxes ? w : h
+        func turnedMaps(_ maps: [ChannelKind: CorrectionMap], _ srcs: [ChannelKind: ChannelSource]) -> [ChannelKind: CorrectionMap] {
+            var out: [ChannelKind: CorrectionMap] = [:]
+            for (k, m) in maps {
+                if let u = srcs[k]?.url, let stored = CorrectionMap.read(for: u, kind: k, imageWidth: rawW, imageHeight: rawH) { out[k] = stored.oriented(newOrientation) }
+                else { out[k] = quartered(m) { m, op, _, _ in m.applying(op) }.rotated(byDegrees: delta) }
+            }
+            return out
+        }
+        correctionMaps = turnedMaps(correctionMaps, baseSources)
+        var other = inactiveLayer
+        if !other.isEmpty {
+            other.dust = turned(other.dust)
+            other.gradient = turned(other.gradient)
+            other.correctionMaps = turnedMaps(other.correctionMaps, other.baseSources)
+        }
+        let base = baseSources, originals = originalImages, pairs = unrotatedPlanes
+        let dust = self.dust, gradient = self.gradient, maps = correctionMaps, corr = corrections
+        isLoading = true
+        loadingMessage = "Straightening…"
+        frame = nil
+        // The rendered Stars tab is made again from the turned channels.
+        starsLayer = nil; starsCompositeKey = nil
+        backgroundImage = nil; backgroundCompositeKey = nil
+        Task.detached(priority: .userInitiated) {
+            /// The original of a channel at the new angle, and the plane before any fine rotation.
+            func turn(_ before: PlanarImage) -> (PlanarImage, PlanarImage) {
+                let un = (ProjectModel.unrotated(before, in: pairs) ?? before).rotated90CW(times: quarters)
+                return (newAngle == 0 ? un : un.rotated(byDegrees: newAngle), un)
+            }
+            var newPairs: [(rotated: PlanarImage, unrotated: PlanarImage)] = []
+            let lock = NSLock()
+            func rebuild(_ base: [ChannelKind: ChannelSource], _ originals: [ChannelKind: PlanarImage], dust: DustSettings, gradient: GradientSettings,
+                         maps: [ChannelKind: CorrectionMap], corrections corr: CorrectionSettings)
+                -> (base: [ChannelKind: ChannelSource], cur: [ChannelKind: ChannelSource], orig: [ChannelKind: PlanarImage]) {
+                let kinds = Array(base.keys)
+                var nb: [ChannelKind: ChannelSource] = [:], nc: [ChannelKind: ChannelSource] = [:], no: [ChannelKind: PlanarImage] = [:]
+                DispatchQueue.concurrentPerform(iterations: kinds.count) { i in
+                    let k = kinds[i], old = base[k]!
+                    let (orig, un) = turn(originals[k] ?? old.image)
+                    let healed = ProjectModel.process(orig, kind: k, dust: dust, gradient: gradient, correction: maps[k].map { ($0, Float(corr.strength(for: k))) }, mode: corr.mode)
+                    let b = ChannelSource(kind: k, image: healed, fileName: old.fileName, url: old.url, formatDescription: old.formatDescription)
+                    let c = newCrop == nil ? b : ChannelSource(b, region: newCrop)
+                    lock.lock()
+                    nb[k] = b; nc[k] = c; no[k] = orig
+                    if orig !== un { newPairs.append((rotated: orig, unrotated: un)) }
+                    lock.unlock()
+                }
+                return (nb, nc, no)
+            }
+            let mine = rebuild(base, originals, dust: dust, gradient: gradient, maps: maps, corrections: corr)
+            var newOther = other
+            if !other.isEmpty {
+                let theirs = rebuild(other.baseSources, other.originalImages, dust: other.dust, gradient: other.gradient, maps: other.correctionMaps, corrections: other.corrections)
+                newOther.baseSources = theirs.base; newOther.sources = theirs.cur; newOther.originalImages = theirs.orig
+                newOther.slotThumbnails = theirs.cur.mapValues { ProjectModel.slotThumbnail($0) }.compactMapValues { $0 }
+                newOther.context = nil; newOther.analysisSamples = [:]; newOther.postStretchCache = [:]; newOther.thumbnails = [:]
+                newOther.frame = nil; newOther.histogram = []; newOther.crop = newCrop
+            }
+            let thumbs = mine.cur.values.map { ($0.kind, ProjectModel.slotThumbnail($0)) }
+            let np = newPairs, finalOther = newOther
+            await MainActor.run {
+                self.baseSources = mine.base
+                self.sources = mine.cur
+                self.originalImages = mine.orig
+                self.unrotatedPlanes = np
+                self.inactiveLayer = finalOther
+                for (k, t) in thumbs { if let t { self.slotThumbnails[k] = t } }
+                self.isLoading = false
+                self.postStretchCache = [:]
+                self.suppressCropRebuild = true
+                self.crop = newCrop
+                self.cropDraft = newCrop
+                self.suppressCropRebuild = false
+                self.rebuildContext()
+                self.fitRequest += 1
+                self.scheduleRecentStateSave()
+                self.updateComposites()
+            }
+        }
     }
 }

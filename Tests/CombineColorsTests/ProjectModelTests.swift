@@ -323,6 +323,116 @@ final class ProjectModelTests: XCTestCase {
         XCTAssertEqual(m.sources[.hb]?.width, 150); XCTAssertEqual(m.sources[.hb]?.height, 200)
     }
 
+    /// Straightening with the crop: the picture turns under the upright crop on Apply, coordinates
+    /// follow, the project keeps the angle, and going back to 0 gives the untouched channels back.
+    func testFineRotationWithTheCrop() async throws {
+        let m = try await loadedModel()
+        let haBefore = m.sources[.ha]!.image
+        m.beginDustEditing(.ha)
+        m.addDustSpot(at: CGPoint(x: 150, y: 40))
+        let spot = m.dustDraft!.spots(for: .ha)[0]
+        m.commitDustEditing()
+        await wait { !m.isLoading && m.context != nil && m.dust.spots(for: .ha).count == 1 }
+        let healedBefore = m.sources[.ha]!.image
+        // Turning while editing changes nothing until Apply; the constraint keeps the crop inside.
+        m.beginCropEditing()
+        m.cropDraft = PixelRect(x: 0, y: 0, width: 200, height: 150)
+        m.setCropAngle(10)
+        XCTAssertEqual(m.orientation.angle, 0)
+        XCTAssertTrue(m.sources[.ha]!.image === healedBefore)
+        let draft = m.cropDraft!
+        XCTAssertLessThan(draft.width, 200); XCTAssertLessThan(draft.height, 150)
+        XCTAssertEqual(Double(draft.width) / Double(draft.height), 200.0 / 150, accuracy: 0.03, "the crop keeps its shape")
+        m.setCropAngle(0)
+        XCTAssertEqual(m.cropDraft, PixelRect(x: 0, y: 0, width: 200, height: 150), "the crop grows back with the angle")
+        m.setCropAngle(10)
+        m.commitCropEditing()
+        await wait { m.orientation.angle == 10 && !m.isLoading && m.context != nil && m.sources[.ha]!.image !== healedBefore }
+        XCTAssertEqual(m.orientation, Orientation(rotation: 0, flipped: false, angle: 10))
+        XCTAssertEqual(m.crop, draft)
+        XCTAssertEqual(m.sources[.ha]?.region, draft)
+        XCTAssertEqual(m.imageSize, CGSize(width: 200, height: 150), "same canvas")
+        // The spot turned with the picture; the centre pixel stays (it is the pivot).
+        let turned = m.dust.spots(for: .ha)[0]
+        let e = FineRotation.rotate(x: spot.x, y: spot.y, degrees: 10, width: 200, height: 150)
+        XCTAssertEqual(turned.x, e.x, accuracy: 1e-9); XCTAssertEqual(turned.y, e.y, accuracy: 1e-9)
+        XCTAssertEqual(m.sources[.ha]!.image[100, 75], haBefore[100, 75], accuracy: 2e-3)
+        XCTAssertEqual(m.sources[.ha]!.image[0, 0], 0, "a corner comes in empty")
+        XCTAssertEqual(m.projectDocument().angle, 10)
+        // Reopening the project turns the files the same way.
+        let url = dir.appendingPathComponent("turned.json")
+        try m.saveProject(to: url)
+        let m2 = ProjectModel(defaults: defaults)
+        m2.openProject(from: url)
+        await wait { m2.sources.count == 3 && !m2.isLoading && m2.context != nil }
+        XCTAssertEqual(m2.orientation.angle, 10)
+        var maxDiff: Float = 0
+        for i in 0..<m2.sources[.oiii]!.image.count { maxDiff = max(maxDiff, abs(m2.sources[.oiii]!.image.pointer[i] - m.sources[.oiii]!.image.pointer[i])) }
+        XCTAssertEqual(maxDiff, 0)
+        // A quarter turn keeps the fine angle; back to 0 gives the untouched (quarter-turned) channel.
+        m.rotateClockwise()
+        await wait { m.rotation == 1 && !m.isLoading && m.context != nil }
+        XCTAssertEqual(m.orientation.angle, 10)
+        m.beginCropEditing()
+        m.setCropAngle(0)
+        m.commitCropEditing()
+        await wait { m.orientation.angle == 0 && !m.isLoading && m.context != nil }
+        XCTAssertTrue(m.unrotatedPlanes.isEmpty)
+        let raw = haBefore.rotated90CW()
+        let o = m.originalImages[.oiii]!, rawO = try ImageLoader.load(url: dir.appendingPathComponent("x-OIII.fits")).planes[0].rotated90CW()
+        XCTAssertEqual(o.toArray(), rawO.toArray(), "resampled once from the untouched data, so nothing is lost")
+        XCTAssertEqual(m.sources[.ha]!.image[20, 20], raw[20, 20], accuracy: 1e-6)
+    }
+
+    /// Any angle: whole quarter turns become exact ones (the canvas turns sideways), the rest a fine turn.
+    func testTurningAllTheWayRound() async throws {
+        let m = try await loadedModel()
+        let raw = try ImageLoader.load(url: dir.appendingPathComponent("x-OIII.fits")).planes[0]
+        XCTAssertEqual(ProjectModel.split(95).quarters, 1); XCTAssertEqual(ProjectModel.split(95).rest, 5, accuracy: 1e-12)
+        XCTAssertEqual(ProjectModel.split(-100).quarters, 3); XCTAssertEqual(ProjectModel.split(-100).rest, -10, accuracy: 1e-12)
+        XCTAssertEqual(ProjectModel.split(180).quarters, 2)
+        m.beginCropEditing()
+        m.setCropAngle(270)
+        XCTAssertEqual(m.cropAngleDraft, -90, "kept in −180…180")
+        m.setCropAngle(180)
+        // A half turn: exact, the same canvas.
+        XCTAssertEqual(m.cropEditBounds, CGRect(x: 0, y: 0, width: 200, height: 150))
+        m.cropDraft = PixelRect(x: 0, y: 0, width: 200, height: 150)
+        m.commitCropEditing()
+        await wait { m.orientation.rotation == 2 && !m.isLoading && m.context != nil }
+        XCTAssertEqual(m.orientation, Orientation(rotation: 2, flipped: false, angle: 0))
+        XCTAssertEqual(m.originalImages[.oiii]!.toArray(), raw.rotated90CW(times: 2).toArray())
+        XCTAssertNil(m.crop)
+        // 95°: one exact quarter turn (sideways canvas) plus 5°; the crop drawn on the sideways canvas lands in it.
+        m.beginCropEditing()
+        m.cropConstrain = false
+        m.setCropAngle(95)
+        let b = m.cropEditBounds
+        XCTAssertEqual(b, CGRect(x: 25, y: -25, width: 150, height: 200))
+        m.cropDraft = PixelRect(x: 45, y: 0, width: 100, height: 120)
+        m.commitCropEditing()
+        await wait { m.orientation.rotation == 3 && !m.isLoading && m.context != nil }
+        XCTAssertEqual(m.orientation, Orientation(rotation: 3, flipped: false, angle: 5))
+        XCTAssertEqual(m.imageSize, CGSize(width: 150, height: 200))
+        XCTAssertEqual(m.crop, PixelRect(x: 20, y: 25, width: 100, height: 120))
+        // Resampled once from the untouched (now three-quarter-turned) plane.
+        let expected = raw.rotated90CW(times: 3).rotated(byDegrees: 5)
+        XCTAssertEqual(m.originalImages[.oiii]!.toArray(), expected.toArray())
+    }
+
+    func testCropConstraintFitsInsideTheTurnedFrame() {
+        for angle in [-30.0, -5, 4, 12, 45] {
+            let r = ProjectModel.constrained(PixelRect(x: 10, y: 10, width: 180, height: 130), angle: angle, width: 200, height: 150)
+            let t = angle * .pi / 180
+            for (x, y) in [(r.x, r.y), (r.maxX, r.y), (r.maxX, r.maxY), (r.x, r.maxY)] {
+                let dx = Double(x) - 100, dy = Double(y) - 75
+                XCTAssertLessThanOrEqual(abs(cos(t) * dx + sin(t) * dy), 100.5, "\(angle)°")
+                XCTAssertLessThanOrEqual(abs(-sin(t) * dx + cos(t) * dy), 75.5, "\(angle)°")
+            }
+        }
+        XCTAssertEqual(ProjectModel.constrained(PixelRect(x: 1, y: 2, width: 30, height: 40), angle: 0, width: 200, height: 150), PixelRect(x: 1, y: 2, width: 30, height: 40))
+    }
+
     func testFlips() async throws {
         let m = try await loadedModel()
         let haBefore = m.sources[.ha]!.image

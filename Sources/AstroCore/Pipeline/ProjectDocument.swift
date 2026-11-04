@@ -44,6 +44,8 @@ public struct ProjectDocument: Codable {
     public var rotation: Int = 0
     /// Horizontal mirror applied before the rotation (see `Orientation`).
     public var flipped: Bool = false
+    /// Fine rotation in degrees after the quarter turns (see `Orientation`); the crop is in the turned picture.
+    public var angle: Double = 0
     /// Dust spots healed on the loaded channels (oriented coordinates) and the estimation parameters.
     public var dust: DustSettings = DustSettings()
     /// Gradient models removed from the loaded channels (oriented coordinates) and the shared protected regions.
@@ -55,8 +57,8 @@ public struct ProjectDocument: Codable {
     public var starsLayer: LayerDocument? = nil
 
     public var orientation: Orientation {
-        get { Orientation(rotation: rotation, flipped: flipped) }
-        set { rotation = newValue.rotation; flipped = newValue.flipped }
+        get { Orientation(rotation: rotation, flipped: flipped, angle: angle) }
+        set { rotation = newValue.rotation; flipped = newValue.flipped; angle = newValue.angle }
     }
 
     public init() {}

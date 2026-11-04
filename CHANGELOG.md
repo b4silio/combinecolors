@@ -5,6 +5,13 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 (`scripts/bump.sh`). The version lives in `VERSION` and is stamped into the app at build time;
 `scripts/release.sh` tags it and publishes the DMG as a GitHub release.
 
+## [1.17.0] – 2026-11-05
+
+- Straighten / turn in the crop editor: the picture turns under the upright crop (Angle slider and field, any angle, quarter-turn buttons, drag in the band around the crop with a rotate cursor; ⇧ whole degrees, quarter turns catch the pointer); a fine grid while turned; Constrain to image keeps empty corners out of the crop; Auto fits the largest crop inside the turned picture
+- On Apply whole quarter turns are exact and the rest (±45°) is resampled once from the untouched data (Lanczos-3, clamped against ringing, ≈ 0.1 s per 40 MP channel); dust spots, gradient guides, samples, protected regions and painted maps turn with the picture; the angle is stored in projects and recent sets
+- Stretch block labels widened (Highlights (%) no longer truncated)
+- macOS only; the Windows / Linux builds do not read the angle yet
+
 ## [1.16.0] – 2026-11-04
 
 - Channel mix: the channel weights moved from the processing strip to the right pane, under the palettes (one compact row per channel; the chevron opens gain, pedestal and the per-channel stretch tweaks)

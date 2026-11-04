@@ -19,6 +19,13 @@ public struct BackgroundSample: Codable, Equatable, Hashable, Identifiable {
         }
         return s
     }
+
+    /// The sample after a fine rotation of the image by `degrees` (`FineRotation`).
+    public func rotated(byDegrees degrees: Double, imageWidth: Int, imageHeight: Int) -> BackgroundSample {
+        var s = self
+        (s.x, s.y) = FineRotation.rotate(x: x, y: y, degrees: degrees, width: imageWidth, height: imageHeight)
+        return s
+    }
 }
 
 /// Surface fitted through the background samples.

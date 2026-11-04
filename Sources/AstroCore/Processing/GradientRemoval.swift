@@ -102,6 +102,15 @@ public struct GradientGesture: Codable, Equatable, Hashable {
         return g
     }
 
+    /// The guide after a fine rotation of the image by `degrees` (`FineRotation`).
+    public func rotated(byDegrees degrees: Double, imageWidth: Int, imageHeight: Int) -> GradientGesture {
+        var g = self
+        (g.x, g.y) = FineRotation.rotate(x: x, y: y, degrees: degrees, width: imageWidth, height: imageHeight)
+        (g.x2, g.y2) = FineRotation.rotate(x: x2, y: y2, degrees: degrees, width: imageWidth, height: imageHeight)
+        g.angle = angle + degrees * .pi / 180
+        return g
+    }
+
     /// The guide after an unoriented image is oriented (flip, then quarter turns).
     public func applying(_ o: Orientation, imageWidth: Int, imageHeight: Int) -> GradientGesture {
         var g = o.flipped ? applying(.flipHorizontal, imageWidth: imageWidth, imageHeight: imageHeight) : self
@@ -137,6 +146,18 @@ public struct GradientRegion: Codable, Equatable, Hashable, Identifiable {
         case .flipHorizontal: r.x = Double(imageWidth) - x
         case .flipVertical: r.y = Double(imageHeight) - y
         }
+        return r
+    }
+
+    /// The region after a fine rotation of the image by `degrees`: the centre turns; the region stays
+    /// axis-aligned and grows to the bounding box of the turned ellipse (it protects a little more,
+    /// never less).
+    public func rotated(byDegrees degrees: Double, imageWidth: Int, imageHeight: Int) -> GradientRegion {
+        var r = self
+        (r.x, r.y) = FineRotation.rotate(x: x, y: y, degrees: degrees, width: imageWidth, height: imageHeight)
+        let t = degrees * .pi / 180, c = cos(t), s = sin(t)
+        r.a = (a * a * c * c + b * b * s * s).squareRoot()
+        r.b = (a * a * s * s + b * b * c * c).squareRoot()
         return r
     }
 
@@ -195,6 +216,13 @@ public struct GradientSpec: Codable, Equatable, Hashable {
         return s
     }
 
+    public func rotated(byDegrees degrees: Double, imageWidth: Int, imageHeight: Int) -> GradientSpec {
+        var s = self
+        s.gesture = gesture.rotated(byDegrees: degrees, imageWidth: imageWidth, imageHeight: imageHeight)
+        s.samples = samples.map { $0.rotated(byDegrees: degrees, imageWidth: imageWidth, imageHeight: imageHeight) }
+        return s
+    }
+
     /// Sample radius actually used.
     public func resolvedSampleRadius(width: Int, height: Int) -> Double {
         sampleRadius > 0 ? sampleRadius : BackgroundSamples.defaultRadius(width: width, height: height)
@@ -241,6 +269,15 @@ public struct GradientSettings: Codable, Equatable {
         var g = self
         g.specs = specs.mapValues { $0.applying(op, imageWidth: imageWidth, imageHeight: imageHeight) }
         g.protect = protect.map { $0.applying(op, imageWidth: imageWidth, imageHeight: imageHeight) }
+        return g
+    }
+
+    /// Everything turned with a fine rotation of the image by `degrees`.
+    public func rotated(byDegrees degrees: Double, imageWidth: Int, imageHeight: Int) -> GradientSettings {
+        guard degrees != 0 else { return self }
+        var g = self
+        g.specs = specs.mapValues { $0.rotated(byDegrees: degrees, imageWidth: imageWidth, imageHeight: imageHeight) }
+        g.protect = protect.map { $0.rotated(byDegrees: degrees, imageWidth: imageWidth, imageHeight: imageHeight) }
         return g
     }
 }

@@ -237,7 +237,12 @@ export at full resolution.
   limits can be hidden, shown as a dashed frame over the whole image, or the
   preview can show only the cropped part (tri-state *Limits* checkbox). *Rotate* (⌘R) turns every
   channel, the crop and the previews by 90° clockwise; the flip buttons
-  (⇧⌘H / ⇧⌘V) mirror them. The resulting orientation is stored in the project
+  (⇧⌘H / ⇧⌘V) mirror them. **Straighten / turn** in the crop editor: the *Angle* slider
+  (any angle, ±180°; quarter-turn buttons) or a drag in the band around the crop turns the picture under the
+  upright crop (fine grid while turning; *Constrain to image* shrinks the crop so no
+  empty corner gets in); Apply turns whole quarters exactly and resamples every
+  channel once for the rest (±45°; Lanczos-3, clamped against ringing) from the untouched data, and dust spots, gradient guides,
+  samples, protected regions and painted maps turn with it. The resulting orientation is stored in the project
   and applied to channels added later.
 * **Preview**: scroll or pinch to zoom around the pointer, drag (or ⌘-scroll)
   to pan, hold the space bar to pan inside any editor, double-click fits the picture (and goes to 1:1 when it is already fitted), press-and-hold a channel thumbnail to see that
@@ -318,7 +323,8 @@ release with the changelog section as notes.
 2. **Crop** (optional but recommended for registered stacks with empty
    borders) — *Auto trim* finds the borders; or press the crop button, drag a
    rectangle, adjust it with the handles, press Return. The crop applies to all
-   channels at once.
+   channels at once. To straighten, turn the picture with the *Angle* slider or
+   by dragging around the crop before pressing Return.
    *Heal Dust Spots…* in a channel's menu opens the spot editor on that channel
    (click a shadow, adjust, switch channels, Return applies); *Remove Gradient…*
    opens the gradient editor (drag a line or an ellipse over the gradient, add
@@ -466,7 +472,7 @@ GHS D = strength / σ, MTF midtones = value × σ.
 
 ```
 Sources/AstroCore            processing library (no UI)
-  Image/                     PlanarImage, Pyramid, PixelRect/AutoCrop, Statistics, StarMask
+  Image/                     PlanarImage, Pyramid, PixelRect/AutoCrop, Orientation/FineRotation, Statistics, StarMask
   IO/                        FITS reader/writer, ImageIO raster reader/writer, loader, channel detection
   Processing/                Stretch, Normalization, Palettes, PostProcess, DualBand
   PixelMath/                 lexer, parser, vectorised evaluator, programs

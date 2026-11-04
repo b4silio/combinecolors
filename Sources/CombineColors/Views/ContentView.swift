@@ -164,12 +164,38 @@ struct ContentView: View {
                 }
                 .font(.caption)
                 .textFieldStyle(.roundedBorder)
+                cropAngleControls
             }
         }
         .controlSize(.small)
         .padding(6)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
         .padding(8)
+    }
+
+    /// Straightening in the crop editor: the picture turns under the upright crop (applied with the crop).
+    private var cropAngleControls: some View {
+        let angle = Binding<Float>(get: { Float(model.cropAngleDraft) }, set: { model.setCropAngle(Double($0)) })
+        return VStack(alignment: .trailing, spacing: 3) {
+            Divider().frame(width: 190)
+            SliderRow(title: "Angle", value: angle, range: -180...180, defaultValue: 0, format: "%.2f",
+                      help: "Turns the picture under the crop, clockwise for positive angles, all the way round (double-click to reset). Dragging in the band around the crop (up to 160 pt from it) turns it too (⇧: whole degrees; quarter turns catch the pointer). On Apply whole quarter turns are exact and only the rest (±45°) is resampled.",
+                      note: "°", labelWidth: 52)
+                .frame(width: 210)
+            HStack(spacing: 4) {
+                Button { model.setCropAngle(model.cropAngleDraft - 90) } label: { Image(systemName: "rotate.left") }
+                    .help("Turn a quarter counter-clockwise")
+                Button { model.setCropAngle(model.cropAngleDraft + 90) } label: { Image(systemName: "rotate.right") }
+                    .help("Turn a quarter clockwise")
+                Spacer().frame(width: 6)
+                Toggle("Constrain to image", isOn: $model.cropConstrain).toggleStyle(.checkbox)
+                    .help("While turning, the crop shrinks (keeping its shape and centre) so no empty corner gets inside it")
+                Button("Level") { model.setCropAngle(0) }.disabled(model.cropAngleDraft == 0)
+                    .help("Back to 0: no fine turn (quarter turns and flips stay)")
+            }
+            .font(.caption)
+            Text("Drag around the crop to turn").font(.system(size: 9)).foregroundStyle(.secondary)
+        }
     }
 
     /// Dust-spot editor: channel switch, model and parameters (of the selected spot, else of new

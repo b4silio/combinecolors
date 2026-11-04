@@ -17,9 +17,26 @@ final class ZoomPanNSView: NSView {
 
     var previewFrame: PreviewFrame? { didSet { updateImageLayer() } }
     var crop: PixelRect? { didSet { updateOverlay() } }
-    var cropEditing = false { didSet { updateOverlay(); updateCursor() } }
-    var cropDraft: PixelRect? { didSet { updateOverlay() } }
+    var cropEditing = false { didSet { updateImageLayer(); updateOverlay(); updateCursor() } }
+    var cropDraft: PixelRect? { didSet { updateOverlay(); if cropEditing { updateCursor() } } }
     var cropOverlay: CropOverlayMode = .frame { didSet { updateOverlay() } }
+    /// Fine rotation already applied to the channels, and the one being edited with the crop
+    /// (degrees, clockwise). While they differ the picture is turned on screen under the upright
+    /// crop; the channels are resampled on Apply.
+    var fineAngle: Double = 0 { didSet { if fineAngle != oldValue { updateImageLayer() } } }
+    var cropAngle: Double = 0 { didSet { if cropAngle != oldValue { updateImageLayer(); updateOverlay() } } }
+    var onCropAngleChange: ((Double) -> Void)?
+    /// Where the crop being edited may go (image coordinates): the canvas of the turned picture,
+    /// sideways after an odd number of quarter turns, so it can reach outside the shown picture.
+    var cropBounds: CGRect = .zero {
+        didSet {
+            guard cropBounds != oldValue else { return }
+            // The turned canvas went sideways (or back): show all of it.
+            if cropEditing, oldValue.width > 0, cropBounds.size != oldValue.size { fit(rect: cropBounds) }
+            updateOverlay()
+        }
+    }
+    private var cropLimits: CGRect { cropEditing && cropBounds.width > 0 ? cropBounds : CGRect(origin: .zero, size: imageSize) }
     var dustEditing = false { didSet { updateDustOverlay(); updateCursor() } }
     var dustSpots: [DustSpot] = [] { didSet { updateDustOverlay() } }
     var selectedDustSpot: UUID? = nil { didSet { updateDustOverlay() } }
@@ -74,6 +91,8 @@ final class ZoomPanNSView: NSView {
     private let imageLayer = CALayer()
     private let dimLayers = (0..<4).map { _ in CALayer() }
     private let cropBorder = CAShapeLayer()
+    /// Thirds (finer while turning) inside the crop being edited, to level the picture against.
+    private let cropGrid = CAShapeLayer()
     private let handleLayers = (0..<8).map { _ in CALayer() }
     private let dustLayer = CAShapeLayer()
     private let dustSelectedLayer = CAShapeLayer()
@@ -94,6 +113,9 @@ final class ZoomPanNSView: NSView {
 
     private enum Drag {
         case none, pan(CGPoint), move(PixelRect, CGPoint), resize(Int, PixelRect), create(CGPoint)
+        /// Crop editor: turning the picture by dragging outside a corner (angle at the start, pointer
+        /// angle around the crop centre at the start, in degrees).
+        case turn(Double, Double)
         /// Dust editor: a press on empty sky pans, and adds a spot when released without moving.
         case dustPan(last: CGPoint, start: CGPoint, moved: Bool)
         case dustMove(UUID, DustSpot, CGPoint)
@@ -142,6 +164,11 @@ final class ZoomPanNSView: NSView {
         cropBorder.lineWidth = 1
         cropBorder.lineDashPattern = [6, 4]
         layer?.addSublayer(cropBorder)
+        cropGrid.fillColor = nil
+        cropGrid.strokeColor = NSColor.white.withAlphaComponent(0.35).cgColor
+        cropGrid.lineWidth = 0.5
+        cropGrid.isHidden = true
+        layer?.addSublayer(cropGrid)
         for h in handleLayers {
             h.backgroundColor = NSColor.white.cgColor
             h.borderColor = NSColor.black.cgColor
@@ -201,7 +228,7 @@ final class ZoomPanNSView: NSView {
         layer?.addSublayer(brushLayer); layer?.addSublayer(radiusLabel)
         layer?.actions = ["sublayers": NSNull()]
         imageLayer.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull(), "frame": NSNull()]
-        for l in dimLayers + handleLayers + gradientHandles + regionHandles + [cropBorder, dustLayer, dustSelectedLayer, dustHandle, gradientLayer, gradientRefinedLayer, regionLayer, regionSelectedLayer, sampleLayer, sampleRejectedLayer, sampleSelectedLayer, correctionLayer, brushLayer, radiusLabel] { l.actions = ["bounds": NSNull(), "position": NSNull(), "frame": NSNull(), "path": NSNull(), "hidden": NSNull()] }
+        for l in dimLayers + handleLayers + gradientHandles + regionHandles + [cropBorder, cropGrid, dustLayer, dustSelectedLayer, dustHandle, gradientLayer, gradientRefinedLayer, regionLayer, regionSelectedLayer, sampleLayer, sampleRejectedLayer, sampleSelectedLayer, correctionLayer, brushLayer, radiusLabel] { l.actions = ["bounds": NSNull(), "position": NSNull(), "frame": NSNull(), "path": NSNull(), "hidden": NSNull()] }
     }
 
     deinit { if let k = keyMonitor { NSEvent.removeMonitor(k) } }
@@ -387,7 +414,17 @@ final class ZoomPanNSView: NSView {
         guard let f = previewFrame else { imageLayer.isHidden = true; return }
         imageLayer.isHidden = false
         imageLayer.contents = f.cgImage
-        imageLayer.frame = toAppKit(viewRect(f.rect))
+        let r = toAppKit(viewRect(f.rect))
+        imageLayer.setAffineTransform(.identity)
+        imageLayer.frame = r
+        let turn = cropEditing ? cropAngle - fineAngle : 0
+        if turn != 0 {
+            // Turn about the picture's centre (clockwise on screen: negative in AppKit's y-up space).
+            let ic = viewPoint(CGPoint(x: imageSize.width / 2, y: imageSize.height / 2))
+            let d = CGPoint(x: ic.x - r.midX, y: (bounds.height - ic.y) - r.midY)
+            let phi = -turn * .pi / 180, c = cos(phi), sn = sin(phi)
+            imageLayer.setAffineTransform(CGAffineTransform(a: c, b: sn, c: -sn, d: c, tx: d.x - (c * d.x - sn * d.y), ty: d.y - (sn * d.x + c * d.y)))
+        }
         let devicePerImage = zoom * backing
         imageLayer.magnificationFilter = devicePerImage >= 2 ? .nearest : .linear
     }
@@ -396,10 +433,10 @@ final class ZoomPanNSView: NSView {
         let rect: PixelRect? = cropEditing ? cropDraft : (cropOverlay == .hidden ? nil : crop)
         let cropOnly = !cropEditing && cropOverlay == .cropOnly
         guard let r = rect, imageSize != .zero else {
-            dimLayers.forEach { $0.isHidden = true }; cropBorder.isHidden = true; handleLayers.forEach { $0.isHidden = true }
+            dimLayers.forEach { $0.isHidden = true }; cropBorder.isHidden = true; cropGrid.isHidden = true; handleLayers.forEach { $0.isHidden = true }
             return
         }
-        let full = viewRect(CGRect(origin: .zero, size: imageSize)).intersection(bounds.insetBy(dx: -2, dy: -2))
+        let full = viewRect(CGRect(origin: .zero, size: imageSize).union(cropLimits)).intersection(bounds.insetBy(dx: -2, dy: -2))
         let c = viewRect(r.cgRect)
         // Four rectangles around the crop.
         let parts = [
@@ -412,6 +449,20 @@ final class ZoomPanNSView: NSView {
         for (l, p) in zip(dimLayers, parts) { l.isHidden = false; l.frame = toAppKit(p); l.backgroundColor = dim }
         cropBorder.isHidden = cropOnly
         cropBorder.path = CGPath(rect: toAppKit(c), transform: nil)
+        if cropEditing {
+            // Thirds; a finer grid while the picture is turned, to level it against.
+            let n = cropAngle != fineAngle || isTurning ? 8 : 3
+            let g = CGMutablePath(), a = toAppKit(c)
+            for i in 1..<n {
+                let x = a.minX + a.width * CGFloat(i) / CGFloat(n), y = a.minY + a.height * CGFloat(i) / CGFloat(n)
+                g.move(to: CGPoint(x: x, y: a.minY)); g.addLine(to: CGPoint(x: x, y: a.maxY))
+                g.move(to: CGPoint(x: a.minX, y: y)); g.addLine(to: CGPoint(x: a.maxX, y: y))
+            }
+            cropGrid.path = g
+            cropGrid.isHidden = false
+        } else {
+            cropGrid.isHidden = true
+        }
         cropBorder.strokeColor = cropEditing ? NSColor.systemYellow.cgColor : NSColor.white.cgColor
         for (i, h) in handleLayers.enumerated() {
             h.isHidden = !cropEditing
@@ -435,9 +486,40 @@ final class ZoomPanNSView: NSView {
 
     private func updateCursor() { window?.invalidateCursorRects(for: self) }
 
+    /// Cursor shown where a drag turns the picture: the system's rotate symbol.
+    static let turnCursor: NSCursor = {
+        let cfg = NSImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
+        guard let sym = NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: "Turn")?.withSymbolConfiguration(cfg) else { return .crosshair }
+        let size = NSSize(width: 22, height: 22)
+        let img = NSImage(size: size, flipped: false) { r in
+            NSColor.black.withAlphaComponent(0.55).setFill()
+            NSBezierPath(ovalIn: r).fill()
+            let tinted = sym.copy() as! NSImage
+            tinted.isTemplate = true
+            let ir = NSRect(x: (r.width - sym.size.width) / 2, y: (r.height - sym.size.height) / 2, width: sym.size.width, height: sym.size.height)
+            tinted.draw(in: ir)
+            NSColor.white.set()
+            ir.fill(using: .sourceAtop)
+            return true
+        }
+        return NSCursor(image: img, hotSpot: NSPoint(x: 11, y: 11))
+    }()
+
     override func resetCursorRects() {
         let editing = cropEditing || dustEditing || gradientEditing || correctionEditing
         addCursorRect(bounds, cursor: editing && !spaceHeld ? .crosshair : .openHand)
+        // The band around the crop: turning (a rotate cursor). Four strips, corners included.
+        if cropEditing, !spaceHeld, let d = cropDraft {
+            let c = viewRect(d.cgRect), z = Self.turnZone
+            let o = c.insetBy(dx: -z, dy: -z)
+            for r in [CGRect(x: o.minX, y: o.minY, width: o.width, height: c.minY - o.minY),
+                      CGRect(x: o.minX, y: c.maxY, width: o.width, height: o.maxY - c.maxY),
+                      CGRect(x: o.minX, y: c.minY, width: c.minX - o.minX, height: c.height),
+                      CGRect(x: c.maxX, y: c.minY, width: o.maxX - c.maxX, height: c.height)] {
+                let v = r.intersection(bounds)
+                if !v.isNull, v.width > 0, v.height > 0 { addCursorRect(toAppKit(v), cursor: Self.turnCursor) }
+            }
+        }
     }
 
     // MARK: Gradient editor
@@ -766,6 +848,12 @@ final class ZoomPanNSView: NSView {
                 let c = viewRect(d.cgRect)
                 for i in 0..<8 where hypot(p.x - handlePoint(i, c).x, p.y - handlePoint(i, c).y) <= 8 { drag = .resize(i, d); return }
                 if c.contains(p) { drag = .move(d, ip); return }
+                // In the band around the crop: turn the picture (farther out, a drag draws a new crop).
+                if c.insetBy(dx: -Self.turnZone, dy: -Self.turnZone).contains(p) {
+                    drag = .turn(cropAngle, atan2(p.y - c.midY, p.x - c.midX) * 180 / .pi)
+                    updateOverlay()
+                    return
+                }
             }
             drag = .create(ip)
         } else {
@@ -776,7 +864,8 @@ final class ZoomPanNSView: NSView {
     override func mouseDragged(with event: NSEvent) {
         let p = topLeftPoint(event)
         let ip = imagePoint(p)
-        func clampPoint(_ q: CGPoint) -> CGPoint { CGPoint(x: min(max(q.x, 0), imageSize.width), y: min(max(q.y, 0), imageSize.height)) }
+        let lim = cropLimits
+        func clampPoint(_ q: CGPoint) -> CGPoint { CGPoint(x: min(max(q.x, lim.minX), lim.maxX), y: min(max(q.y, lim.minY), lim.maxY)) }
         switch drag {
         case .none: break
         case .paint(let last):
@@ -792,6 +881,17 @@ final class ZoomPanNSView: NSView {
             drag = .pan(p)
             clampOrigin()
             needsLayout = true
+        case .turn(let start, let pointer0):
+            guard let d = cropDraft else { break }
+            let c = viewRect(d.cgRect)
+            var delta = atan2(p.y - c.midY, p.x - c.midX) * 180 / .pi - pointer0
+            if delta > 180 { delta -= 360 } else if delta < -180 { delta += 360 }
+            // A tenth of a degree; with ⇧ whole degrees. Quarter turns (and 0) catch the pointer within 1.5°.
+            var a = start + delta
+            a = event.modifierFlags.contains(.shift) ? a.rounded() : (a * 10).rounded() / 10
+            let quarter = (a / 90).rounded() * 90
+            if abs(a - quarter) < 1.5 { a = quarter }
+            onCropAngleChange?(a)
         case .create(let start):
             let a = clampPoint(start), b = clampPoint(ip)
             let r = CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
@@ -799,7 +899,7 @@ final class ZoomPanNSView: NSView {
         case .move(let start, let anchor):
             var r = start
             r.x = Int((CGFloat(start.x) + ip.x - anchor.x).rounded()); r.y = Int((CGFloat(start.y) + ip.y - anchor.y).rounded())
-            r.x = min(max(0, r.x), Int(imageSize.width) - r.width); r.y = min(max(0, r.y), Int(imageSize.height) - r.height)
+            r.x = min(max(Int(lim.minX.rounded()), r.x), Int(lim.maxX.rounded()) - r.width); r.y = min(max(Int(lim.minY.rounded()), r.y), Int(lim.maxY.rounded()) - r.height)
             cropDraft = r; onCropDraftChange?(r)
         case .resize(let i, let start):
             let q = clampPoint(ip)
@@ -824,8 +924,14 @@ final class ZoomPanNSView: NSView {
             else if gradientShape == .samples, inside { onGradientSampleAdd?(ip) }
             else { onGradientRegionSelect?(nil); onGradientSampleSelect?(nil) }
         }
+        let wasTurning = isTurning
         drag = .none
+        if wasTurning { updateOverlay() }
     }
+
+    /// Width (view points) of the band around the crop where a drag turns the picture.
+    static let turnZone: CGFloat = 160
+    private var isTurning: Bool { if case .turn = drag { return true }; return false }
 
     override func mouseMoved(with event: NSEvent) {
         let p = topLeftPoint(event)
@@ -862,6 +968,7 @@ struct PreviewView: NSViewRepresentable {
         }
         v.onHover = { p in Task { @MainActor in model.updateHover(imagePoint: p) } }
         v.onCropDraftChange = { r in Task { @MainActor in model.cropDraft = r } }
+        v.onCropAngleChange = { a in Task { @MainActor in model.setCropAngle(a) } }
         v.onDustSpotsChange = { spots in Task { @MainActor in model.updateDustSpots(spots) } }
         v.onDustAdd = { p in Task { @MainActor in model.addDustSpot(at: p) } }
         v.onDustSelect = { id in Task { @MainActor in model.selectedDustSpot = id } }
@@ -892,6 +999,11 @@ struct PreviewView: NSViewRepresentable {
         if v.cropEditing != model.cropEditing { v.cropEditing = model.cropEditing }
         if v.cropDraft != model.cropDraft { v.cropDraft = model.cropDraft }
         if v.cropOverlay != model.cropOverlay { v.cropOverlay = model.cropOverlay }
+        if v.fineAngle != model.orientation.angle { v.fineAngle = model.orientation.angle }
+        let editAngle = model.cropEditing ? model.cropAngleDraft : model.orientation.angle
+        if v.cropAngle != editAngle { v.cropAngle = editAngle }
+        let bounds = model.cropEditing ? model.cropEditBounds : .zero
+        if v.cropBounds != bounds { v.cropBounds = bounds }
         let dustEditing = model.dustEditing != nil
         if v.dustEditing != dustEditing { v.dustEditing = dustEditing }
         let spots = model.dustEditing.map { model.dustSpots(for: $0) } ?? []

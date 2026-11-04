@@ -218,6 +218,7 @@ struct ControlsStripView: View {
     @ViewBuilder var stretchSection: some View {
         let s = $model.settings.stretch
         let st = model.settings.stretch
+        let lw: CGFloat = 82
         // Highlight clipping shown as the share of pixels clipped to white (0…2 %).
         let clip = Binding<Float>(get: { (1 - model.settings.stretch.highlightsPercentile) * 100 },
                                   set: { model.settings.stretch.highlightsPercentile = 1 - min(max($0, 0), 100) / 100 })
@@ -228,39 +229,39 @@ struct ControlsStripView: View {
             Toggle("Linked channels", isOn: s.linked).help("Same stretch for all channels")
         }
         if st.usesTargetBackground {
-            SliderRow(title: "Target bg", value: s.targetBackground, range: 0.02...0.6, defaultValue: 0.2, help: "Where the median background lands after the stretch (PixInsight STF default 0.25).")
+            SliderRow(title: "Target bg", value: s.targetBackground, range: 0.02...0.6, defaultValue: 0.2, help: "Where the median background lands after the stretch (PixInsight STF default 0.25).", labelWidth: lw)
         }
         if st.usesClipping {
-            SliderRow(title: "Shadow clip", value: s.shadowsClipping, range: -6...0, defaultValue: -2.8, format: "%.1f", help: "Black point in noise units (MADN) below the median background (STF default −2.8). Closer to 0 darkens the sky.")
+            SliderRow(title: "Shadow clip", value: s.shadowsClipping, range: -6...0, defaultValue: -2.8, format: "%.1f", help: "Black point in noise units (MADN) below the median background (STF default −2.8). Closer to 0 darkens the sky.", labelWidth: lw)
         }
         // The manual strengths are relative to the data's noise, so the same values suit any linear stack.
         switch st.method {
         case .mtf:
             SliderRow(title: "Midtones", value: s.mtfMidtonesSigma, range: 0.3...1000, defaultValue: 10, format: "%.1f", logarithmic: true,
-                      help: "Midtones balance in noise units: lower is brighter. The sky (2.8 noises above the default black point) lands near 2.8 / (2.8 + value): 3 ≈ 0.5, 10 ≈ 0.2, 100 ≈ 0.03. The absolute midtones (PixInsight HistogramTransformation) are shown below.")
+                      help: "Midtones balance in noise units: lower is brighter. The sky (2.8 noises above the default black point) lands near 2.8 / (2.8 + value): 3 ≈ 0.5, 10 ≈ 0.2, 100 ≈ 0.03. The absolute midtones (PixInsight HistogramTransformation) are shown below.", labelWidth: lw)
         case .arcsinh:
             SliderRow(title: "Stretch", value: s.arcsinhStrength, range: 0.01...100, defaultValue: 1, format: "%.2f", logarithmic: true,
-                      help: "Stretch factor relative to the noise: 1 puts the sky near 0.2 on most linear stacks, 0.1 near 0.05, 10 near 0.35. The absolute factor (PixInsight ArcsinhStretch) is shown below.")
+                      help: "Stretch factor relative to the noise: 1 puts the sky near 0.2 on most linear stacks, 0.1 near 0.05, 10 near 0.35. The absolute factor (PixInsight ArcsinhStretch) is shown below.", labelWidth: lw)
         case .ghs:
             SliderRow(title: "Stretch", value: s.ghsStrength, range: 0.001...100, defaultValue: 0.1, format: "%.3f", logarithmic: true,
-                      help: "Stretch factor D relative to the noise. The absolute ln(D+1) (PixInsight / Siril GHS) is shown below.")
-            SliderRow(title: "b", value: s.ghsB, range: 0...15, defaultValue: 2, format: "%.1f", help: "Local intensity: how concentrated the stretch is around the symmetry point (0 = exponential).")
+                      help: "Stretch factor D relative to the noise. The absolute ln(D+1) (PixInsight / Siril GHS) is shown below.", labelWidth: lw)
+            SliderRow(title: "b", value: s.ghsB, range: 0...15, defaultValue: 2, format: "%.1f", help: "Local intensity: how concentrated the stretch is around the symmetry point (0 = exponential).", labelWidth: lw)
             SliderRow(title: "SP", value: s.ghsSPPercentile, range: 0...100, defaultValue: 0, format: "%.1f",
-                      help: "Symmetry point, as the share of the image's pixels darker than it: 0 = the black point, ≈ 50 = the sky background, 90+ = nebula. The contrast is greatest around it.", note: "%", curve: 2)
+                      help: "Symmetry point, as the share of the image's pixels darker than it: 0 = the black point, ≈ 50 = the sky background, 90+ = nebula. The contrast is greatest around it.", note: "%", labelWidth: lw, curve: 2)
             SliderRow(title: "LP", value: s.ghsLPPercentile, range: 0...100, defaultValue: 0, format: "%.1f",
-                      help: "Shadow protection: below this percentile the curve continues as a straight line (never above SP).", note: "%", curve: 2)
+                      help: "Shadow protection: below this percentile the curve continues as a straight line (never above SP).", note: "%", labelWidth: lw, curve: 2)
             SliderRow(title: "HP", value: s.ghsHPPercentile, range: 0...100, defaultValue: 100, format: "%.2f",
-                      help: "Highlight protection: above this percentile the curve continues as a straight line, keeping star cores from saturating (100 = none; never below SP).", note: "%", curve: 0.5)
+                      help: "Highlight protection: above this percentile the curve continues as a straight line, keeping star cores from saturating (100 = none; never below SP).", note: "%", labelWidth: lw, curve: 0.5)
         case .log:
             SliderRow(title: "Strength", value: s.logStrength, range: 0.01...100, defaultValue: 1, format: "%.2f", logarithmic: true,
-                      help: "k relative to the noise: 1 puts the sky near 0.17 on most linear stacks. The absolute k is shown below.")
+                      help: "k relative to the noise: 1 puts the sky near 0.17 on most linear stacks. The absolute k is shown below.", labelWidth: lw)
         default: EmptyView()
         }
         if st.usesClipping {
             SliderRow(title: "Highlights", value: clip, range: 0...2, defaultValue: 0, format: "%.3f",
-                      help: "Share of the pixels clipped to white (the white point). Auto STF keeps the background on target; the other methods keep their strength relative to the noise, so the picture brightens moderately.", note: "%", curve: 3)
+                      help: "Share of the pixels clipped to white (the white point). Auto STF keeps the background on target; the other methods keep their strength relative to the noise, so the picture brightens moderately.", note: "%", labelWidth: lw, curve: 3)
         }
-        SliderRow(title: "Gamma", value: s.gamma, range: 0.3...3, defaultValue: 1, logarithmic: true)
+        SliderRow(title: "Gamma", value: s.gamma, range: 0.3...3, defaultValue: 1, logarithmic: true, labelWidth: lw)
         if let note = resolvedStretchNote {
             Text(note).font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)

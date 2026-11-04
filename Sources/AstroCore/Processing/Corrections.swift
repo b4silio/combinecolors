@@ -130,9 +130,25 @@ public final class CorrectionMap {
         return m
     }
 
+    /// The map after a fine rotation of the image by `degrees` (resampled; what turns out of the
+    /// frame is lost, what comes in is unpainted).
+    public func rotated(byDegrees degrees: Double) -> CorrectionMap {
+        guard degrees != 0 else { return self }
+        let m = CorrectionMap(imageWidth: imageWidth, imageHeight: imageHeight, plane: plane.rotated(byDegrees: degrees))
+        m.version = version + 1
+        return m
+    }
+
+    /// The map of an unoriented image (a sidecar) oriented like the channels.
+    public func oriented(_ o: Orientation) -> CorrectionMap {
+        var m = o.flipped ? applying(.flipHorizontal) : self
+        for _ in 0..<o.rotation { m = m.applying(.rotateClockwise) }
+        return m.rotated(byDegrees: o.angle)
+    }
+
     /// The map of the unoriented image (what the sidecar stores): the orientation undone.
     public func unoriented(_ o: Orientation) -> CorrectionMap {
-        var m = self
+        var m = rotated(byDegrees: -o.angle)
         for _ in 0..<((4 - o.rotation) % 4) { m = m.applying(.rotateClockwise) }
         if o.flipped { m = m.applying(.flipHorizontal) }
         return m

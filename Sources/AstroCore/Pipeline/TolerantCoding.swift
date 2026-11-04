@@ -209,6 +209,7 @@ extension ProjectDocument {
         presets = c.value("presets", d.presets)
         rotation = ((c.value("rotation", d.rotation) % 4) + 4) % 4
         flipped = c.value("flipped", d.flipped)
+        angle = c.value("angle", d.angle)
         dust = c.value("dust", d.dust)
         gradient = c.value("gradient", d.gradient)
         corrections = c.value("corrections", d.corrections)
