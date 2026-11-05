@@ -208,9 +208,12 @@ struct ControlsStripView: View {
         SliderRow(title: "Dehaze", value: d.dehaze, range: -1...1, defaultValue: 0, help: "Subtracts the large-scale haze component (radius ≈ 25 % of the width); negative adds haze.", note: "25%", labelWidth: lw)
         SliderRow(title: "Low freq.", value: d.lowFrequency, range: -0.5...2, defaultValue: 0, help: "Local contrast of the largest structures (radius ≈ 50 % of the width): separates big nebula regions from the sky without touching fine detail.", note: "50%", labelWidth: lw)
         Divider().padding(.vertical, 8)
-        SliderRow(title: "Sharpen", value: d.sharpen, range: 0...2, defaultValue: 0, help: "Unsharp mask on the luminance (stars excluded from the blur). The radius is in full-resolution pixels, so judge it at 1:1 with HQ on; a fitted preview shows little of it.", labelWidth: lw)
-        SliderRow(title: "Radius", value: d.sharpenRadius, range: 0.5...5, defaultValue: 1.5, format: "%.1f", help: "Sharpening radius in full-resolution pixels.", note: "px", labelWidth: lw)
-        SliderRow(title: "Masking", value: d.sharpenMasking, range: 0...1, defaultValue: 0, help: "Protects flat, noisy areas: only detail above this fraction of the noise level is sharpened (like Camera Raw's Masking).", labelWidth: lw)
+        Picker("", selection: d.sharpenMethod) { ForEach(SharpenMethod.allCases) { Text($0.displayName).tag($0) } }
+            .pickerStyle(.segmented).labelsHidden().controlSize(.mini)
+            .help("Deconvolution: Richardson–Lucy against a Gaussian blur of the radius — edges get steeper and small stars tighter, as if the blur were undone.\nUnsharp mask: adds the difference to a blurred copy — boosts fine contrast (and noise) rather than undoing a blur.\nBoth are held within the local range of the picture, so no dark rings form around stars.")
+        SliderRow(title: "Sharpen", value: d.sharpen, range: 0...2, defaultValue: 0, help: model.settings.detail.sharpenMethod == .deconvolution ? "Deconvolution strength (0.1 = one Richardson–Lucy iteration, 2 = twenty). Works in full-resolution pixels: judge it at 1:1 with HQ on; run it after Denoise (it is) since it also sharpens grain." : "Unsharp-mask amount on the luminance. Works in full-resolution pixels: judge it at 1:1 with HQ on.", labelWidth: lw)
+        SliderRow(title: "Radius", value: d.sharpenRadius, range: 0.5...5, defaultValue: 1.5, format: "%.1f", help: "Size of the blur to undo (Gaussian σ) in full-resolution pixels: about the star FWHM / 2.35.", note: "px", labelWidth: lw)
+        SliderRow(title: "Masking", value: d.sharpenMasking, range: 0...1, defaultValue: 0, help: "Protects flat, noisy areas: only detail above this fraction of the noise level is sharpened (like Camera Raw's Masking). Deconvolution always damps a little.", labelWidth: lw)
     }
 
     // MARK: Stretch

@@ -292,14 +292,26 @@ public struct DetailSettings: Codable, Equatable, Hashable {
     public var dehaze: Float = 0
     /// −0.5…2: local contrast of the largest structures (radius ≈ 50 % of the width).
     public var lowFrequency: Float = 0
-    /// 0…2: unsharp-mask amount on the luminance.
+    /// 0…2: sharpening amount on the luminance.
     public var sharpen: Float = 0
-    /// Unsharp-mask radius (Gaussian σ) in full-resolution pixels.
+    /// Blur undone by the sharpening (Gaussian σ) in full-resolution pixels.
     public var sharpenRadius: Float = 1.5
+    /// How the sharpening is done.
+    public var sharpenMethod: SharpenMethod = .deconvolution
     /// 0…1: protects low-contrast (noise) areas from the sharpening, like Camera Raw's Masking.
     public var sharpenMasking: Float = 0
     public init() {}
     public var isNeutral: Bool { micro == 0 && texture == 0 && clarity == 0 && dehaze == 0 && lowFrequency == 0 && sharpen == 0 }
+}
+
+public enum SharpenMethod: String, Codable, CaseIterable, Identifiable {
+    /// Richardson–Lucy deconvolution of a Gaussian blur of the given radius: steepens edges and
+    /// pulls in small stars and detail, like undoing seeing / optics blur.
+    case deconvolution
+    /// Unsharp mask: adds the difference to a blurred copy (a high-frequency boost).
+    case unsharpMask
+    public var id: String { rawValue }
+    public var displayName: String { self == .deconvolution ? "Deconvolution" : "Unsharp mask" }
 }
 
 public enum DenoiseMethod: String, Codable, CaseIterable, Identifiable {

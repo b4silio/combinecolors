@@ -113,9 +113,13 @@ export at full resolution.
   width), texture (0.6 %), clarity (6 %), dehaze (25 %, haze subtraction) and
   low frequency (50 %), as in Camera Raw with two extra scales for large frames; the blurs are
   taken from a star-clipped luminance so stars get no dark halos, and radii
-  are relative to the image so preview and export agree. Sharpening is an
-  unsharp mask with amount, radius (full-resolution pixels, so judge it at
-  1:1) and a Camera-Raw-like masking slider that spares the noisy sky.
+  are relative to the image so preview and export agree. Sharpening is a
+  **Richardson–Lucy deconvolution** of a Gaussian blur of the given radius
+  (default; up to 20 iterations, damped below about a noise σ) or an unsharp
+  mask, with amount, radius (full-resolution pixels, so judge it at 1:1) and a
+  Camera-Raw-like masking slider that spares the noisy sky; the result is held
+  within the local range of the picture (only real peaks may rise), so no dark
+  or bright rings form around stars.
   RGB star blending (screen / lighten / add with a luminance mask,
   linear or already-stretched star images detected automatically).
 * **Copy preview** (⇧⌘C or the clipboard button next to the zoom controls): the

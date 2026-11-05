@@ -5,6 +5,10 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 (`scripts/bump.sh`). The version lives in `VERSION` and is stamped into the app at build time;
 `scripts/release.sh` tags it and publishes the DMG as a GitHub release.
 
+## [1.19.1] – 2026-11-05
+
+- Fix: Sharpen was a high-frequency boost (it brightened bright areas and fine texture). It now deconvolves (Richardson–Lucy against a Gaussian of the radius, damped on noise) by default, with a corrected unsharp mask as the other choice; both are kept from making rings around stars
+
 ## [1.19.0] – 2026-11-05
 
 - Bright spots size themselves conservatively: a Max radius (default 1 % of the long side; slider in the dust editor, right-drag on the preview, shown as a dotted circle at the pointer) caps the automatic fit, which also stops at a couple of half-widths of the glow

@@ -310,32 +310,101 @@ public enum PostProcess {
         return out
     }
 
-    /// Unsharp mask: `t += amount × (t − blur)` with the blur taken from the star-capped image and
-    /// darkening halved, like the other scales. `sigma` is in pixels of `t`. `masking` (0…1)
-    /// fades the mask out where the high-pass is below `masking × 4σ` of the high-pass noise
-    /// (median absolute deviation), so flat noisy sky is left alone and edges are sharpened.
-    static func sharpen(_ t: UnsafeMutablePointer<Float>, count n: Int, source: PlanarImage, sigma: Float, amount: Float, masking: Float = 0, cap: Float? = nil) {
-        let blur = gaussianBlur(starCapped(source, cap: cap), sigma: sigma)
-        let bp = blur.pointer
-        var threshold: Float = 0
-        if masking > 0 {
-            let step = max(1, n / 200_000)
-            var sample = stride(from: 0, to: n, by: step).map { abs(t[$0] - bp[$0]) }
-            sample.sort()
-            let noise = Statistics.percentile(sorted: sample, q: 0.5) / 0.6745
-            threshold = masking * 4 * noise
-        }
-        for i in 0..<n {
-            let l = t[i]
-            let d = l - bp[i]
-            var delta = amount * d
-            if threshold > 0 {
-                // Smooth ramp from 0 at half the threshold to 1 at the threshold.
-                let w = min(max((abs(d) - 0.5 * threshold) / (0.5 * threshold), 0), 1)
-                delta *= w * w * (3 - 2 * w)
+    /// Noise of a luminance: median absolute deviation of its high-pass (`y − blur`), as a σ.
+    static func highPassNoise(_ y: UnsafeMutablePointer<Float>, _ blur: UnsafeMutablePointer<Float>, count n: Int) -> Float {
+        let step = max(1, n / 200_000)
+        var sample = stride(from: 0, to: n, by: step).map { abs(y[$0] - blur[$0]) }
+        sample.sort()
+        return Statistics.percentile(sorted: sample, q: 0.5) / 0.6745
+    }
+
+    /// Weight of the sharpening at a high-pass value `d` for a noise-relative `threshold`: a smooth
+    /// ramp from 0 at half the threshold to 1 at the threshold (1 everywhere without masking).
+    @inline(__always) static func maskWeight(_ d: Float, threshold: Float) -> Float {
+        guard threshold > 0 else { return 1 }
+        let w = min(max((abs(d) - 0.5 * threshold) / (0.5 * threshold), 0), 1)
+        return w * w * (3 - 2 * w)
+    }
+
+    /// Local minimum and maximum of `p` over a square of side `2 r + 1` (overshoot limits).
+    static func localRange(_ p: PlanarImage, radius r: Int) -> (min: PlanarImage, max: PlanarImage) {
+        let side = vImagePixelCount(2 * max(r, 1) + 1)
+        let lo = PlanarImage(width: p.width, height: p.height), hi = PlanarImage(width: p.width, height: p.height)
+        var src = vImage_Buffer(data: p.pointer, height: vImagePixelCount(p.height), width: vImagePixelCount(p.width), rowBytes: p.width * 4)
+        var dl = vImage_Buffer(data: lo.pointer, height: vImagePixelCount(p.height), width: vImagePixelCount(p.width), rowBytes: p.width * 4)
+        var dh = vImage_Buffer(data: hi.pointer, height: vImagePixelCount(p.height), width: vImagePixelCount(p.width), rowBytes: p.width * 4)
+        vImageMin_PlanarF(&src, &dl, nil, 0, 0, side, side, vImage_Flags(kvImageEdgeExtend))
+        vImageMax_PlanarF(&src, &dh, nil, 0, 0, side, side, vImage_Flags(kvImageEdgeExtend))
+        return (lo, hi)
+    }
+
+    /// Sharpens the luminance `t` (in place; `source` is a copy of it) by undoing a Gaussian blur of
+    /// σ = `sigma` pixels of `t`.
+    ///
+    /// * Deconvolution: Richardson–Lucy, `est ← est · G ⊛ (y / G ⊛ est)`, ⌈10 × amount⌉ iterations
+    ///   (the last one blended so the amount is continuous). The update is damped where the
+    ///   residual `y − G ⊛ est` is within about a noise σ (more with `masking`; Starck-style), so
+    ///   flat noisy sky is not "deconvolved" into grain.
+    /// * Unsharp mask: `t += amount × (t − G ⊛ t)`, masked the same way.
+    ///
+    /// The result stays within the local range of the input (over about 1.5 σ) — no dark rings
+    /// around stars, no bright fringes — except that deconvolution may raise the local maxima
+    /// themselves (tightening stars is what it is for). Pixels at zero (padding) stay zero.
+    static func sharpen(_ t: UnsafeMutablePointer<Float>, count n: Int, source: PlanarImage, sigma: Float, amount: Float, masking: Float = 0,
+                        method: SharpenMethod = .deconvolution) {
+        let y = source.pointer
+        let blurred = gaussianBlur(source, sigma: sigma)
+        // Deconvolution always damps a little (residuals within about one noise σ are noise, and
+        // undoing them only breeds grain); Masking raises that, as it does for the unsharp mask.
+        let floor: Float = method == .deconvolution ? 1.2 : 0
+        let k = max(masking * 4, floor)
+        let noise = highPassNoise(y, blurred.pointer, count: n)
+        let threshold = k * noise
+        let out = PlanarImage(width: source.width, height: source.height)
+        let o = out.pointer
+        switch method {
+        case .unsharpMask:
+            let bp = blurred.pointer
+            for i in 0..<n {
+                let d = y[i] - bp[i]
+                o[i] = y[i] + amount * d * maskWeight(d, threshold: threshold)
             }
-            if delta < 0 { delta *= 0.5 }
-            t[i] = min(max(l + delta, 0), 1)
+        case .deconvolution:
+            let iterations = max(1, Int((amount * 10).rounded(.up)))
+            let est = source.copy()
+            let e = est.pointer
+            let ratio = PlanarImage(width: source.width, height: source.height)
+            let rp = ratio.pointer
+            for k in 0..<iterations {
+                let conv = k == 0 ? blurred : gaussianBlur(est, sigma: sigma)
+                let cp = conv.pointer
+                for i in 0..<n {
+                    let c = cp[i]
+                    guard c > 1e-6, y[i] > 0 else { rp[i] = 1; continue }
+                    let q = y[i] / c
+                    rp[i] = 1 + (q - 1) * maskWeight(y[i] - c, threshold: threshold)
+                }
+                let corr = gaussianBlur(ratio, sigma: sigma)
+                let gp = corr.pointer
+                for i in 0..<n { e[i] = max(e[i] * min(max(gp[i], 0.2), 5), 0) }
+            }
+            // The last iteration counts in part: amount 0.25 = 2.5 iterations' worth.
+            let f = amount * 10 / Float(iterations)
+            for i in 0..<n { o[i] = y[i] + (e[i] - y[i]) * f }
+        }
+        let (lo, hi) = localRange(source, radius: max(1, Int((1.5 * sigma).rounded(.up))))
+        let lp = lo.pointer, hp = hi.pointer
+        // Deconvolution may raise a peak above its surroundings (tightening stars is what it is
+        // for), but nothing else rises above the local maximum, so no bright ring forms around a
+        // star either; the unsharp mask stays within the local range everywhere.
+        let deconv = method == .deconvolution
+        let minContrast = max(4 * noise, 0.01)
+        for i in 0..<n {
+            guard y[i] != 0 else { t[i] = 0; continue }
+            // A peak: the upper part of a neighbourhood with real contrast (not flat sky).
+            let contrast = hp[i] - lp[i]
+            let peak = deconv && contrast > minContrast && y[i] - lp[i] >= 0.6 * contrast
+            t[i] = min(max(o[i], lp[i], 0), peak ? 1 : min(hp[i], 1))
         }
     }
 
@@ -405,7 +474,7 @@ public enum PostProcess {
             // Below ~0.25 px the blur is the identity and the mask vanishes (a down-sampled preview
             // of a 1 px sharpening legitimately shows nothing).
             let sigma = d.sharpenRadius * scale
-            if sigma >= 0.25 { sharpen(t, count: n, source: target, sigma: sigma, amount: d.sharpen, masking: d.sharpenMasking, cap: ov.map { starCap($0.luma) }) }
+            if sigma >= 0.25 { sharpen(t, count: n, source: target.copy(), sigma: sigma, amount: d.sharpen, masking: d.sharpenMasking, method: d.sharpenMethod) }
         }
         let r = img.r.pointer, g = img.g.pointer, b = img.b.pointer
         for i in 0..<n {
