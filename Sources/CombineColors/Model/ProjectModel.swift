@@ -1528,12 +1528,25 @@ extension ProjectModel {
         scheduleDustPreview()
     }
 
+    /// Largest radius given to new bright spots by the fit (image pixels), as the editor shows it.
+    var dustBrightMaxRadius: Double {
+        get {
+            let d = dustDraft ?? dust
+            guard let s = imageSize else { return d.brightMaxRadius }
+            return d.resolvedBrightMaxRadius(width: Int(s.width), height: Int(s.height))
+        }
+        set { dustDraft?.brightMaxRadius = max(4, newValue) }
+    }
+
     /// Adds a spot at an image point, fitted to the shadow found there (plain spot of the default
     /// radius when nothing is found).
     func addDustSpot(at p: CGPoint) {
         guard let k = dustEditing, var d = dustDraft, let orig = originalImages[k] ?? baseSources[k]?.image else { return }
         var spot = d.newSpot(x: p.x, y: p.y, radius: defaultDustRadius)
-        if let f = DustRemoval.fit(image: orig, x: p.x, y: p.y, radius: defaultDustRadius, smoothness: d.smoothness, polarity: d.polarity) { spot.x = f.x; spot.y = f.y; spot.radius = f.radius }
+        let cap = d.polarity == .bright ? d.resolvedBrightMaxRadius(width: orig.width, height: orig.height) : 0
+        if d.polarity == .bright { spot.radius = min(spot.radius, cap) }
+        if let f = DustRemoval.fit(image: orig, x: p.x, y: p.y, radius: min(defaultDustRadius, cap > 0 ? cap / 2 : defaultDustRadius), smoothness: d.smoothness,
+                                   polarity: d.polarity, maxRadius: cap) { spot.x = f.x; spot.y = f.y; spot.radius = f.radius }
         d.spots[k, default: []].append(spot)
         dustDraft = d
         selectedDustSpot = spot.id
@@ -1556,7 +1569,8 @@ extension ProjectModel {
         guard let k = dustEditing, let id = selectedDustSpot, var d = dustDraft, let orig = originalImages[k] ?? baseSources[k]?.image,
               let i = d.spots[k]?.firstIndex(where: { $0.id == id }) else { return }
         var s = d.spots[k]![i]
-        guard let f = DustRemoval.fit(image: orig, x: s.x, y: s.y, radius: s.radius / 2, smoothness: s.smoothness, polarity: s.polarity) else {
+        let cap = s.polarity == .bright ? d.resolvedBrightMaxRadius(width: orig.width, height: orig.height) : 0
+        guard let f = DustRemoval.fit(image: orig, x: s.x, y: s.y, radius: s.radius / 2, smoothness: s.smoothness, polarity: s.polarity, maxRadius: cap) else {
             statusText = s.polarity == .bright ? "No glow found around the spot." : "No shadow found around the spot."; return
         }
         s.x = f.x; s.y = f.y; s.radius = f.radius

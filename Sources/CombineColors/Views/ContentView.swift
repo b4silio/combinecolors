@@ -248,6 +248,15 @@ struct ContentView: View {
                           help: "Fraction of the radius over which the correction fades out beyond the shadow", labelWidth: 46)
                     .frame(width: 170)
             }
+            if polarityBinding.wrappedValue == .bright {
+                let maxR = Binding<Float>(get: { Float(model.dustBrightMaxRadius) }, set: { model.dustBrightMaxRadius = Double($0) })
+                let long = Float(model.imageSize.map { max($0.width, $0.height) } ?? 4000)
+                HStack(spacing: 6) {
+                    SliderRow(title: "Max radius", value: maxR, range: 4...max(long * 0.1, 40), defaultValue: max(24, long * 0.01), format: "%.0f", logarithmic: true,
+                              help: "Largest radius a click gives a new bright spot (the fit stays inside it; halos are local). Right-drag on the preview changes it too; the dotted orange circle at the pointer shows it.", note: "px", labelWidth: 78)
+                        .frame(width: 250)
+                }
+            }
             HStack(spacing: 6) {
                 Text("\(spots.count) spot\(spots.count == 1 ? "" : "s")").font(.caption).foregroundStyle(.secondary)
                 Button("Fit") { model.refitSelectedDustSpot() }.disabled(selected == nil)

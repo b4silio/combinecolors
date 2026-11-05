@@ -5,6 +5,10 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 (`scripts/bump.sh`). The version lives in `VERSION` and is stamped into the app at build time;
 `scripts/release.sh` tags it and publishes the DMG as a GitHub release.
 
+## [1.19.0] – 2026-11-05
+
+- Bright spots size themselves conservatively: a Max radius (default 1 % of the long side; slider in the dust editor, right-drag on the preview, shown as a dotted circle at the pointer) caps the automatic fit, which also stops at a couple of half-widths of the glow
+
 ## [1.18.0] – 2026-11-05
 
 - Bright spots in the dust editor (Dark spots / Bright spots switch): removes star halos left behind by star removal — fitted like a dust shadow, the glow above the surrounding sky subtracted; drawn as orange dotted circles; CLI --dust-polarity

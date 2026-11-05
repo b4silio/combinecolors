@@ -39,6 +39,11 @@ final class ZoomPanNSView: NSView {
     private var cropLimits: CGRect { cropEditing && cropBounds.width > 0 ? cropBounds : CGRect(origin: .zero, size: imageSize) }
     var dustEditing = false { didSet { updateDustOverlay(); updateCursor() } }
     var dustSpots: [DustSpot] = [] { didSet { updateDustOverlay() } }
+    /// New spots are bright ones: the pointer shows the largest radius their fit may give
+    /// (right-drag changes it).
+    var dustBrightMode = false { didSet { if dustBrightMode != oldValue { updateBrushCursor() } } }
+    var dustMaxRadius: CGFloat = 80 { didSet { if dustMaxRadius != oldValue { updateBrushCursor() } } }
+    var onDustMaxRadiusChange: ((CGFloat) -> Void)?
     var selectedDustSpot: UUID? = nil { didSet { updateDustOverlay() } }
     var gradientEditing = false { didSet { updateGradientOverlay(); updateCursor() } }
     /// Guide drawn for the edited channel (nil: nothing drawn yet).
@@ -134,6 +139,8 @@ final class ZoomPanNSView: NSView {
         /// Corrections editor: painting (last image point), or resizing the brush with the right button.
         case paint(CGPoint)
         case brushResize(start: CGPoint, radius: CGFloat)
+        /// Dust editor, bright spots: the largest radius of new spots, with the right button.
+        case maxRadiusResize(start: CGPoint, radius: CGFloat)
         /// Axis 0 = a (horizontal), 1 = b (vertical).
         case regionResize(UUID, Int)
     }
@@ -316,7 +323,19 @@ final class ZoomPanNSView: NSView {
         correctionLayer.isHidden = false
     }
 
+    private var dustBrightCursor: Bool { dustEditing && dustBrightMode && !spaceHeld }
+
     private func updateBrushCursor() {
+        if dustBrightCursor, let p = brushPoint {
+            // The largest bright spot a click may give, around the pointer (orange, dotted).
+            let r = max(dustMaxRadius * zoom, 2)
+            brushLayer.path = CGPath(ellipseIn: toAppKit(CGRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r)), transform: nil)
+            brushLayer.strokeColor = NSColor.systemOrange.withAlphaComponent(0.6).cgColor
+            brushLayer.lineDashPattern = [1.5, 4]
+            brushLayer.isHidden = false
+            return
+        }
+        brushLayer.lineDashPattern = nil
         guard correctionEditing, !spaceHeld, let p = brushPoint else { brushLayer.isHidden = true; return }
         let r = max(brushRadius * zoom, 2)
         brushLayer.path = CGPath(ellipseIn: toAppKit(CGRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r)), transform: nil)
@@ -324,14 +343,23 @@ final class ZoomPanNSView: NSView {
         brushLayer.isHidden = false
     }
 
-    private func showRadiusLabel(at p: CGPoint) {
-        radiusLabel.string = String(format: "r = %.0f px", brushRadius)
-        let size = CGSize(width: 90, height: 18)
-        radiusLabel.frame = toAppKit(CGRect(x: p.x - size.width / 2, y: p.y - brushRadius * zoom - 24, width: size.width, height: size.height))
+    private func showRadiusLabel(at p: CGPoint, maxRadius: Bool = false) {
+        let r = maxRadius ? dustMaxRadius : brushRadius
+        radiusLabel.string = String(format: maxRadius ? "max r = %.0f px" : "r = %.0f px", r)
+        let size = CGSize(width: maxRadius ? 110 : 90, height: 18)
+        radiusLabel.frame = toAppKit(CGRect(x: p.x - size.width / 2, y: p.y - r * zoom - 24, width: size.width, height: size.height))
         radiusLabel.isHidden = false
     }
 
     override func rightMouseDown(with event: NSEvent) {
+        if dustBrightCursor {
+            let p = topLeftPoint(event)
+            brushPoint = p
+            drag = .maxRadiusResize(start: p, radius: dustMaxRadius)
+            updateBrushCursor()
+            showRadiusLabel(at: p, maxRadius: true)
+            return
+        }
         guard correctionEditing, !spaceHeld else { super.rightMouseDown(with: event); return }
         let p = topLeftPoint(event)
         brushPoint = p
@@ -341,6 +369,17 @@ final class ZoomPanNSView: NSView {
     }
 
     override func rightMouseDragged(with event: NSEvent) {
+        if case .maxRadiusResize(let start, let r0) = drag {
+            let p = topLeftPoint(event)
+            let long = max(imageSize.width, imageSize.height)
+            let r = min(max(r0 * exp((p.x - start.x) / 120), 4), long * 0.1)
+            dustMaxRadius = r
+            brushPoint = start
+            onDustMaxRadiusChange?(r)
+            updateBrushCursor()
+            showRadiusLabel(at: start, maxRadius: true)
+            return
+        }
         guard case .brushResize(let start, let r0) = drag else { super.rightMouseDragged(with: event); return }
         // Horizontal movement scales the radius (exponentially: the same travel doubles or halves it).
         let p = topLeftPoint(event)
@@ -355,6 +394,7 @@ final class ZoomPanNSView: NSView {
 
     override func rightMouseUp(with event: NSEvent) {
         if case .brushResize = drag { drag = .none; radiusLabel.isHidden = true; return }
+        if case .maxRadiusResize = drag { drag = .none; radiusLabel.isHidden = true; return }
         super.rightMouseUp(with: event)
     }
 
@@ -888,7 +928,7 @@ final class ZoomPanNSView: NSView {
             onPaint?(last, ip, event.modifierFlags.contains(.option))
             drag = .paint(ip)
             updateBrushCursor()
-        case .brushResize: break
+        case .brushResize, .maxRadiusResize: break
         case .dustPan, .dustMove, .dustResize: dustMouseDragged(p, ip)
         case .gradientPan, .gradientCreate, .gradientHandle, .gradientMove, .regionMove, .regionResize, .sampleMove: gradientMouseDragged(p, ip)
         case .pan(let last):
@@ -952,7 +992,7 @@ final class ZoomPanNSView: NSView {
         let p = topLeftPoint(event)
         let ip = imagePoint(p)
         onHover?(ip)
-        if correctionEditing { brushPoint = p; updateBrushCursor() }
+        if correctionEditing || dustBrightCursor { brushPoint = p; updateBrushCursor() }
     }
 
     override func mouseExited(with event: NSEvent) { onHover?(nil); brushPoint = nil; brushLayer.isHidden = true }
@@ -999,6 +1039,7 @@ struct PreviewView: NSViewRepresentable {
         v.onStrokeBegin = { Task { @MainActor in model.beginCorrectionStroke() } }
         v.onPaint = { a, b, inv in Task { @MainActor in model.paintCorrection(from: a, to: b, invert: inv) } }
         v.onBrushRadiusChange = { r in Task { @MainActor in model.correctionBrushRadius = Double(r) } }
+        v.onDustMaxRadiusChange = { r in Task { @MainActor in model.dustBrightMaxRadius = Double(r) } }
         v.onDoubleClick = { [weak v] in
             guard let v else { return }
             // Fit first; from the fitted view, 1:1.
@@ -1024,6 +1065,10 @@ struct PreviewView: NSViewRepresentable {
         let spots = model.dustEditing.map { model.dustSpots(for: $0) } ?? []
         if v.dustSpots != spots { v.dustSpots = spots }
         if v.selectedDustSpot != model.selectedDustSpot { v.selectedDustSpot = model.selectedDustSpot }
+        let brightMode = model.dustEditing != nil && model.dustDraft?.polarity == .bright
+        if v.dustBrightMode != brightMode { v.dustBrightMode = brightMode }
+        let maxR = CGFloat(model.dustBrightMaxRadius)
+        if abs(v.dustMaxRadius - maxR) > 0.01 { v.dustMaxRadius = maxR }
         let gradientEditing = model.gradientEditing != nil
         if v.gradientEditing != gradientEditing { v.gradientEditing = gradientEditing }
         let gesture = model.editedGradientSpec?.gesture

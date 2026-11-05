@@ -90,6 +90,13 @@ public struct DustSettings: Codable, Equatable {
     public var feather: Double = 0.2
     /// Polarity given to new spots.
     public var polarity: SpotPolarity = .dark
+    /// Largest radius the fit may give a new bright spot, in pixels (0 = 1 % of the image's long side).
+    public var brightMaxRadius: Double = 0
+
+    /// The cap on bright-spot radii for an image of the given size.
+    public func resolvedBrightMaxRadius(width: Int, height: Int) -> Double {
+        brightMaxRadius > 0 ? brightMaxRadius : max(24, Double(max(width, height)) * 0.01)
+    }
 
     public init() {}
 
@@ -337,13 +344,17 @@ public enum DustRemoval {
     /// Shadows of stacked data can be very shallow (a few ‰ of the sky level: the Soul Core OIII
     /// motes are 0.5 % deep) yet obvious after stretching, so the detection threshold is set by the
     /// bin-to-bin noise of the profile rather than by a fixed depth.
-    public static func fit(image: PlanarImage, x: Double, y: Double, radius r0: Double, smoothness: Double = 3, polarity: SpotPolarity = .dark) -> DustSpot? {
+    /// `maxRadius` (0 = none) caps the radius proposed (bright spots: a halo is a local thing).
+    public static func fit(image: PlanarImage, x: Double, y: Double, radius r0: Double, smoothness: Double = 3, polarity: SpotPolarity = .dark,
+                           maxRadius: Double = 0) -> DustSpot? {
         let ss = starSigma(polarity)
-        var cx = x, cy = y, r = max(r0, 12)
+        let cap = maxRadius > 0 ? max(maxRadius, 4) : .infinity
+        var cx = x, cy = y, r = min(max(r0, 12), cap)
         var found = false
         // The search never grows past a fraction of the image (a window of the whole frame is slow
-        // and only finds vignetting), nor past ten times the starting radius.
-        let maxSearch = min(Double(min(image.width, image.height)) / 6, 900, r * 10)
+        // and only finds vignetting), nor past ten times the starting radius — nor, with a cap, past
+        // a few times the largest radius allowed (it needs sky around the spot, no more).
+        let maxSearch = min(Double(min(image.width, image.height)) / 6, 900, r * 10, cap * 2.5)
         for iteration in 0..<4 {
             // Extent: the radial profile out to a few times the current radius; the shadow ends where
             // the profile comes back to its outer level.
@@ -372,14 +383,11 @@ public enum DustRemoval {
                 if depth > 0.0015 && best.significance > 6 { hit = (p, outer, depth); break }
                 if search >= maxSearch { break }
             }
-            // A halo fades out slowly (a long, faint tail): its edge is taken much further down, and
-            // the background annulus starts further out, or the tail would count as sky.
-            let edgeFraction: Float = polarity == .bright ? 0.08 : 0.15
-            guard let (p, outer, depth) = hit, let edge = p.lastIndex(where: { $0 < outer - edgeFraction * depth }), edge >= 3 else { break }
-            var newR = min(Double(edge + 1) * (polarity == .bright ? 1.3 : 1.25) + 2, maxSearch * 0.8)
-            // A glow next to a brightness step (mosaic edge, nebula) has a tail that never ends: at most
-            // a few half-widths.
-            if polarity == .bright, let half = p.lastIndex(where: { $0 < outer - 0.5 * depth }) { newR = min(newR, Double(half + 1) * 3.5 + 2) }
+            guard let (p, outer, depth) = hit, let edge = p.lastIndex(where: { $0 < outer - 0.15 * depth }), edge >= 3 else { break }
+            var newR = min(Double(edge + 1) * 1.25 + 2, maxSearch * 0.8, cap)
+            // A glow next to a brightness step (mosaic edge, nebula) has a tail that never ends:
+            // conservatively at most a couple of half-widths.
+            if polarity == .bright, let half = p.lastIndex(where: { $0 < outer - 0.5 * depth }) { newR = min(newR, Double(half + 1) * 2.2 + 2) }
             // Centre: centroid of the pixels darker than half the depth, measured with the background
             // fitted close around the new radius (a far annulus extrapolates nebulosity badly). The
             // binary weight is far less sensitive to gradients than the darkening itself.
@@ -700,6 +708,6 @@ extension DustSettings {
         let d = DustSettings()
         spots = c.value("spots", d.spots); model = c.value("model", d.model)
         smoothness = c.value("smoothness", d.smoothness); feather = c.value("feather", d.feather)
-        polarity = c.value("polarity", d.polarity)
+        polarity = c.value("polarity", d.polarity); brightMaxRadius = c.value("brightMaxRadius", d.brightMaxRadius)
     }
 }

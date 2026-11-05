@@ -134,7 +134,9 @@ export at full resolution.
   spots* switch) do the same for star halos that star removal left behind: the
   glow is found like a shadow (on the reciprocal of the ratio to the sky) and
   the light above the surrounding sky is subtracted rather than divided out;
-  they are drawn as orange dotted circles. Each spot has its own kind, model, smoothness
+  they are drawn as orange dotted circles. Their automatic size stays local: a
+  *Max radius* (default 1 % of the long side; slider, or right-drag on the preview,
+  shown as a dotted circle at the pointer) caps what a click gives. Each spot has its own kind, model, smoothness
   and feather (the controls edit the selected spot, or the values given to new
   spots). Two models: *Local flat* (default) — the ratio of the pixels to a sky
   plane fitted around the spot (star-masked, sigma-clipped, neighbouring spots

@@ -138,6 +138,14 @@ final class DustRemovalTests: XCTestCase {
             let after = blockError(healed, truth, cx: 450, cy: 350, radius: 40)
             XCTAssertLessThan(after.median, 0.015, "\(model) median"); XCTAssertLessThan(after.max, 0.06, "\(model) max")
         }
+        // The cap keeps a bright fit local.
+        let capped = try XCTUnwrap(DustRemoval.fit(image: img, x: 458, y: 343, radius: 15, polarity: .bright, maxRadius: 30))
+        XCTAssertLessThanOrEqual(capped.radius, 30)
+        XCTAssertEqual(capped.x, 450, accuracy: 3); XCTAssertEqual(capped.y, 350, accuracy: 3)
+        var ds = DustSettings()
+        XCTAssertEqual(ds.resolvedBrightMaxRadius(width: 8000, height: 6000), 80)
+        ds.brightMaxRadius = 50
+        XCTAssertEqual(ds.resolvedBrightMaxRadius(width: 8000, height: 6000), 50)
         // A bright fit on plain sky finds nothing.
         XCTAssertNil(DustRemoval.fit(image: truth, x: 450, y: 350, radius: 20, polarity: .bright))
         // Spots keep their polarity through a document; old spots are dark.
