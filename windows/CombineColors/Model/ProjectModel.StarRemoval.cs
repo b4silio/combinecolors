@@ -86,7 +86,86 @@ public sealed class StarNetSetupModel
         Setup.Remember(inst);
         LicenseText = inst.ReadLicense();
         Set(LicenseAccepted ? Phase.Ready : Phase.NeedsLicense);
+        CheckDirectML();
     }
+
+    // MARK: DirectML (Windows: the graphics card)
+
+    public enum GpuPhase { Unknown, NotNeeded, UpToDate, Offer, Declined, Downloading, Installed, Failed }
+    const string DirectMLDeclinedKey = "directMLDeclined";
+    /// <summary>Whether StarNet2 can use the graphics card through DirectML, and the offer to fetch a recent DirectML.</summary>
+    public GpuPhase Gpu { get; private set; } = GpuPhase.Unknown;
+    public DirectMLStatus? DirectMLStatus { get; private set; }
+    public StarNetDownloadProgress DirectMLDownload { get; private set; }
+    public string? DirectMLFailure { get; private set; }
+    CancellationTokenSource? directMLCancel;
+
+    void SetGpu(GpuPhase p, string? failure = null) { Gpu = p; DirectMLFailure = failure; Changed?.Invoke(); }
+
+    /// <summary>Looks at the DirectML the StarNet2 program would load (reads its ONNX Runtime: off the UI thread).</summary>
+    public void CheckDirectML()
+    {
+        if (Tool is not StarNetTool tool) { SetGpu(GpuPhase.Unknown); return; }
+        Task.Run(() =>
+        {
+            DirectMLStatus? st = null;
+            try { st = AstroCore.DirectML.Check(tool.Executable); } catch { }
+            ui.Post(() =>
+            {
+                if (Tool != tool || Gpu == GpuPhase.Downloading) return;
+                DirectMLStatus = st;
+                SetGpu(st?.State switch
+                {
+                    DirectMLState.Outdated => Setup.Preferences.Get(DirectMLDeclinedKey) == st.Available.ToString() ? GpuPhase.Declined : GpuPhase.Offer,
+                    DirectMLState.UpToDate => Gpu == GpuPhase.Installed ? GpuPhase.Installed : GpuPhase.UpToDate,
+                    _ => GpuPhase.NotNeeded,
+                });
+            });
+        });
+    }
+
+    /// <summary>"Not now": the offer becomes a button in the options (asked again for a newer DirectML).</summary>
+    public void DeclineDirectML()
+    {
+        if (DirectMLStatus is { } st) Setup.Preferences.Set(DirectMLDeclinedKey, st.Available.ToString());
+        SetGpu(GpuPhase.Declined);
+    }
+
+    /// <summary>Downloads DirectML.dll from Microsoft (nuget.org) and puts it next to the StarNet2 program.</summary>
+    public void InstallDirectML()
+    {
+        if (Tool is not StarNetTool tool || Gpu == GpuPhase.Downloading) return;
+        directMLCancel?.Cancel();
+        var cts = new CancellationTokenSource();
+        directMLCancel = cts;
+        DirectMLDownload = new StarNetDownloadProgress(0, DirectMLPackage.Default.EntrySize);
+        SetGpu(GpuPhase.Downloading);
+        var progress = new Progress<StarNetDownloadProgress>(p => { if (Gpu == GpuPhase.Downloading && !cts.IsCancellationRequested) { DirectMLDownload = p; Changed?.Invoke(); } });
+        Task.Run(async () =>
+        {
+            try
+            {
+                await AstroCore.DirectML.InstallAsync(tool.Executable, progress, cts.Token);
+                var st = AstroCore.DirectML.Check(tool.Executable);
+                ui.Post(() =>
+                {
+                    DirectMLStatus = st;
+                    Setup.Preferences.Set(DirectMLDeclinedKey, null);
+                    SetGpu(st.State == DirectMLState.Outdated ? GpuPhase.Failed : GpuPhase.Installed,
+                        st.State == DirectMLState.Outdated ? "DirectML.dll was copied but Windows still reports an older version." : null);
+                });
+            }
+            catch (Exception e) when (cts.IsCancellationRequested || e is OperationCanceledException) { ui.Post(() => { Gpu = GpuPhase.Unknown; CheckDirectML(); }); }
+            catch (Exception e)
+            {
+                var msg = e is StarNetError ? e.Message : $"The DirectML download did not work: {e.Message}";
+                ui.Post(() => SetGpu(GpuPhase.Failed, msg));
+            }
+            finally { ui.Post(() => { if (directMLCancel == cts) directMLCancel = null; }); }
+        });
+    }
+
+    public void CancelDirectML() => directMLCancel?.Cancel();
 
     public void AcceptLicense()
     {

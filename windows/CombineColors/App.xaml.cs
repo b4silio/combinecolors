@@ -16,6 +16,7 @@ public partial class App : Application
         // `--prefs <file>` keeps a test instance's recent sets (with their saved presets and dust spots) apart from the user's.
         string? prefsPath = null, screenshot = null, openEditor = null, editorAction = null, openLayer = null;
         double screenshotDelay = 12;
+        bool hidePanes = false;
         var files = new List<string>();
         for (int i = 0; i < e.Args.Length; i++)
         {
@@ -28,6 +29,8 @@ public partial class App : Application
             if (e.Args[i] == "--screenshot-delay" && i + 1 < e.Args.Length) { double.TryParse(e.Args[++i], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out screenshotDelay); continue; }
             // `--open-layer stars` shows the Stars tab once both tabs are in (screenshots).
             if (e.Args[i] == "--open-layer" && i + 1 < e.Args.Length) { openLayer = e.Args[++i]; continue; }
+            // `--hide-panes` starts with the side panes hidden, as after Tab (screenshots).
+            if (e.Args[i] == "--hide-panes") { hidePanes = true; continue; }
             if (!e.Args[i].StartsWith("-")) files.Add(e.Args[i]);
         }
         Prefs = new Preferences(prefsPath);
@@ -37,7 +40,7 @@ public partial class App : Application
             MessageBox.Show(ex.Exception.Message, "CombineColors", MessageBoxButton.OK, MessageBoxImage.Error);
             ex.Handled = true;
         };
-        var window = new MainWindow(Model);
+        var window = new MainWindow(Model) { PanesHidden = hidePanes };
         MainWindow = window;
         window.Show();
         var existing = files.Where(File.Exists).ToList();

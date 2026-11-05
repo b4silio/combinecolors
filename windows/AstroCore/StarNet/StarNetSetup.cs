@@ -186,7 +186,7 @@ public sealed class StarNetSetup
 
     // MARK: Download
 
-    static readonly Lazy<HttpClient> SharedHttp = new(() =>
+    internal static readonly Lazy<HttpClient> SharedHttp = new(() =>
     {
         var c = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
         c.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("CombineColors", null));

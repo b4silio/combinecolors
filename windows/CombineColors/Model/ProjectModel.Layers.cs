@@ -191,6 +191,7 @@ public sealed partial class ProjectModel
             return;
         }
         bool wasEmpty = inactiveLayer.IsEmpty;
+        unrotatedPlanes.AddRange(built.Unrotated);
         var l = inactiveLayer;
         for (int i = 0; i < built.Base.Count; i++)
         {
@@ -372,7 +373,8 @@ public sealed partial class ProjectModel
     }
 
     /// <summary>A tab turned with the other one: spots, models, maps and channels rebuilt (off the UI thread).</summary>
-    static LayerState Reoriented(LayerState st, OrientationOp op, int w, int h, PixelRect? newCrop)
+    static LayerState Reoriented(LayerState st, OrientationOp op, int w, int h, PixelRect? newCrop,
+                                 List<(PlanarImage Rotated, PlanarImage Unrotated)> pairs, List<(PlanarImage, PlanarImage)> newPairs)
     {
         var o = st.ShallowCopy();
         var dust = st.Dust.Clone();
@@ -383,7 +385,9 @@ public sealed partial class ProjectModel
         o.BaseSources = new(); o.Sources = new(); o.OriginalImages = new(); o.SlotThumbnails = new();
         foreach (var (k, old) in st.BaseSources)
         {
-            var orig = (st.OriginalImages.TryGetValue(k, out var oi) ? oi : old.Image).Applying(op);
+            var before = st.OriginalImages.TryGetValue(k, out var oi) ? oi : old.Image;
+            var orig = before.Applying(op);
+            if (Unrotated(before, pairs) is PlanarImage un) { var pr = (orig, un.Applying(op)); lock (newPairs) newPairs.Add(pr); }
             var healed = Process(orig, k, o.Dust, o.Gradient, o.CorrectionMaps.TryGetValue(k, out var cm) ? (cm, (float)o.Corrections.StrengthFor(k)) : null);
             var b = new ChannelSource(k, healed, old.FileName, old.Path, old.FormatDescription);
             var c = newCrop == null ? b : new ChannelSource(b, newCrop);

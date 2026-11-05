@@ -167,6 +167,7 @@ public sealed class StarRemovalWindow
             }
             row.Children.Add(new TextBlock { Text = $"✔  StarNet2 {info.Version} is ready{(string.IsNullOrEmpty(info.Backend) ? "" : $" ({info.Backend})")}.", Foreground = Brushes.LightGreen, VerticalAlignment = VerticalAlignment.Center });
             content.Children.Add(row);
+            GpuPanel();
         }
         if (items.Count == 0)
         {
@@ -216,6 +217,8 @@ public sealed class StarRemovalWindow
         folderRow.Children.Add(new TextBlock { Text = "Save the new files:  " + (folder ?? "next to the originals"), VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis });
         opts.Children.Add(folderRow);
         opts.Children.Add(Row(Btn("Use a Different StarNet2 Program…", Locate)));
+        if (setup.Gpu == StarNetSetupModel.GpuPhase.Declined)
+            opts.Children.Add(Row(Btn($"Download DirectML {DirectMLPackage.Default.Version} for the Graphics Card…", setup.InstallDirectML)));
         exp.Content = opts;
         content.Children.Add(exp);
         Caption("Each image takes about a minute (longer without a graphics card StarNet2 can use).");
@@ -223,6 +226,57 @@ public sealed class StarRemovalWindow
             () => model.RemoveStars(chosen, new StarRemovalOptions(method, model.Settings.Stretch.Clone()), folder));
         run.IsEnabled = chosen.Count > 0 && model.EditingTool == null && !model.IsLoading;
         Footer(Close(), run);
+    }
+
+    /// <summary>StarNet2 cannot use the graphics card with Windows' old DirectML: offer Microsoft's current one.</summary>
+    void GpuPanel()
+    {
+        var st = setup.DirectMLStatus;
+        string available = DirectMLPackage.Default.Version.ToString();
+        switch (setup.Gpu)
+        {
+            case StarNetSetupModel.GpuPhase.Offer:
+            case StarNetSetupModel.GpuPhase.Failed:
+            {
+                var box = Panel();
+                Add(box, new TextBlock { Text = "⚡  StarNet2 cannot use your graphics card yet", FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 4) });
+                Add(box, Wrap($"It needs Microsoft DirectML {available} or newer, and Windows only has version {st?.Found?.ToString() ?? "(none)"}. Without it StarNet2 runs on the processor, several times slower."));
+                Add(box, Wrap($"CombineColors can download DirectML {available} from Microsoft (about {Mb(DirectMLPackage.Default.EntrySize)}, from nuget.org) and put it in the StarNet2 folder. Nothing else on the computer changes; deleting DirectML.dll from that folder undoes it. Microsoft's DirectML license applies.", gray: true));
+                if (setup.Gpu == StarNetSetupModel.GpuPhase.Failed && setup.DirectMLFailure is string f)
+                    Add(box, new TextBlock { Text = "⚠  " + f, TextWrapping = TextWrapping.Wrap, Foreground = Brushes.Orange, Margin = new Thickness(0, 2, 0, 6) });
+                var dl = Btn(setup.Gpu == StarNetSetupModel.GpuPhase.Failed ? "Try Again" : $"Download DirectML {available}", setup.InstallDirectML);
+                dl.Background = (Brush)Application.Current.Resources["AccentBrush"]; dl.Foreground = Brushes.White;
+                Add(box, Row(dl, Btn("Not Now", setup.DeclineDirectML), Btn("License", () => Open(DirectMLPackage.LicenseUrl))));
+                break;
+            }
+            case StarNetSetupModel.GpuPhase.Downloading:
+            {
+                var box = Panel();
+                var d = setup.DirectMLDownload;
+                Add(box, Wrap($"Downloading DirectML {available} from Microsoft…"));
+                var bar = new ProgressBar { Height = 12, Maximum = 1, Value = d.Fraction, IsIndeterminate = d.Total <= 0, Margin = new Thickness(0, 4, 0, 4) };
+                Add(box, bar);
+                Add(box, Row(Btn("Cancel", setup.CancelDirectML)));
+                break;
+            }
+            case StarNetSetupModel.GpuPhase.Installed:
+                content.Children.Add(new TextBlock { Text = $"✔  DirectML {st?.Found?.ToString() ?? available} is installed next to StarNet2: it can use the graphics card now.", Foreground = Brushes.LightGreen, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) });
+                break;
+        }
+
+        StackPanel Panel()
+        {
+            var inner = new StackPanel();
+            content.Children.Add(new Border { Child = inner, Padding = new Thickness(12, 10, 12, 8), CornerRadius = new CornerRadius(6), BorderThickness = new Thickness(1), BorderBrush = (Brush)Application.Current.Resources["AccentBrush"], Background = new SolidColorBrush(Color.FromArgb(18, 255, 255, 255)), Margin = new Thickness(0, 0, 0, 10) });
+            return inner;
+        }
+        static void Add(StackPanel p, UIElement e) => p.Children.Add(e);
+        static TextBlock Wrap(string t, bool gray = false) => new() { Text = t, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 6), Foreground = gray ? Brushes.Gray : (Brush)Application.Current.Resources["TextBrush"], FontSize = gray ? 12.5 : 13.5 };
+    }
+
+    static void Open(Uri url)
+    {
+        try { Process.Start(new ProcessStartInfo(url.ToString()) { UseShellExecute = true }); } catch { }
     }
 
     // ---- Running -----------------------------------------------------------------------------------

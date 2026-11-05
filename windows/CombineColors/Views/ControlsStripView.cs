@@ -24,7 +24,6 @@ public sealed class ControlsStripView : Border
     readonly StackPanel blocks = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(3, 6, 3, 6) };
     readonly Dictionary<string, ControlBlock> blockById = new();
     readonly HashSet<string> collapsed;
-    readonly HashSet<ChannelKind> expandedChannels = new();
     string structure = "";
     ColorBandComponent bandComponent;
     ToneRange balanceTone;
@@ -48,7 +47,7 @@ public sealed class ControlsStripView : Border
         scroller.PreviewMouseMove += OnDragMove;
         scroller.PreviewMouseLeftButtonUp += (_, _) => { dragStart = null; if (scroller.IsMouseCaptured) scroller.ReleaseMouseCapture(); };
         Child = scroller;
-        Add("channels", "Channels", 250); Add("stretch", "Stretch", 262); Add("normalisation", "Normalisation", 290); Add("luminance", "Luminance", 250);
+        Add("stretch", "Stretch", 262); Add("normalisation", "Normalisation", 290); Add("luminance", "Luminance", 250);
         Add("bands", "Colour bands", 226); Add("colour", "Colour", 250); Add("balance", "Balance", 262); Add("contrast", "Contrast", 250);
         Add("denoise", "Denoise", 330); Add("detail", "Detail", 262); Add("stars", "Combine stars", 250);
         balanceMode = model.Preferences.GetString("balanceMode") == "selective" ? "selective" : "balance";
@@ -65,7 +64,6 @@ public sealed class ControlsStripView : Border
 
     void SetResets()
     {
-        Reset("channels", "the channel weights and gains", s => s.Channels.Values.All(a => a.IsNeutral), s => s.Channels.Clear());
         Reset("stretch", "the stretch", s => s.Stretch.Equals(new StretchSettings()) && s.StretchStage == StretchStage.PreCombine, s => { s.Stretch = new StretchSettings(); s.StretchStage = StretchStage.PreCombine; });
         Reset("normalisation", "the normalisation", s => s.Normalization.Equals(new NormalizationSettings()), s => s.Normalization = new NormalizationSettings());
         Reset("luminance", "the luminance injection", s => s.Luminance.Equals(new LuminanceSettings()), s => s.Luminance = new LuminanceSettings());
@@ -161,7 +159,7 @@ public sealed class ControlsStripView : Border
     void Rebuild()
     {
         structure = Signature();
-        Build("channels", ChannelsSection); Build("stretch", StretchSection); Build("normalisation", NormalizationSection); Build("luminance", LuminanceSection);
+        Build("stretch", StretchSection); Build("normalisation", NormalizationSection); Build("luminance", LuminanceSection);
         Build("bands", ColorBandsSection); Build("colour", ColourSection); Build("balance", BalanceSection); Build("contrast", ContrastSection);
         Build("denoise", DenoiseSection); Build("detail", DetailSection); Build("stars", StarsSection);
         RefreshAll();
@@ -189,51 +187,6 @@ public sealed class ControlsStripView : Border
 
     MenuPicker<T> M<T>(string title, Func<CombineSettings, T> get, Action<CombineSettings, T> set, IReadOnlyList<T> options, Func<T, string> label, string? help = null) where T : notnull
         => new(title, () => get(model.Settings), v => model.UpdateSettings(s => set(s, v)), options, label, help);
-
-    // Channels
-
-    void ChannelsSection(StackPanel p)
-    {
-        var kinds = ChannelKinds.All.Where(k => model.Sources.ContainsKey(k)).ToList();
-        if (kinds.Count == 0) p.Children.Add(Ui.Caption("No channels loaded.", 11));
-        foreach (var k in kinds) p.Children.Add(ChannelAdjustView(k));
-    }
-
-    UIElement ChannelAdjustView(ChannelKind kind)
-    {
-        var panel = new StackPanel { Margin = new Thickness(0, 2, 0, 2) };
-        bool pre = model.Settings.StretchStage == StretchStage.PreCombine;
-        var head = new DockPanel();
-        var enabled = C("", s => s.Adjust(kind).Enabled, (s, v) => { var a = s.Adjust(kind).Clone(); a.Enabled = v; s.SetAdjust(kind, a); });
-        enabled.Margin = new Thickness(0, 0, 2, 0); enabled.VerticalAlignment = VerticalAlignment.Center;
-        head.Children.Add(enabled);
-        head.Children.Add(Ui.Dot(Ui.Tint(kind)));
-        head.Children.Add(new TextBlock { Text = kind.DisplayName(), FontWeight = FontWeights.Bold, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
-        if (!model.Settings.AllChannels(model.AvailableKinds).Contains(kind)) head.Children.Add(new TextBlock { Text = "unused", FontSize = 9, Foreground = Brushes.DarkGray, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0) });
-        var right = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-        if (!model.Settings.Adjust(kind).IsNeutral) right.Children.Add(Ui.SmallButton("Reset", () => model.UpdateSettings(s => s.SetAdjust(kind, new ChannelAdjust()))));
-        bool expanded = expandedChannels.Contains(kind);
-        var toggle = Ui.SmallButton(expanded ? "▴" : "▾", () => { if (!expandedChannels.Remove(kind)) expandedChannels.Add(kind); Rebuild(); });
-        toggle.Margin = new Thickness(0);
-        right.Children.Add(toggle);
-        head.Children.Add(right);
-        panel.Children.Add(head);
-        panel.Children.Add(S("Weight", s => s.Adjust(kind).Weight, (s, v) => Edit(s, kind, a => a.Weight = v), 0, 2, 1, help: pre ? "Multiplier after the stretch." : "Linear multiplier before the combined stretch."));
-        if (expanded)
-        {
-            panel.Children.Add(S("Linear gain", s => s.Adjust(kind).Gain, (s, v) => Edit(s, kind, a => a.Gain = v), 0.1f, 10, 1, log: true, help: "Multiplier on the normalised linear data (before the stretch)."));
-            panel.Children.Add(S("Pedestal σ", s => s.Adjust(kind).OffsetSigma, (s, v) => Edit(s, kind, a => a.OffsetSigma = v), -20, 20, 0, "0.0", help: "Adds a constant in units of the reference background sigma."));
-            if (pre)
-            {
-                panel.Children.Add(S("Target boost", s => s.Adjust(kind).StretchBoost, (s, v) => Edit(s, kind, a => a.StretchBoost = v), -0.15f, 0.4f, 0, help: "Raises/lowers this channel's stretch target background."));
-                panel.Children.Add(S("Black point", s => s.Adjust(kind).BlackPoint, (s, v) => Edit(s, kind, a => a.BlackPoint = v), 0, 0.5f, 0, "0.000", help: "Subtracted after the stretch."));
-                panel.Children.Add(S("Gamma", s => s.Adjust(kind).Gamma, (s, v) => Edit(s, kind, a => a.Gamma = v), 0.3f, 3, 1, log: true));
-            }
-        }
-        return panel;
-    }
-
-    static void Edit(CombineSettings s, ChannelKind k, Action<ChannelAdjust> edit) { var a = s.Adjust(k).Clone(); edit(a); s.SetAdjust(k, a); }
 
     // Stretch
 

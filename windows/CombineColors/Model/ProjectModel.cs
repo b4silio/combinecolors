@@ -135,7 +135,31 @@ public sealed partial class ProjectModel : INotifyPropertyChanged
     bool cropEditing;
     public bool CropEditing { get => cropEditing; set { if (cropEditing == value) return; cropEditing = value; Notify(Change.Crop); } }
     PixelRect? cropDraft;
-    public PixelRect? CropDraft { get => cropDraft; set { if (cropDraft == value) return; cropDraft = value; Notify(Change.Crop); } }
+    /// <summary>The crop being edited, in the picture turned by <see cref="CropAngleDraft"/>. A change made by the user (not by
+    /// the "constrain to image" shrinking) becomes the rectangle the constraint starts from.</summary>
+    public PixelRect? CropDraft
+    {
+        get => cropDraft;
+        set
+        {
+            if (!constrainingCrop) cropBaseDraft = value;
+            if (cropDraft == value) return;
+            cropDraft = value; Notify(Change.Crop);
+        }
+    }
+    /// <summary>Rotation being edited with the crop (degrees, −180…180, clockwise, counted like Orientation.Angle); the picture
+    /// is turned under the upright crop on screen and resampled on Apply, where whole quarter turns become exact ones and the
+    /// rest (±45°) a fine rotation. Equals Orientation.Angle otherwise.</summary>
+    public double CropAngleDraft { get; private set; }
+    bool cropConstrain = true;
+    /// <summary>While turning, shrink the crop (about its centre, keeping its shape) so it holds no corner outside the turned picture.</summary>
+    public bool CropConstrain { get => cropConstrain; set { if (cropConstrain == value) return; cropConstrain = value; if (value) ConstrainCropDraft(); Notify(Change.Crop); } }
+    /// <summary>The user's crop before the constraint shrank it (it grows back as the angle returns).</summary>
+    PixelRect? cropBaseDraft;
+    bool constrainingCrop;
+    /// <summary>With a fine rotation: each turned original (of either tab) with the plane before the turn, so a new angle is
+    /// always resampled once from the untouched data. Looked up by identity; pruned with the sources.</summary>
+    readonly List<(PlanarImage Rotated, PlanarImage Unrotated)> unrotatedPlanes = new();
     CropOverlayMode cropOverlay = CropOverlayMode.Frame;
     public CropOverlayMode CropOverlay { get => cropOverlay; set { if (cropOverlay == value) return; cropOverlay = value; Notify(Change.Crop); } }
     /// <summary>Rotation / mirroring applied to every channel. Stored in the project; new channels are oriented on load.</summary>
@@ -664,6 +688,7 @@ public sealed partial class ProjectModel : INotifyPropertyChanged
                     baseSources[b.Kind] = b; sources[b.Kind] = built.Cropped[i]; originalImages[b.Kind] = built.Originals[i];
                     if (built.Maps.TryGetValue(b.Kind, out var m)) correctionMaps[b.Kind] = m; else correctionMaps.Remove(b.Kind);
                 }
+                unrotatedPlanes.AddRange(built.Unrotated);
                 foreach (var (k, t) in built.Thumbs) slotThumbnails[k] = t;
                 // First channels on the Stars tab: settings suited to star images.
                 if (wasEmpty && layer == ImageLayer.Stars)
@@ -693,6 +718,8 @@ public sealed partial class ProjectModel : INotifyPropertyChanged
         public List<PlanarImage> Originals = new();
         public Dictionary<ChannelKind, CorrectionMap> Maps = new();
         public List<(ChannelKind kind, BitmapSource thumb)> Thumbs = new();
+        /// <summary>Turned originals with their planes before the fine rotation (see unrotatedPlanes).</summary>
+        public List<(PlanarImage Rotated, PlanarImage Unrotated)> Unrotated = new();
     }
 
     public static BuiltChannels BuildChannels(IReadOnlyList<ChannelItem> items, PixelRect? cropNow, Orientation orient, DustSettings dust, GradientSettings gradient, CorrectionSettings corr)
@@ -700,10 +727,13 @@ public sealed partial class ProjectModel : INotifyPropertyChanged
         var built = new ChannelSource[items.Count];
         var originals = new PlanarImage[items.Count];
         var maps = new CorrectionMap?[items.Count];
+        var unrotated = new PlanarImage?[items.Count];
         Parallel.For(0, items.Count, i =>
         {
             var it = items[i];
-            var oriented = orient.Apply(it.Plane);
+            var un = orient.WithoutAngle.Apply(it.Plane);
+            var oriented = orient.Angle == 0 ? un : un.RotatedByDegrees(orient.Angle);
+            if (!ReferenceEquals(oriented, un)) unrotated[i] = un;
             // A stored correction map (sidecar) comes in the orientation of the file.
             CorrectionMap? map = null;
             if (it.Path != null && CorrectionMap.Read(it.Path, it.Kind, it.Plane.Width, it.Plane.Height) is CorrectionMap stored)
@@ -717,6 +747,7 @@ public sealed partial class ProjectModel : INotifyPropertyChanged
         o.Cropped = built.Select(b => cropNow == null ? b : new ChannelSource(b, cropNow)).ToList();
         o.Thumbs = o.Cropped.Select(c => (c.Kind, SlotThumbnail(c))).ToList();
         for (int i = 0; i < items.Count; i++) if (maps[i] is CorrectionMap m) o.Maps[built[i].Kind] = m;
+        for (int i = 0; i < items.Count; i++) if (unrotated[i] is PlanarImage u) o.Unrotated.Add((originals[i], u));
         return o;
     }
 
@@ -766,8 +797,8 @@ public sealed partial class ProjectModel : INotifyPropertyChanged
         backgroundImage = null; backgroundCompositeKey = null; backgroundCompositeGeneration++; BackgroundCompositeBusy = false;
         afterChannelsLoaded.Clear();
         baseSources.Clear(); sources.Clear(); slotThumbnails.Clear(); Frame = null; thumbnails.Clear();
-        crop = null; cropDraft = null; cropEditing = false; Orientation = Orientation.Identity;
-        originalImages.Clear(); Dust = new DustSettings(); dustDraft = null; DustEditing = null; dustPreviewed.Clear();
+        crop = null; cropDraft = null; cropEditing = false; Orientation = Orientation.Identity; CropAngleDraft = 0;
+        originalImages.Clear(); unrotatedPlanes.Clear(); Dust = new DustSettings(); dustDraft = null; DustEditing = null; dustPreviewed.Clear();
         Gradient = new GradientSettings(); gradientDraft = null; GradientEditing = null; gradientPreviewed.Clear(); GradientFit = null; gradientHealed = null;
         starsLayer = null;
         Corrections = new CorrectionSettings(); correctionMaps.Clear(); CorrectionEditing = null; CorrectionDraft = null; correctionUndo.Clear();
@@ -805,6 +836,7 @@ public sealed partial class ProjectModel : INotifyPropertyChanged
         var dust = Dust; var draft = dustDraft; var editing = DustEditing;
         var gradient = Gradient; var gdraft = gradientDraft; var gediting = GradientEditing;
         var originals = new Dictionary<ChannelKind, PlanarImage>(originalImages);
+        var pairs = unrotatedPlanes.ToList();
         // Correction maps (and the draft being painted) turn with the image.
         foreach (var k in correctionMaps.Keys.ToList()) correctionMaps[k] = correctionMaps[k].Applying(op);
         if (CorrectionDraft != null)
@@ -824,13 +856,17 @@ public sealed partial class ProjectModel : INotifyPropertyChanged
         {
             var newStars = stars?.Applying(op);
             // The other tab turns with this one (crop and orientation are shared).
-            var newOther = other.IsEmpty ? other : Reoriented(other, op, w, h, newCrop);
+            var newPairs = new List<(PlanarImage, PlanarImage)>();
+            var newOther = other.IsEmpty ? other : Reoriented(other, op, w, h, newCrop, pairs, newPairs);
             var kinds = baseCopy.Keys.ToArray();
             var newBase = new ChannelSource[kinds.Length]; var newCur = new ChannelSource[kinds.Length]; var newOrig = new PlanarImage[kinds.Length];
             Parallel.For(0, kinds.Length, i =>
             {
                 var k = kinds[i]; var old = baseCopy[k];
-                var orig = (originals.TryGetValue(k, out var o) ? o : old.Image).Applying(op);
+                var before = originals.TryGetValue(k, out var o) ? o : old.Image;
+                var orig = before.Applying(op);
+                // The plane before the fine rotation turns the same way (the two commute).
+                if (Unrotated(before, pairs) is PlanarImage un) { var pr = (orig, un.Applying(op)); lock (newPairs) newPairs.Add(pr); }
                 // The edited channel keeps showing its draft spots / model.
                 var d = (k == editing ? draft : null) ?? dust;
                 var g = (k == gediting ? gdraft : null) ?? gradient;
@@ -843,6 +879,7 @@ public sealed partial class ProjectModel : INotifyPropertyChanged
             {
                 baseSources.Clear(); sources.Clear(); originalImages.Clear();
                 for (int i = 0; i < kinds.Length; i++) { baseSources[kinds[i]] = newBase[i]; sources[kinds[i]] = newCur[i]; originalImages[kinds[i]] = newOrig[i]; }
+                unrotatedPlanes.Clear(); unrotatedPlanes.AddRange(newPairs);
                 starsLayer = newStars;
                 if (starsCompositeKey is StarsCompositeKey key && newStars != null)
                     starsCompositeKey = new StarsCompositeKey(SourceIds(newOther.BaseSources), key.Settings, newCrop, Orientation);
@@ -923,6 +960,7 @@ public sealed partial class ProjectModel : INotifyPropertyChanged
 
     void SourcesChanged()
     {
+        PruneUnrotated();
         postStretchCache.Clear();
         RecordRecentSet();
         Notify(Change.Sources);
@@ -1095,6 +1133,14 @@ public sealed partial class ProjectModel : INotifyPropertyChanged
     public void AutoCrop()
     {
         if (sources.Count == 0 || EditingTool != null) return;
+        if (CropEditing && CropAngleDraft != Orientation.Angle)
+        {
+            // The pixels of the pending turn do not exist yet: the whole turned canvas, shrunk to fit inside the picture.
+            var b = CropEditBounds;
+            CropDraft = PixelRect.FromDouble(b.X, b.Y, b.X + b.Width, b.Y + b.Height);
+            ConstrainCropDraft(force: true);
+            return;
+        }
         IsLoading = true; LoadingMessage = "Detecting empty borders…";
         var images = sources.Values.Select(s => s.Image).ToList();
         Task.Run(() =>
@@ -1119,18 +1165,207 @@ public sealed partial class ProjectModel : INotifyPropertyChanged
         if (DustEditing != null) CancelDustEditing();
         if (GradientEditing != null) CancelGradientEditing();
         CropDraft = crop ?? (ImageSize is Size s ? new PixelRect((int)(s.Width * 0.1), (int)(s.Height * 0.1), (int)(s.Width * 0.8), (int)(s.Height * 0.8)) : null);
+        CropAngleDraft = Orientation.Angle;
         CropEditing = true;
     }
 
     public void CommitCropEditing()
     {
         CropEditing = false;
-        if (cropDraft is PixelRect d && ImageSize is Size size && d.Clamped((int)size.Width, (int)size.Height) is PixelRect c)
-            Crop = c == PixelRect.Full((int)size.Width, (int)size.Height) ? null : c;
+        if (ImageSize is not Size size) return;
+        if (CropAngleDraft != Orientation.Angle)
+        {
+            // The draft is placed on the turned canvas (CropEditBounds); into its own coordinates.
+            var b = CropEditBounds;
+            int q = CropTurn.Split(CropAngleDraft).Quarters;
+            int w = q % 2 == 0 ? (int)size.Width : (int)size.Height, h = q % 2 == 0 ? (int)size.Height : (int)size.Width;
+            var moved = cropDraft is PixelRect cd ? new PixelRect(cd.X - (int)Math.Round(b.X, MidpointRounding.AwayFromZero), cd.Y - (int)Math.Round(b.Y, MidpointRounding.AwayFromZero), cd.Width, cd.Height) : (PixelRect?)null;
+            var c = moved?.Clamped(w, h);
+            ApplyFineRotation(CropAngleDraft, c == PixelRect.Full(w, h) ? null : c);
+            return;
+        }
+        if (cropDraft is PixelRect d && d.Clamped((int)size.Width, (int)size.Height) is PixelRect cc)
+            Crop = cc == PixelRect.Full((int)size.Width, (int)size.Height) ? null : cc;
     }
 
     /// <summary>Keeps a draft around (the fields are hidden anyway) so bindings created while editing stay valid.</summary>
-    public void CancelCropEditing() { CropEditing = false; CropDraft = crop ?? cropDraft; }
+    public void CancelCropEditing() { CropAngleDraft = Orientation.Angle; CropEditing = false; CropDraft = crop ?? cropDraft; }
+
+    // ---- Fine rotation (crop straightening) ----------------------------------------------------------
+
+    /// <summary>The plane <paramref name="rotated"/> was turned from, if it carries a fine rotation.</summary>
+    static PlanarImage? Unrotated(PlanarImage rotated, List<(PlanarImage Rotated, PlanarImage Unrotated)> pairs)
+    {
+        foreach (var p in pairs) if (ReferenceEquals(p.Rotated, rotated)) return p.Unrotated;
+        return null;
+    }
+
+    /// <summary>Drops the entries whose turned original is no longer used by either tab.</summary>
+    void PruneUnrotated()
+    {
+        if (unrotatedPlanes.Count == 0) return;
+        var live = originalImages.Values.Concat(inactiveLayer.OriginalImages.Values).ToList();
+        unrotatedPlanes.RemoveAll(p => !live.Any(l => ReferenceEquals(l, p.Rotated)));
+    }
+
+    /// <summary>Sets the angle being edited with the crop (any angle, kept in −180…180) and, with CropConstrain, keeps the
+    /// crop inside the turned picture.</summary>
+    public void SetCropAngle(double degrees)
+    {
+        double a = CropTurn.Normalized(degrees);
+        if (a == CropAngleDraft) return;
+        CropAngleDraft = a;
+        ConstrainCropDraft();
+        Notify(Change.Crop);
+    }
+
+    /// <summary>Where the canvas of the turned picture lies while the crop is edited, in the coordinates of the shown picture:
+    /// centred on it, sideways after an odd number of quarter turns. The crop being edited lives in this space.</summary>
+    public (double X, double Y, double Width, double Height) CropEditBounds
+        => ImageSize is Size s ? CropTurn.EditBounds(CropAngleDraft, (int)s.Width, (int)s.Height) : (0, 0, 0, 0);
+
+    /// <summary>Shrinks the user's crop about its centre until its corners lie inside the picture turned by CropAngleDraft.</summary>
+    void ConstrainCropDraft(bool force = false)
+    {
+        if (!CropEditing || !(CropConstrain || force) || cropBaseDraft is not PixelRect b || ImageSize is not Size size) return;
+        var fitted = CropTurn.Constrained(b, CropAngleDraft, (int)size.Width, (int)size.Height, CropEditBounds);
+        constrainingCrop = true;
+        CropDraft = fitted;
+        constrainingCrop = false;
+    }
+
+    /// <summary>
+    /// Turns every channel of both tabs by <paramref name="angle"/> degrees in all (counted like Orientation.Angle): whole
+    /// quarter turns are exact, the rest (±45°) is resampled once from the planes before any fine rotation.
+    /// <paramref name="newCrop"/> is in the turned picture. Dust spots, gradient guides, samples and protected regions turn
+    /// with the picture, painted maps are re-read from their sidecars (or turned when there is none). Statistics and star
+    /// masks are rebuilt.
+    /// </summary>
+    public void ApplyFineRotation(double angle, PixelRect? newCrop)
+    {
+        if (baseSources.Count == 0 || IsLoading || EditingTool != null) return;
+        if (angle == Orientation.Angle) { Crop = newCrop; return; }
+        var (quarters, newAngle) = CropTurn.Split(angle);
+        var first = baseSources.Values.First();
+        int w0 = first.Width, h0 = first.Height;
+        // Canvas after the quarter turns; the fine part turns on it by delta.
+        int w = quarters % 2 == 0 ? w0 : h0, h = quarters % 2 == 0 ? h0 : w0;
+        double delta = newAngle - Orientation.Angle;
+        var o = Orientation;
+        for (int i = 0; i < quarters; i++) o = o.Applying(OrientationOp.RotateClockwise);
+        var newOrientation = new Orientation(o.Rotation, o.Flipped, newAngle);
+        Orientation = newOrientation;
+        CropAngleDraft = newAngle;
+        // Exact quarter turns of something with coordinates on the current canvas.
+        T Quartered<T>(T x, Func<T, OrientationOp, int, int, T> f)
+        {
+            int cw = w0, ch = h0;
+            for (int i = 0; i < quarters; i++) { x = f(x, OrientationOp.RotateClockwise, cw, ch); (cw, ch) = (ch, cw); }
+            return x;
+        }
+        DustSettings TurnedDust(DustSettings d)
+        {
+            var m = d.Clone();
+            m.Spots = d.Spots.ToDictionary(kv => kv.Key, kv => kv.Value.Select(sp => Quartered(sp, (v, op, a, b) => v.Applying(op, a, b)).RotatedByDegrees(delta, w, h)).ToList());
+            return m;
+        }
+        GradientSettings TurnedGradient(GradientSettings g) => Quartered(g, (v, op, a, b) => v.Applying(op, a, b)).RotatedByDegrees(delta, w, h);
+        Dust = TurnedDust(Dust);
+        Gradient = TurnedGradient(Gradient);
+        gradientHealed = null;
+        // Painted maps: from the sidecar (exact, nothing lost at the corners) when there is one.
+        int rawW = newOrientation.SwapsAxes ? h : w, rawH = newOrientation.SwapsAxes ? w : h;
+        Dictionary<ChannelKind, CorrectionMap> TurnedMaps(Dictionary<ChannelKind, CorrectionMap> maps, Dictionary<ChannelKind, ChannelSource> srcs)
+        {
+            var outMaps = new Dictionary<ChannelKind, CorrectionMap>();
+            foreach (var (k, m) in maps)
+            {
+                if (srcs.GetValueOrDefault(k)?.Path is string path && CorrectionMap.Read(path, k, rawW, rawH) is CorrectionMap stored) outMaps[k] = stored.Oriented(newOrientation);
+                else outMaps[k] = Quartered(m, (v, op, _, _) => v.Applying(op)).RotatedByDegrees(delta);
+            }
+            return outMaps;
+        }
+        var turnedMaps = TurnedMaps(correctionMaps, baseSources);
+        correctionMaps.Clear(); foreach (var (k, m) in turnedMaps) correctionMaps[k] = m;
+        var other = inactiveLayer.IsEmpty ? inactiveLayer : inactiveLayer.ShallowCopy();
+        if (!other.IsEmpty)
+        {
+            other.Dust = TurnedDust(other.Dust);
+            other.Gradient = TurnedGradient(other.Gradient);
+            other.CorrectionMaps = TurnedMaps(other.CorrectionMaps, other.BaseSources);
+        }
+        var baseCopy = new Dictionary<ChannelKind, ChannelSource>(baseSources);
+        var originals = new Dictionary<ChannelKind, PlanarImage>(originalImages);
+        var pairs = unrotatedPlanes.ToList();
+        var dust = Dust; var gradient = Gradient; var maps = new Dictionary<ChannelKind, CorrectionMap>(correctionMaps); var corr = Corrections.Clone();
+        IsLoading = true;
+        LoadingMessage = "Straightening…";
+        Frame = null;
+        // The rendered Stars tab is made again from the turned channels.
+        starsLayer = null; starsCompositeKey = null;
+        backgroundImage = null; backgroundCompositeKey = null;
+        Notify(Change.Frame); Notify(Change.Dust); Notify(Change.Gradient); Notify(Change.Corrections); Notify(Change.Stars);
+        Task.Run(() =>
+        {
+            var newPairs = new List<(PlanarImage, PlanarImage)>();
+            // The original of a channel at the new angle, and the plane before any fine rotation.
+            (PlanarImage, PlanarImage) Turn(PlanarImage before)
+            {
+                var un = (Unrotated(before, pairs) ?? before).Rotated90CW(quarters);
+                return (newAngle == 0 ? un : un.RotatedByDegrees(newAngle), un);
+            }
+            (Dictionary<ChannelKind, ChannelSource> b, Dictionary<ChannelKind, ChannelSource> c, Dictionary<ChannelKind, PlanarImage> o) Rebuild(
+                Dictionary<ChannelKind, ChannelSource> bases, Dictionary<ChannelKind, PlanarImage> origs, DustSettings d, GradientSettings g, Dictionary<ChannelKind, CorrectionMap> cms, CorrectionSettings cs)
+            {
+                var kinds = bases.Keys.ToArray();
+                var nb = new ChannelSource[kinds.Length]; var nc = new ChannelSource[kinds.Length]; var no = new PlanarImage[kinds.Length];
+                Parallel.For(0, kinds.Length, i =>
+                {
+                    var k = kinds[i]; var old = bases[k];
+                    var (orig, un) = Turn(origs.TryGetValue(k, out var oi) ? oi : old.Image);
+                    var healed = Process(orig, k, d, g, cms.TryGetValue(k, out var cm) ? (cm, (float)cs.StrengthFor(k)) : null);
+                    var bs = new ChannelSource(k, healed, old.FileName, old.Path, old.FormatDescription);
+                    nb[i] = bs; nc[i] = newCrop == null ? bs : new ChannelSource(bs, newCrop); no[i] = orig;
+                    if (!ReferenceEquals(orig, un)) lock (newPairs) newPairs.Add((orig, un));
+                });
+                var rb = new Dictionary<ChannelKind, ChannelSource>(); var rc = new Dictionary<ChannelKind, ChannelSource>(); var ro = new Dictionary<ChannelKind, PlanarImage>();
+                for (int i = 0; i < kinds.Length; i++) { rb[kinds[i]] = nb[i]; rc[kinds[i]] = nc[i]; ro[kinds[i]] = no[i]; }
+                return (rb, rc, ro);
+            }
+            var mine = Rebuild(baseCopy, originals, dust, gradient, maps, corr);
+            var newOther = other;
+            if (!other.IsEmpty)
+            {
+                var theirs = Rebuild(other.BaseSources, other.OriginalImages, other.Dust, other.Gradient, other.CorrectionMaps, other.Corrections);
+                newOther.BaseSources = theirs.b; newOther.Sources = theirs.c; newOther.OriginalImages = theirs.o;
+                newOther.SlotThumbnails = theirs.c.ToDictionary(kv => kv.Key, kv => SlotThumbnail(kv.Value));
+                newOther.Context = null; newOther.AnalysisSamples = new(); newOther.PostStretchCache = new(); newOther.Thumbnails = new();
+                newOther.Frame = null; newOther.Histogram = new(); newOther.Crop = newCrop;
+            }
+            var thumbs = mine.c.Values.Select(c => (c.Kind, SlotThumbnail(c))).ToArray();
+            ui.Post(() =>
+            {
+                baseSources.Clear(); sources.Clear(); originalImages.Clear();
+                foreach (var (k, v) in mine.b) baseSources[k] = v;
+                foreach (var (k, v) in mine.c) sources[k] = v;
+                foreach (var (k, v) in mine.o) originalImages[k] = v;
+                unrotatedPlanes.Clear(); unrotatedPlanes.AddRange(newPairs);
+                inactiveLayer = newOther;
+                foreach (var (k, t) in thumbs) slotThumbnails[k] = t;
+                IsLoading = false;
+                postStretchCache.Clear();
+                suppressCropRebuild = true;
+                crop = newCrop;
+                cropDraft = newCrop; cropBaseDraft = newCrop;
+                suppressCropRebuild = false;
+                Notify(Change.Crop); Notify(Change.SlotThumbnails); Notify(Change.Sources);
+                RebuildContext();
+                RequestFit();
+                ScheduleRecentStateSave();
+                UpdateComposites();
+            });
+        });
+    }
 
     public void ClearCrop() { if (EditingTool != null) return; Crop = null; CropDraft = null; CropEditing = false; }
 
@@ -1594,7 +1829,11 @@ public sealed partial class ProjectModel : INotifyPropertyChanged
         var orig = originalImages.TryGetValue(k, out var o) ? o : baseSources.GetValueOrDefault(k)?.Image;
         if (orig == null) return;
         var spot = d.NewSpot(p.X, p.Y, DefaultDustRadius);
-        if (DustRemoval.Fit(orig, p.X, p.Y, DefaultDustRadius, d.Smoothness) is DustSpot f) { spot.X = f.X; spot.Y = f.Y; spot.Radius = f.Radius; }
+        bool bright = d.Polarity == SpotPolarity.Bright;
+        double cap = bright ? d.ResolvedBrightMaxRadius(orig.Width, orig.Height) : 0;
+        if (bright) spot.Radius = Math.Min(spot.Radius, cap);
+        if (DustRemoval.Fit(orig, p.X, p.Y, Math.Min(DefaultDustRadius, cap > 0 ? cap / 2 : DefaultDustRadius), d.Smoothness, d.Polarity, cap) is DustSpot f)
+        { spot.X = f.X; spot.Y = f.Y; spot.Radius = f.Radius; }
         var nd = d.Clone();
         if (!nd.Spots.TryGetValue(k, out var list)) nd.Spots[k] = list = new List<DustSpot>();
         list.Add(spot);
@@ -1629,7 +1868,9 @@ public sealed partial class ProjectModel : INotifyPropertyChanged
         int i = list.FindIndex(s => s.Id == id);
         if (i < 0) return;
         var s = list[i];
-        if (DustRemoval.Fit(orig, s.X, s.Y, s.Radius / 2, s.Smoothness) is not DustSpot f) { StatusText = "No shadow found around the spot."; return; }
+        double cap = s.Polarity == SpotPolarity.Bright ? dustDraft.ResolvedBrightMaxRadius(orig.Width, orig.Height) : 0;
+        if (DustRemoval.Fit(orig, s.X, s.Y, s.Radius / 2, s.Smoothness, s.Polarity, cap) is not DustSpot f)
+        { StatusText = s.Polarity == SpotPolarity.Bright ? "No glow found around the spot." : "No shadow found around the spot."; return; }
         var nd = dustDraft.Clone();
         var ns = nd.Spots[k][i]; ns.X = f.X; ns.Y = f.Y; ns.Radius = f.Radius;
         DustDraft = nd;
@@ -1657,6 +1898,17 @@ public sealed partial class ProjectModel : INotifyPropertyChanged
     }
 
     /// <summary>Changes the parameters given to new spots.</summary>
+    /// <summary>Largest radius given to new bright spots by the fit (image pixels), as the editor shows it.</summary>
+    public double DustBrightMaxRadius
+    {
+        get
+        {
+            var d = dustDraft ?? Dust;
+            return ImageSize is Size sz ? d.ResolvedBrightMaxRadius((int)sz.Width, (int)sz.Height) : d.BrightMaxRadius;
+        }
+        set => UpdateDustDefaults(d => d.BrightMaxRadius = Math.Max(4, value));
+    }
+
     public void UpdateDustDefaults(Action<DustSettings> edit)
     {
         if (dustDraft == null) return;
@@ -2306,6 +2558,16 @@ public sealed partial class ProjectModel : INotifyPropertyChanged
         if (LaunchLayer != null && LaunchLayer != ActiveLayer) SwitchToLaunchLayer(20);
         if (launchEditorOpened || LaunchEditor is not string v) return;
         var parts = v.Split(':');
+        // `--open-editor crop[:<angle>]`: the crop editor, turned by that many degrees (screenshots).
+        if (parts[0] == "crop")
+        {
+            launchEditorOpened = true;
+            BeginCropEditing();
+            if (parts.Length > 1 && double.TryParse(parts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var a)) SetCropAngle(a);
+            // `--editor-action apply`: applies the turned crop a moment later (screenshots of the result).
+            if (LaunchEditorAction == "apply") ui.Delay(TimeSpan.FromSeconds(3), CommitCropEditing);
+            return;
+        }
         if (parts.Length < 2 || (ChannelKinds.FromRawValue(parts[1]) ?? ChannelKinds.FromPixelMathIdentifier(parts[1])) is not ChannelKind k || !sources.ContainsKey(k)) return;
         launchEditorOpened = true;
         if (parts[0] == "gradient")
@@ -2322,6 +2584,18 @@ public sealed partial class ProjectModel : INotifyPropertyChanged
                 switch (action)
                 {
                     case "removeModel": ClearGradient(); break;
+                    case var spot when spot.StartsWith("spots:"):
+                        // `spots:bright:x,y;x,y…`: clicks at those image points in the dust editor (screenshots).
+                        var sp = spot.Split(':');
+                        if (sp.Length < 3) break;
+                        if (EnumRaw.Parse<SpotPolarity>(sp[1]) is SpotPolarity pol) UpdateDustDefaults(d => d.Polarity = pol);
+                        foreach (var xy in sp[2].Split(';'))
+                        {
+                            var c = xy.Split(',');
+                            if (c.Length == 2 && double.TryParse(c[0], System.Globalization.CultureInfo.InvariantCulture, out var x) && double.TryParse(c[1], System.Globalization.CultureInfo.InvariantCulture, out var y))
+                                AddDustSpot(new Point(x, y));
+                        }
+                        break;
                     case "clearRegions": ClearGradientRegions(); break;
                     case "adopt": AdoptRefinedGradient(); break;
                     case "paintTest":

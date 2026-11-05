@@ -286,11 +286,56 @@ public static class ExportWindow
     }
 }
 
-/// <summary>Combination matrix editor (applies live).</summary>
+/// <summary>
+/// Movable, non-modal tool windows (Pixel Math, matrix): unlike a dialog they leave the preview visible and
+/// usable, so the effect of an edit shows right away. One window per id; asking for an open one brings it to
+/// the front. They stay above the main window and remember where they were put (preferences).
+/// </summary>
+public static class EditorPanels
+{
+    static readonly Dictionary<string, Window> open = new();
+
+    /// <summary>Brings the panel <paramref name="id"/> to the front when it is open.</summary>
+    public static bool Activate(string id)
+    {
+        if (!open.TryGetValue(id, out var w)) return false;
+        if (w.WindowState == WindowState.Minimized) w.WindowState = WindowState.Normal;
+        w.Activate();
+        return true;
+    }
+
+    /// <summary>Shows <paramref name="w"/> as the panel <paramref name="id"/>: first at the right edge of the
+    /// owner (over the palettes, away from the picture), afterwards where it was left.</summary>
+    public static void Show(Window owner, Window w, string id, Preferences prefs)
+    {
+        string key = "editorPanel." + id;
+        w.WindowStartupLocation = WindowStartupLocation.Manual;
+        w.ShowInTaskbar = false;
+        var parts = prefs.GetString(key)?.Split(',');
+        if (parts is { Length: 2 } && double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var x) && double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var y)
+            && x > SystemParameters.VirtualScreenLeft - 100 && x < SystemParameters.VirtualScreenLeft + SystemParameters.VirtualScreenWidth - 100
+            && y > SystemParameters.VirtualScreenTop - 20 && y < SystemParameters.VirtualScreenTop + SystemParameters.VirtualScreenHeight - 60)
+        { w.Left = x; w.Top = y; }
+        else
+        {
+            double width = double.IsNaN(w.Width) ? 440 : w.Width;
+            var o = owner.WindowState == WindowState.Maximized ? owner.RestoreBounds : new Rect(owner.Left, owner.Top, owner.ActualWidth, owner.ActualHeight);
+            if (owner.WindowState == WindowState.Maximized) o = new Rect(SystemParameters.WorkArea.Left, SystemParameters.WorkArea.Top, SystemParameters.WorkArea.Width, SystemParameters.WorkArea.Height);
+            w.Left = Math.Max(o.Left, o.Right - width - 16); w.Top = o.Top + 60;
+        }
+        open[id] = w;
+        w.Closing += (_, _) => prefs.Set(key, $"{w.Left.ToString(CultureInfo.InvariantCulture)},{w.Top.ToString(CultureInfo.InvariantCulture)}");
+        w.Closed += (_, _) => { open.Remove(id); owner.Activate(); };
+        w.Show();
+    }
+}
+
+/// <summary>Combination matrix editor (applies live; a movable panel, see <see cref="EditorPanels"/>).</summary>
 public static class MatrixEditorWindow
 {
     public static void Show(Window owner, ProjectModel model)
     {
+        if (EditorPanels.Activate("matrix")) return;
         var w = DialogBase.Make(owner, "Combination matrix", 440);
         var panel = new StackPanel { Margin = new Thickness(16) };
         panel.Children.Add(new TextBlock { Text = "Combination matrix", FontWeight = FontWeights.Bold, FontSize = 13 });
@@ -343,12 +388,12 @@ public static class MatrixEditorWindow
         }, "Scales the weights so every output column sums to 1."));
         left.Children.Add(Ui.SmallButton("Clear", () => { model.UpdateSettings(s => s.Matrix = PaletteMatrix.Empty); Refresh(); }));
         buttons.Children.Add(left);
-        var done = DialogBase.Default("Done", () => w.DialogResult = true); done.HorizontalAlignment = HorizontalAlignment.Right;
+        var done = DialogBase.Default("Done", () => w.Close()); done.HorizontalAlignment = HorizontalAlignment.Right;
         buttons.Children.Add(done);
         panel.Children.Add(buttons);
         w.Content = panel;
         Refresh();
-        w.ShowDialog();
+        EditorPanels.Show(owner, w, "matrix", model.Preferences);
     }
 }
 
@@ -374,6 +419,7 @@ public static class PixelMathEditorWindow
 
     public static void Show(Window owner, ProjectModel model)
     {
+        if (EditorPanels.Activate("pixelMath")) return;
         var w = DialogBase.Make(owner, "Pixel Math", 800);
         var root = new DockPanel { Margin = new Thickness(16) };
         var left = new StackPanel { Width = 450 };
@@ -457,7 +503,7 @@ public static class PixelMathEditorWindow
         nameBox.TextChanged += (_, _) => { saveBtn.IsEnabled = nameBox.Text.Trim().Length > 0; deleteBtn.Visibility = UserPresets(model.Preferences).ContainsKey(nameBox.Text.Trim()) ? Visibility.Visible : Visibility.Collapsed; };
         saveBtn.IsEnabled = false; deleteBtn.Visibility = Visibility.Collapsed;
         presetRow.Children.Add(saveBtn); presetRow.Children.Add(deleteBtn);
-        var done = DialogBase.Default("Done", () => w.DialogResult = true); done.HorizontalAlignment = HorizontalAlignment.Right;
+        var done = DialogBase.Default("Done", () => w.Close()); done.HorizontalAlignment = HorizontalAlignment.Right;
         presetRow.Children.Add(done);
         left.Children.Add(presetRow);
         right.Children.Add(new TextBlock { Text = "Reference", FontWeight = FontWeights.Bold, FontSize = 12 });
@@ -472,7 +518,7 @@ public static class PixelMathEditorWindow
         root.Children.Add(left);
         w.Content = root;
         Validate();
-        w.ShowDialog();
+        EditorPanels.Show(owner, w, "pixelMath", model.Preferences);
     }
 
     static PixelMathProgram MatrixAsProgram(PaletteMatrix m)

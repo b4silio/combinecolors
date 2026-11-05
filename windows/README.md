@@ -79,6 +79,18 @@ checked) into `%LOCALAPPDATA%\CombineColors\StarNet2\<version>` (`--install-root
 not remembered); `--install <zip>` unpacks a package downloaded by hand. Using StarNet2 means
 accepting its license (`LICENSE.txt` in the package, path printed by the command).
 
+**StarNet2 and the graphics card (Windows).** StarNet2's Windows package runs ONNX Runtime 1.24 with
+DirectML but does not ship `DirectML.dll`, so Windows' own copy is loaded — version 1.8 on Windows 10 /
+11, too old for that runtime: the warm-up fails ("Resize … The parameter is incorrect") and StarNet2
+falls back to the CPU. The Remove Stars window checks which DirectML StarNet2 would load and, when it is
+older than 1.15.4, offers to download Microsoft's redistributable `DirectML.dll` (Microsoft.AI.DirectML
+1.15.4 from nuget.org: only the x64 file, ≈ 9 MB read out of the 200 MB package with HTTP range
+requests, SHA-256 checked) into the StarNet2 folder, where Windows loads it first. Nothing else changes;
+deleting the file undoes it. "Not now" turns the offer into a button under Options. The CLI does the
+same with `starnet --directml` (without files it only installs). StarNet2's own README also allows an
+ONNX Runtime CUDA build in its folder (NVIDIA only, ≈ 1.5 GB of CUDA / cuDNN libraries); the app does not
+offer that. Loading StarNet2's weights in another inference engine is not allowed by its license.
+
 Run `CombineColors.exe --prefs <file>` to keep an instance's preferences (recent sets with their
 saved presets and dust spots, hidden palettes, collapsed blocks…) apart from the user's, which
 live in `%LOCALAPPDATA%\CombineColors\preferences.json`.
@@ -100,10 +112,16 @@ live in `%LOCALAPPDATA%\CombineColors\preferences.json`.
   Ctrl+0 fit, Ctrl+R rotate, Ctrl+Shift+H / V flips, Ctrl+Z / Ctrl+Y undo / redo). In the preview: wheel zooms around the
   pointer, drag pans, Ctrl / Shift + wheel pans, 0 fit, 1 actual size, double-click fits first and goes to 1:1 from the fitted view, Return / Esc apply
   or cancel crop, dust and gradient editing, B toggles the "Original" view (M the gradient editor's "Background" view, P its
-  Protect mode), Delete removes the selected spot or protected region.
+  Protect mode), Delete removes the selected spot or protected region. Tab hides the side panes and the
+  crop / zoom toolbars (View ▸ Hide Side Panels).
 * The interface is dark only (the .NET 9 Fluent theme in dark mode, independent of the Windows
-  setting); the layout follows the Mac app (channel column · preview · palettes + presets,
-  processing strip underneath).
+  setting); the layout follows the Mac app (channel column · preview · palettes + channel mix +
+  presets, processing strip underneath), with the 1.16–1.19 features: Channel mix pane, Tab to hide the
+  side panes, movable Pixel Math / Matrix windows, crop straightening (Angle slider, quarter turns, drag
+  in the band around the crop, Constrain to image, Level) and bright spots with Max radius in the dust editor.
+* Developer switches for UI screenshots: `--prefs <file>`, `--screenshot <png>` (`--screenshot-delay <s>`),
+  `--open-layer stars`, `--hide-panes`, `--open-editor crop:<deg>` / `dust:<channel>` / `gradient:<channel>`
+  and `--editor-action apply` / `spots:bright:x,y;…`.
 
 ## Linux
 
@@ -119,8 +137,8 @@ is the same `AstroCore`, built for plain `net9.0`:
 * **Not yet on Linux**: copying the preview to the clipboard (Avalonia has no portable image
   clipboard), native menus (the menu bar lives inside the window), app icon packaging. Otherwise the
   Linux front-end follows the Mac app (1.19.1): Background / Stars tabs, star removal, Channel mix,
-  Tab to hide the side panes, movable Pixel Math / Matrix windows, crop straightening, bright spots.
-  The Windows (WPF) front-end lacks the last five for now (it opens projects that use them).
+  Tab to hide the side panes, movable Pixel Math / Matrix windows, crop straightening, bright spots,
+  like the Windows front-end.
 * **HiDPI / 4K screens**: Avalonia scales the interface from `Xft.dpi` or the `AVALONIA_*` / `QT_*`
   scale variables; without any of them a 4K monitor would get scale 1 and 11 px text. The app
   therefore asks the X server for the screen's pixel and physical size before starting and sets

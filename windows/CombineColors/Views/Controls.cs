@@ -83,6 +83,15 @@ public sealed class SliderRow : Grid, IRefreshable
         Refresh();
     }
 
+    /// <summary>Colours the slider's filled track and thumb (e.g. with a channel's colour).</summary>
+    public SliderRow Tinted(Brush brush)
+    {
+        foreach (var key in new[] { "SliderTrackValueFill", "SliderTrackValueFillPointerOver", "SliderTrackValueFillPressed", "SliderThumbBackground", "SliderThumbBackgroundPointerOver", "SliderThumbBackgroundPressed" })
+            slider.Resources[key] = brush;
+        slider.Foreground = brush;
+        return this;
+    }
+
     public void Refresh()
     {
         updating = true;

@@ -55,6 +55,8 @@ using AstroCore;
 //      --method starnetLinear | appStretch   StarNet2's linear mode (default) or the stretch below, undone afterwards
 //      --stretch <method>     autoSTF | arcsinh | ghs | log | mtf (for appStretch);  --target <0..1>  --shadows <MADN>
 //      --upsample             StarNet2's intermediate 2x upsampling (slower)
+//      --directml             Windows: download Microsoft DirectML 1.15.4 next to starnet2.exe when Windows only has an older one
+//                             (StarNet2 then uses the graphics card; without files it only installs)
 
 var args_ = new List<string>(args);
 if (args_.Count == 0) { Console.WriteLine("usage: combinecolors-cli (info|render|palettes|starnet) …"); return 1; }
@@ -409,6 +411,7 @@ switch (command)
         var installRoot = Option("--install-root");
         var installZip = Option("--install");
         bool download = Flag("--download");
+        bool directML = Flag("--directml");
         var opts = new StarRemovalOptions();
         if (Option("--method") is string m)
         {
@@ -457,6 +460,16 @@ switch (command)
         }
         Console.WriteLine($"StarNet2 {found.Info.Version} ({found.Info.Backend}): {found.Executable}");
         if (found.LicenseFile is string lic) Console.WriteLine($"license: {lic}");
+        var dml = DirectML.Check(found.Executable);
+        if (dml.State == DirectMLState.Outdated && directML)
+        {
+            Console.WriteLine($"downloading DirectML {dml.Available} from nuget.org into {Path.GetDirectoryName(found.Executable)}…");
+            try { DirectML.InstallAsync(found.Executable).GetAwaiter().GetResult(); dml = DirectML.Check(found.Executable); Console.WriteLine($"DirectML {dml.Found} installed"); }
+            catch (StarNetError e) { Console.WriteLine(e.Message); return 1; }
+        }
+        else if (dml.State == DirectMLState.Outdated)
+            Console.WriteLine($"note: Windows has DirectML {dml.Found?.ToString() ?? "(none)"}; StarNet2 needs {dml.Available} for the graphics card and runs on the CPU. --directml downloads it from Microsoft (nuget.org) next to the program.");
+        if (directML && args_.Count == 0) return 0;
 
         int failures = 0;
         foreach (var path in args_)
