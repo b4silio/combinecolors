@@ -161,17 +161,28 @@ public struct ToneSettings: Codable, Equatable, Hashable {
     public var isNeutral: Bool { exposure == 0 && brightness == 0 && contrast == 0 && highlights == 0 && shadows == 0 }
 }
 
+/// Tonal region the Colour block acts on, by the luma of its input (see `PostProcess.colourRangeWeight`).
+public enum ColourRange: String, Codable, CaseIterable, Identifiable {
+    case all, shadows, midtones, highlights
+    public var id: String { rawValue }
+    public var displayName: String { rawValue.capitalized }
+}
+
 public struct PostSettings: Codable, Equatable, Hashable {
     public var saturation: Float = 1
     public var scnrGreen: Float = 0
+    /// Magenta removal: SCNR green on the inverted image (G' = max(G, (R+B)/2) at full strength).
+    public var scnrMagenta: Float = 0
     public var hueShift: Float = 0        // degrees
+    /// The tones the colour controls apply to; the rest of the picture keeps its colours.
+    public var colourRange: ColourRange = .all
     public var gamma: Float = 1
     public var blackPoint: Float = 0
     public var whitePoint: Float = 1
     public var vibrance: Float = 0       // boosts low-saturation pixels only
     public init() {}
     /// The colour part (the Colour block); black / white point and gamma belong to the Contrast block.
-    public var colourIsNeutral: Bool { saturation == 1 && scnrGreen == 0 && hueShift == 0 && vibrance == 0 }
+    public var colourIsNeutral: Bool { saturation == 1 && scnrGreen == 0 && scnrMagenta == 0 && hueShift == 0 && vibrance == 0 }
     public var levelsAreNeutral: Bool { gamma == 1 && blackPoint == 0 && whitePoint == 1 }
 }
 

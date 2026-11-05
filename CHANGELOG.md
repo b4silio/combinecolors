@@ -5,6 +5,10 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 (`scripts/bump.sh`). The version lives in `VERSION` and is stamped into the app at build time;
 `scripts/release.sh` tags it and publishes the DMG as a GitHub release.
 
+## [1.20.0] – 2026-11-05
+
+- Colour block: a switch (All, Shadows, Midtones, Highlights) applies saturation, vibrance, hue shift and SCNR to those tones only, blending smoothly by brightness; new SCNR magenta removes a magenta cast (SCNR green on the inverted image); the SCNR sliders now sit under Hue shift
+
 ## [1.19.1] – 2026-11-05
 
 - Fix: Sharpen was a high-frequency boost (it brightened bright areas and fine texture). It now deconvolves (Richardson–Lucy against a Gaussian of the radius, damped on noise) by default, with a corrected unsharp mask as the other choice; both are kept from making rings around stars

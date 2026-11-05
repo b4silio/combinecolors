@@ -241,6 +241,83 @@ final class PostProcessTests: XCTestCase {
         XCTAssertEqual(img.r.pointer[1], 0.2, accuracy: 1e-6)
     }
 
+    func testSCNRMagentaLiftsGreenOnly() {
+        let img = RGBImage(width: 3, height: 1)
+        img.r.pointer.update(from: [0.8, 0.2, 0.6], count: 3)
+        img.g.pointer.update(from: [0.2, 0.8, 0.3], count: 3)
+        img.b.pointer.update(from: [0.6, 0.2, 0.6], count: 3)
+        PostProcess.scnrMagenta(img, amount: 1)
+        XCTAssertEqual(img.g.pointer[0], 0.7, accuracy: 1e-6)   // max(0.2, (0.8+0.6)/2)
+        XCTAssertEqual(img.g.pointer[1], 0.8, accuracy: 1e-6)   // green already above the mean: unchanged
+        XCTAssertEqual(img.r.pointer[0], 0.8, accuracy: 1e-6)
+        XCTAssertEqual(img.b.pointer[0], 0.6, accuracy: 1e-6)
+        // Half strength goes half way; it equals green removal on the inverted image.
+        let inv = RGBImage(width: 1, height: 1), half = RGBImage(width: 1, height: 1)
+        for (k, v) in [0.6, 0.3, 0.6].enumerated() { inv.planes[k].pointer[0] = Float(1 - v); half.planes[k].pointer[0] = Float(v) }
+        PostProcess.scnr(inv, amount: 0.5)
+        PostProcess.scnrMagenta(half, amount: 0.5)
+        XCTAssertEqual(half.g.pointer[0], 0.45, accuracy: 1e-6)
+        XCTAssertEqual(half.g.pointer[0], 1 - inv.g.pointer[0], accuracy: 1e-6)
+    }
+
+    func testColourRangeWeightsPartitionUnity() {
+        for k in 0...100 {
+            let y = Float(k) / 100
+            let sum = [ColourRange.shadows, .midtones, .highlights].map { PostProcess.colourRangeWeight(y, range: $0) }.reduce(0, +)
+            XCTAssertEqual(sum, 1, accuracy: 1e-5, "y = \(y)")
+            XCTAssertEqual(PostProcess.colourRangeWeight(y, range: .all), 1)
+        }
+        XCTAssertEqual(PostProcess.colourRangeWeight(0.1, range: .shadows), 1)
+        XCTAssertEqual(PostProcess.colourRangeWeight(0.5, range: .midtones), 1, accuracy: 1e-6)
+        XCTAssertEqual(PostProcess.colourRangeWeight(0.9, range: .highlights), 1)
+        XCTAssertEqual(PostProcess.colourRangeWeight(0.9, range: .shadows), 0)
+        XCTAssertEqual(PostProcess.colourRangeWeight(0.1, range: .highlights), 0)
+    }
+
+    /// A tonal range limits the Colour block to those tones; the three ranges add up to *All*
+    /// for a change that is linear and does not clip (saturation).
+    func testColourRangeLimitsTheColourBlock() {
+        func image() -> RGBImage {
+            let img = RGBImage(width: 3, height: 1)   // dark, mid and bright tinted pixels
+            img.r.pointer.update(from: [0.12, 0.55, 0.92], count: 3)
+            img.g.pointer.update(from: [0.06, 0.45, 0.85], count: 3)
+            img.b.pointer.update(from: [0.04, 0.40, 0.80], count: 3)
+            return img
+        }
+        var s = PostSettings(); s.saturation = 0
+        let ref = image()
+        s.colourRange = .shadows
+        let shadows = image(); PostProcess.apply(s, to: shadows)
+        XCTAssertEqual(shadows.r.pointer[0], shadows.b.pointer[0], accuracy: 1e-6, "the dark pixel turns grey")
+        XCTAssertEqual(shadows.r.pointer[2], ref.r.pointer[2], accuracy: 1e-6, "the bright pixel keeps its colour")
+        s.colourRange = .highlights
+        let highlights = image(); PostProcess.apply(s, to: highlights)
+        XCTAssertEqual(highlights.r.pointer[2], highlights.b.pointer[2], accuracy: 1e-6)
+        XCTAssertEqual(highlights.r.pointer[0], ref.r.pointer[0], accuracy: 1e-6)
+
+        s.saturation = 0.5
+        var sum = [Float](repeating: 0, count: 9)
+        for range in [ColourRange.shadows, .midtones, .highlights] {
+            s.colourRange = range
+            let img = image(); PostProcess.apply(s, to: img)
+            for (k, (p, q)) in zip(img.planes, ref.planes).enumerated() { for i in 0..<3 { sum[k * 3 + i] += p.pointer[i] - q.pointer[i] } }
+        }
+        s.colourRange = .all
+        let all = image(); PostProcess.apply(s, to: all)
+        for (k, (p, q)) in zip(all.planes, ref.planes).enumerated() {
+            for i in 0..<3 { XCTAssertEqual(sum[k * 3 + i], p.pointer[i] - q.pointer[i], accuracy: 1e-5) }
+        }
+    }
+
+    func testPostSettingsDecodeNewColourKeys() throws {
+        let old = try JSONDecoder().decode(PostSettings.self, from: Data(#"{"saturation": 1.2, "scnrGreen": 0.5}"#.utf8))
+        XCTAssertEqual(old.scnrMagenta, 0)
+        XCTAssertEqual(old.colourRange, .all)
+        var s = PostSettings(); s.scnrMagenta = 0.4; s.colourRange = .highlights
+        XCTAssertFalse(s.colourIsNeutral)
+        XCTAssertEqual(try JSONDecoder().decode(PostSettings.self, from: try JSONEncoder().encode(s)), s)
+    }
+
     func testHueShiftFullCircleIsIdentity() {
         let img = sample(), ref = sample()
         PostProcess.hueShift(img, degrees: 360)

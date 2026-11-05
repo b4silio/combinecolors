@@ -56,9 +56,10 @@ struct ControlsStripView: View {
                              reset: reset(model.settings.luminance == LuminanceSettings(), "the luminance injection") { $0.luminance = LuminanceSettings() }) { luminanceSection }
                 ControlBlock(title: "Colour bands", width: 226, expanded: binding("bands"), dragScroll: dragScroll, minHeight: contentHeight - 12,
                              reset: reset(model.settings.colorBands == ColorBandsSettings(), "every colour band and the softness") { $0.colorBands = ColorBandsSettings() }) { colorBandsSection }
-                ControlBlock(title: "Colour", width: 250, expanded: binding("colour"), dragScroll: dragScroll, minHeight: contentHeight - 12,
-                             reset: reset(model.settings.post.colourIsNeutral, "saturation, vibrance, SCNR and hue") {
-                                 $0.post.saturation = 1; $0.post.vibrance = 0; $0.post.scnrGreen = 0; $0.post.hueShift = 0
+                ControlBlock(title: "Colour", width: 262, expanded: binding("colour"), dragScroll: dragScroll, minHeight: contentHeight - 12,
+                             reset: reset(model.settings.post.colourIsNeutral && model.settings.post.colourRange == .all, "saturation, vibrance, hue, SCNR and the tonal range") {
+                                 $0.post.saturation = 1; $0.post.vibrance = 0; $0.post.scnrGreen = 0; $0.post.scnrMagenta = 0
+                                 $0.post.hueShift = 0; $0.post.colourRange = .all
                              }) { colourSection }
                 ControlBlock(title: "Balance", width: 262, expanded: binding("balance"), dragScroll: dragScroll, minHeight: contentHeight - 12,
                              reset: reset(model.settings.grading == ColorGradingSettings(), "the colour balance and the selective colour") { $0.grading = ColorGradingSettings() }) { balanceSection }
@@ -368,10 +369,17 @@ struct ControlsStripView: View {
 
     @ViewBuilder var colourSection: some View {
         let p = $model.settings.post
-        SliderRow(title: "Saturation", value: p.saturation, range: 0...3, defaultValue: 1)
-        SliderRow(title: "Vibrance", value: p.vibrance, range: -1...2, defaultValue: 0, help: "Saturation boost that acts mostly on the less saturated colours.")
-        SliderRow(title: "SCNR green", value: p.scnrGreen, range: 0...1, defaultValue: 0, help: "Average-neutral green removal.")
-        SliderRow(title: "Hue shift", value: p.hueShift, range: -180...180, defaultValue: 0, format: "%.0f")
+        let lw: CGFloat = 92
+        Picker("", selection: p.colourRange) { ForEach(ColourRange.allCases) { Text($0.displayName).tag($0) } }
+            .pickerStyle(.segmented).labelsHidden().controlSize(.mini).fixedSize()
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.bottom, 3)
+            .help("Tones the controls below act on, by brightness: Shadows below about ⅓, Midtones around ½, Highlights above about ⅔, blending smoothly; the other tones keep their colours")
+        SliderRow(title: "Saturation", value: p.saturation, range: 0...3, defaultValue: 1, labelWidth: lw)
+        SliderRow(title: "Vibrance", value: p.vibrance, range: -1...2, defaultValue: 0, help: "Saturation boost that acts mostly on the less saturated colours.", labelWidth: lw)
+        SliderRow(title: "Hue shift", value: p.hueShift, range: -180...180, defaultValue: 0, format: "%.0f", labelWidth: lw)
+        SliderRow(title: "SCNR green", value: p.scnrGreen, range: 0...1, defaultValue: 0, help: "Average-neutral green removal.", labelWidth: lw)
+        SliderRow(title: "SCNR magenta", value: p.scnrMagenta, range: 0...1, defaultValue: 0, help: "Average-neutral magenta removal (SCNR green on the inverted image): lifts green where it is below the mean of red and blue, so magenta casts and stars turn neutral.", labelWidth: lw)
     }
 
     // MARK: Contrast (tone, after Balance)

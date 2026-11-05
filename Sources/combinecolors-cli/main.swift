@@ -12,7 +12,8 @@ import AstroCore
 //      --stretch <method>     autoSTF | arcsinh | ghs | log | mtf | none
 //      --linked               linked stretch
 //      --max <pixels>         preview pixel budget (default 2000000); 0 = full resolution
-//      --scnr <0..1>          green removal amount
+//      --scnr <0..1>          green removal amount;  --scnr-magenta <0..1>  magenta removal amount
+//      --colour-range <r>     all | shadows | midtones | highlights: tones the Colour block acts on
 //      --exposure <EV>  --brightness <-1..1>  --contrast <-1..1>  --highlights <-1..1>  --shadows <-1..1>   Contrast block
 //      --sat <factor>         saturation
 //      --hue <deg>            hue shift
@@ -110,6 +111,8 @@ case "render":
     let linked = flag("--linked")
     let maxPixels = Int(option("--max") ?? "2000000") ?? 2_000_000
     let scnr = Float(option("--scnr") ?? "0") ?? 0
+    let scnrMagenta = Float(option("--scnr-magenta") ?? "0") ?? 0
+    let colourRange = option("--colour-range").flatMap(ColourRange.init(rawValue:))
     let sat = Float(option("--sat") ?? "1") ?? 1
     let hue = Float(option("--hue") ?? "0") ?? 0
     var tone = ToneSettings()
@@ -264,6 +267,8 @@ case "render":
     if let sm = stretchArg, let m = StretchMethod(rawValue: sm) { settings.stretch.method = m }
     settings.stretch.linked = linked
     settings.post.scnrGreen = scnr
+    settings.post.scnrMagenta = scnrMagenta
+    if let colourRange { settings.post.colourRange = colourRange }
     if !tone.isNeutral { settings.tone = tone }
     settings.post.saturation = sat
     settings.post.hueShift = hue

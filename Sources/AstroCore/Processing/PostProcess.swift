@@ -13,13 +13,56 @@ public struct DetailOverview {
 /// Colour post-processing on stretched [0,1] RGB data. Everything is point-wise.
 public enum PostProcess {
 
-    /// The Colour block: hue, vibrance, saturation, SCNR (the levels are in `applyTone`).
+    /// The Colour block: hue, vibrance, saturation, SCNR green / magenta (the levels are in
+    /// `applyTone`). With a tonal range other than *All*, the result is mixed back into the input
+    /// by the range's weight of each pixel's input luma, so the other tones keep their colours.
     public static func apply(_ s: PostSettings, to img: RGBImage) {
+        let restrict = s.colourRange != .all && !s.colourIsNeutral
+        let original = restrict ? img.copy() : nil
         if s.hueShift != 0 { hueShift(img, degrees: s.hueShift) }
         if s.vibrance != 0 { vibrance(img, amount: s.vibrance) }
         if s.saturation != 1 { saturation(img, factor: s.saturation) }
         if s.scnrGreen > 0 { scnr(img, amount: s.scnrGreen) }
+        if s.scnrMagenta > 0 { scnrMagenta(img, amount: s.scnrMagenta) }
         img.clamp01()
+        if let original {
+            mix(img, original: original, weights: colourRangeMask(original, range: s.colourRange))
+            img.clamp01()
+        }
+    }
+
+    /// Weight of `range` at luma `y`: a smooth partition of unity (the three ranges add up to 1)
+    /// with cross-overs at ⅓ and ⅔ — shadows are full below ⅙ and gone above ½, highlights the
+    /// mirror image, midtones the rest (full at ½).
+    @inline(__always) public static func colourRangeWeight(_ y: Float, range: ColourRange) -> Float {
+        @inline(__always) func smoothstep(_ a: Float, _ b: Float, _ x: Float) -> Float {
+            let t = min(max((x - a) / (b - a), 0), 1)
+            return t * t * (3 - 2 * t)
+        }
+        let shadows = 1 - smoothstep(1 / 6, 0.5, y), highlights = smoothstep(0.5, 5 / 6, y)
+        switch range {
+        case .all: return 1
+        case .shadows: return shadows
+        case .highlights: return highlights
+        case .midtones: return max(0, 1 - shadows - highlights)
+        }
+    }
+
+    /// Per-pixel weight of `range` from the image's Rec. 709 luma.
+    public static func colourRangeMask(_ img: RGBImage, range: ColourRange) -> PlanarImage {
+        let y = img.luma()
+        let p = y.pointer
+        for i in 0..<y.count { p[i] = colourRangeWeight(p[i], range: range) }
+        return y
+    }
+
+    /// img = original + w · (img − original), per plane.
+    static func mix(_ img: RGBImage, original: RGBImage, weights: PlanarImage) {
+        let n = vDSP_Length(weights.count)
+        for (p, o) in zip(img.planes, original.planes) {
+            vDSP_vsub(o.pointer, 1, p.pointer, 1, p.pointer, 1, n)
+            vDSP_vma(p.pointer, 1, weights.pointer, 1, o.pointer, 1, p.pointer, 1, n)
+        }
     }
 
     /// The Contrast block, per channel: exposure (gain), black / white point, shadows, highlights,
@@ -110,6 +153,19 @@ public enum PostProcess {
         var half: Float = 0.5
         vDSP_vsmul(tmp.pointer, 1, &half, tmp.pointer, 1, n)
         vDSP_vmin(tmp.pointer, 1, img.g.pointer, 1, tmp.pointer, 1, n)
+        var a = amount, oneMinus = 1 - amount
+        vDSP_vsmsma(tmp.pointer, 1, &a, img.g.pointer, 1, &oneMinus, img.g.pointer, 1, n)
+    }
+
+    /// Magenta removal, SCNR "average neutral" on the inverted image (the usual invert → SCNR green
+    /// → invert): G' = (1-a) G + a max(G, (R+B)/2), so a magenta cast turns neutral by lifting green.
+    public static func scnrMagenta(_ img: RGBImage, amount: Float) {
+        let n = vDSP_Length(img.width * img.height)
+        let tmp = PlanarImage(width: img.width, height: img.height)
+        vDSP_vadd(img.r.pointer, 1, img.b.pointer, 1, tmp.pointer, 1, n)
+        var half: Float = 0.5
+        vDSP_vsmul(tmp.pointer, 1, &half, tmp.pointer, 1, n)
+        vDSP_vmax(tmp.pointer, 1, img.g.pointer, 1, tmp.pointer, 1, n)
         var a = amount, oneMinus = 1 - amount
         vDSP_vsmsma(tmp.pointer, 1, &a, img.g.pointer, 1, &oneMinus, img.g.pointer, 1, n)
     }

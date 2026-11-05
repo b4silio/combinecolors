@@ -87,6 +87,7 @@ extension PostSettings {
         saturation = c.value("saturation", d.saturation); scnrGreen = c.value("scnrGreen", d.scnrGreen); hueShift = c.value("hueShift", d.hueShift)
         gamma = c.value("gamma", d.gamma); blackPoint = c.value("blackPoint", d.blackPoint); whitePoint = c.value("whitePoint", d.whitePoint)
         vibrance = c.value("vibrance", d.vibrance)
+        scnrMagenta = c.value("scnrMagenta", d.scnrMagenta); colourRange = c.value("colourRange", d.colourRange)
     }
 }
 
