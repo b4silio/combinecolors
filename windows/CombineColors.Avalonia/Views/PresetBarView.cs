@@ -15,13 +15,23 @@ public sealed class PresetBarView : DockPanel
     readonly Window owner;
     readonly StackPanel row = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
     readonly Button save;
+    readonly Button defaults;
 
     public PresetBarView(ProjectModel model, Window owner)
     {
         this.model = model; this.owner = owner;
         Height = 78;
         Background = AppTheme.PanelBackground;
-        save = new Button { Width = 70, Height = 62, Margin = new Thickness(8, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center, Padding = new Thickness(0), HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center };
+        // The default look of the current palette, as a fixed first "preset".
+        defaults = new Button { Width = 70, Height = 62, Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center, Padding = new Thickness(0), HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center };
+        ToolTip.SetTip(defaults, "The default settings of the current palette (stretch, normalisation, luminance… as on a fresh load); crop, presets and the stars combination stay");
+        var dc = new StackPanel();
+        dc.Children.Add(new TextBlock { Text = "✧", FontSize = 18, HorizontalAlignment = HorizontalAlignment.Center });
+        dc.Children.Add(new TextBlock { Text = "Default", FontSize = 10, HorizontalAlignment = HorizontalAlignment.Center });
+        defaults.Content = dc;
+        defaults.Click += (_, _) => model.ApplyDefaultSettings();
+        Children.Add(defaults);
+        save = new Button { Width = 70, Height = 62, Margin = new Thickness(6, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center, Padding = new Thickness(0), HorizontalContentAlignment = HorizontalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center };
         ToolTip.SetTip(save, "Remember the current settings with a thumbnail");
         var content = new StackPanel();
         content.Children.Add(new TextBlock { Text = "+", FontSize = 18, HorizontalAlignment = HorizontalAlignment.Center });
@@ -30,13 +40,17 @@ public sealed class PresetBarView : DockPanel
         save.Click += (_, _) => model.SavePreset();
         Children.Add(save);
         Children.Add(new ScrollViewer { HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = row, VerticalAlignment = VerticalAlignment.Center });
-        model.Changed += what => { if (what is Change.Presets or Change.Settings or Change.Sources or Change.Frame) Rebuild(); };
+        model.Changed += what => { if (what is Change.Presets or Change.Settings or Change.Sources or Change.Frame or Change.Layer) Rebuild(); };
         Rebuild();
     }
 
     void Rebuild()
     {
         save.IsEnabled = model.Sources.Count > 0 && model.Frame != null;
+        defaults.IsEnabled = model.Sources.Count > 0;
+        bool isDefault = model.Sources.Count > 0 && model.Settings.Equals(model.DefaultSettings());
+        if (isDefault) { defaults.BorderBrush = AppTheme.AccentBrush; defaults.BorderThickness = new Thickness(2); }
+        else { defaults.ClearValue(Button.BorderBrushProperty); defaults.ClearValue(Button.BorderThicknessProperty); }
         row.Children.Clear();
         var active = model.ActivePresetId;
         foreach (var p in model.Presets)

@@ -44,13 +44,86 @@ public class StretchTests
         A.Close(s.TargetBackground, r.Evaluate(0.4f), 1e-4f);
     }
 
+    /// <summary>Linear stacks of very different depth: the manual strengths are relative to the noise, so
+    /// the default of every method puts the sky at a similar, sensible level on both.</summary>
+    [Fact]
+    public void ManualStrengthsAreRelativeToTheNoise()
+    {
+        static ChannelStats Stack(float sky, float noise)
+        {
+            // Gaussian-ish sky (deterministic) plus a sparse bright tail.
+            var v = new List<float>();
+            for (int i = 0; i < 20000; i++)
+            {
+                double u = (i + 0.5) / 20000;
+                float z = (float)(Math.Sqrt(2) * ErfInv(2 * u - 1));
+                v.Add(MathF.Max(sky + noise * z, 0));
+            }
+            for (int i = 0; i < 200; i++) v.Add(MathF.Min(sky + i * 0.004f, 1));
+            return Statistics.FromSample(v.ToArray());
+        }
+        ChannelStats deep = Stack(0.006f, 0.0003f), noisy = Stack(0.05f, 0.01f);
+        foreach (var method in new[] { StretchMethod.Mtf, StretchMethod.Arcsinh, StretchMethod.Ghs, StretchMethod.Log })
+        {
+            var s = new StretchSettings { Method = method };
+            foreach (var st in new[] { deep, noisy })
+            {
+                float sky = Stretch.Resolve(s, st).Evaluate(st.Median);
+                Assert.True(sky > 0.12f, $"{method} sky too dark: {sky}");
+                Assert.True(sky < 0.38f, $"{method} sky too bright: {sky}");
+            }
+            // Brighter with more strength (lower midtones for the MTF).
+            var stronger = s.Clone();
+            switch (method)
+            {
+                case StretchMethod.Mtf: stronger.MtfMidtonesSigma = 3; break;
+                case StretchMethod.Arcsinh: stronger.ArcsinhStrength = 10; break;
+                case StretchMethod.Ghs: stronger.GhsStrength = 1; break;
+                default: stronger.LogStrength = 10; break;
+            }
+            Assert.True(Stretch.Resolve(stronger, deep).Evaluate(deep.Median) > Stretch.Resolve(s, deep).Evaluate(deep.Median), method.ToString());
+        }
+    }
+
+    [Fact]
+    public void GhsPointsArePercentilesOfTheImage()
+    {
+        var st = Statistics.FromSample(Enumerable.Range(0, 1001).Select(i => i / 1000f * 0.02f).ToArray());
+        var s = new StretchSettings { Method = StretchMethod.Ghs, ShadowsClipping = -6, GhsSPPercentile = 50, GhsHPPercentile = 100 };
+        var r = Stretch.Resolve(s, st);
+        float expected = (st.Percentile(0.5) - r.C0) / (r.C1 - r.C0);
+        A.Close(expected, r.GhsSP, 1e-5f);
+        Assert.Equal(1f, r.GhsHP);
+        s.GhsLPPercentile = 80;   // above SP: held at SP
+        A.Close(r.GhsSP, Stretch.Resolve(s, st).GhsLP, 1e-6f);
+    }
+
+    /// <summary>Inverse error function (Giles 2010 approximation), for synthetic Gaussian samples.</summary>
+    static double ErfInv(double x)
+    {
+        double w = -Math.Log((1 - x) * (1 + x)), p;
+        if (w < 5)
+        {
+            w -= 2.5;
+            p = 2.81022636e-08; p = 3.43273939e-07 + p * w; p = -3.5233877e-06 + p * w; p = -4.39150654e-06 + p * w;
+            p = 0.00021858087 + p * w; p = -0.00125372503 + p * w; p = -0.00417768164 + p * w; p = 0.246640727 + p * w; p = 1.50140941 + p * w;
+        }
+        else
+        {
+            w = Math.Sqrt(w) - 3;
+            p = -0.000200214257; p = 0.000100950558 + p * w; p = 0.00134934322 + p * w; p = -0.00367342844 + p * w;
+            p = 0.00573950773 + p * w; p = -0.0076224613 + p * w; p = 0.00943887047 + p * w; p = 1.00167406 + p * w; p = 2.83297682 + p * w;
+        }
+        return p * x;
+    }
+
     [Fact]
     public void OtherMethodsMonotonicAndBounded()
     {
         var stats = Statistics.FromSample(Enumerable.Range(0, 1000).Select(i => i / 1000f).ToArray());
         foreach (var method in new[] { StretchMethod.Arcsinh, StretchMethod.Ghs, StretchMethod.Log, StretchMethod.Mtf })
         {
-            var s = new StretchSettings { Method = method, GhsLogD = 4, GhsB = 1.5f, GhsSP = 0.1f, GhsLP = 0.05f, GhsHP = 0.9f };
+            var s = new StretchSettings { Method = method, GhsStrength = 0.5f, GhsB = 1.5f, GhsSPPercentile = 40, GhsLPPercentile = 20, GhsHPPercentile = 90 };
             var r = Stretch.Resolve(s, stats);
             float prev = -1;
             for (int i = 0; i <= 200; i++)

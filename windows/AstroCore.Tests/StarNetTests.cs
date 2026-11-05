@@ -213,15 +213,13 @@ public sealed class StarNetTests : IDisposable
         foreach (var method in StretchMethods.All)
         {
             var s = new StretchSettings { Method = method };
-            if (method == StretchMethod.Mtf) { s.MtfShadows = 0.05f; s.MtfMidtones = 0.2f; s.MtfHighlights = 0.9f; }
-            if (method == StretchMethod.Ghs) s.GhsSP = 0.02f;
+            if (method == StretchMethod.Ghs) s.GhsSPPercentile = 30;
             s.Gamma = method == StretchMethod.Log ? 0.8f : 1;
             var r = Stretch.Resolve(s, stats);
             var inv = new InverseStretch(r);
             float lo = method == StretchMethod.None ? 0 : r.C0, hi = method == StretchMethod.None ? 1 : r.C1;
-            // The inverse is only defined where the stretch is not clipped (between the black and white points;
-            // for the manual MTF also inside its own shadows / highlights).
-            float a = method == StretchMethod.Mtf ? lo + 0.05f * (hi - lo) : lo, b = method == StretchMethod.Mtf ? lo + 0.9f * (hi - lo) : hi;
+            // The inverse is only defined where the stretch is not clipped (between the black and white points).
+            float a = lo, b = hi;
             float worst = 0;
             for (int i = 1; i < 200; i++)
             {

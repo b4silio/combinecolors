@@ -343,43 +343,110 @@ public static partial class PostProcess
         return Convolve.Separable(p, k, true);
     }
 
-    /// <summary>
-    /// Unsharp mask: t += amount × (t − blur) with the blur taken from the star-capped image and
-    /// darkening halved, like the other scales. <paramref name="sigma"/> is in pixels of t.
-    /// <paramref name="masking"/> (0…1) fades the mask out where the high-pass is below
-    /// masking × 4σ of the high-pass noise (median absolute deviation), so flat noisy sky is left
-    /// alone and edges are sharpened.
-    /// </summary>
-    static void Sharpen(float[] t, int n, int width, PlanarImage source, float sigma, float amount, float masking = 0, float? cap = null)
+    /// <summary>Noise of a luminance: median absolute deviation of its high-pass (y − blur), as a σ.</summary>
+    static float HighPassNoise(float[] y, float[] blur, int n)
     {
-        var blur = GaussianBlur(StarCapped(source, cap), sigma);
-        var bp = blur.Data;
-        float threshold = 0;
-        if (masking > 0)
+        int step = Math.Max(1, n / 200_000);
+        var sample = new float[(n + step - 1) / step];
+        for (int i = 0, j = 0; i < n; i += step, j++) sample[j] = MathF.Abs(y[i] - blur[i]);
+        Array.Sort(sample);
+        return Statistics.Percentile(sample, 0.5) / 0.6745f;
+    }
+
+    /// <summary>Weight of the sharpening at a high-pass value d for a noise-relative threshold: a smooth
+    /// ramp from 0 at half the threshold to 1 at the threshold (1 everywhere without masking).</summary>
+    static float MaskWeight(float d, float threshold)
+    {
+        if (threshold <= 0) return 1;
+        float w = MathF.Min(MathF.Max((MathF.Abs(d) - 0.5f * threshold) / (0.5f * threshold), 0), 1);
+        return w * w * (3 - 2 * w);
+    }
+
+    /// <summary>
+    /// Sharpens the luminance <paramref name="t"/> (in place; <paramref name="source"/> is a copy of it)
+    /// by undoing a Gaussian blur of σ = <paramref name="sigma"/> pixels of t.
+    /// <list type="bullet">
+    /// <item>Deconvolution: Richardson–Lucy, est ← est · G ⊛ (y / G ⊛ est), ⌈10 × amount⌉ iterations
+    /// (the last one blended so the amount is continuous). The update is damped where the residual
+    /// y − G ⊛ est is within about a noise σ (more with masking; Starck-style), so flat noisy sky is
+    /// not "deconvolved" into grain.</item>
+    /// <item>Unsharp mask: t += amount × (t − G ⊛ t), masked the same way.</item>
+    /// </list>
+    /// The result stays within the local range of the input (over about 1.5 σ) — no dark rings around
+    /// stars, no bright fringes — except that deconvolution may raise the local maxima themselves
+    /// (tightening stars is what it is for). Pixels at zero (padding) stay zero.
+    /// </summary>
+    internal static void Sharpen(float[] t, int n, int width, PlanarImage source, float sigma, float amount, float masking = 0,
+                                 SharpenMethod method = SharpenMethod.Deconvolution)
+    {
+        var y = source.Data;
+        var blurred = GaussianBlur(source, sigma);
+        // Deconvolution always damps a little (residuals within about one noise σ are noise, and
+        // undoing them only breeds grain); Masking raises that, as it does for the unsharp mask.
+        float floor = method == SharpenMethod.Deconvolution ? 1.2f : 0;
+        float noise = HighPassNoise(y, blurred.Data, n);
+        float threshold = MathF.Max(masking * 4, floor) * noise;
+        int h = n / width;
+        var o = new float[n];
+        if (method == SharpenMethod.UnsharpMask)
         {
-            int step = Math.Max(1, n / 200_000);
-            var sample = new List<float>(n / step + 1);
-            for (int i = 0; i < n; i += step) sample.Add(MathF.Abs(t[i] - bp[i]));
-            var arr = sample.ToArray();
-            Array.Sort(arr);
-            float noise = Statistics.Percentile(arr, 0.5) / 0.6745f;
-            threshold = masking * 4 * noise;
+            var bp = blurred.Data;
+            Par.Rows(h, width * 4, (y0, y1) =>
+            {
+                for (int i = y0 * width; i < y1 * width; i++)
+                {
+                    float d = y[i] - bp[i];
+                    o[i] = y[i] + amount * d * MaskWeight(d, threshold);
+                }
+            });
         }
-        Par.Rows(n / width, width * 4, (y0, y1) =>
+        else
+        {
+            int iterations = Math.Max(1, (int)MathF.Ceiling(amount * 10));
+            var est = source.Copy();
+            var e = est.Data;
+            var ratio = new PlanarImage(source.Width, source.Height);
+            var rp = ratio.Data;
+            for (int k = 0; k < iterations; k++)
+            {
+                var cp = (k == 0 ? blurred : GaussianBlur(est, sigma)).Data;
+                Par.Rows(h, width * 4, (y0, y1) =>
+                {
+                    for (int i = y0 * width; i < y1 * width; i++)
+                    {
+                        float c = cp[i];
+                        if (c <= 1e-6f || y[i] <= 0) { rp[i] = 1; continue; }
+                        float q = y[i] / c;
+                        rp[i] = 1 + (q - 1) * MaskWeight(y[i] - c, threshold);
+                    }
+                });
+                var gp = GaussianBlur(ratio, sigma).Data;
+                Par.Rows(h, width * 2, (y0, y1) =>
+                {
+                    for (int i = y0 * width; i < y1 * width; i++) e[i] = MathF.Max(e[i] * MathF.Min(MathF.Max(gp[i], 0.2f), 5), 0);
+                });
+            }
+            // The last iteration counts in part: amount 0.25 = 2.5 iterations' worth.
+            float f = amount * 10 / iterations;
+            for (int i = 0; i < n; i++) o[i] = y[i] + (e[i] - y[i]) * f;
+        }
+        int side = 2 * Math.Max(1, (int)MathF.Ceiling(1.5f * sigma)) + 1;
+        var lp = Convolve.ErodeMin(source, side).Data;
+        var hp = Convolve.DilateMax(source, side).Data;
+        // Deconvolution may raise a peak above its surroundings (tightening stars is what it is for),
+        // but nothing else rises above the local maximum, so no bright ring forms around a star
+        // either; the unsharp mask stays within the local range everywhere.
+        bool deconv = method == SharpenMethod.Deconvolution;
+        float minContrast = MathF.Max(4 * noise, 0.01f);
+        Par.Rows(h, width * 2, (y0, y1) =>
         {
             for (int i = y0 * width; i < y1 * width; i++)
             {
-                float l = t[i];
-                float d = l - bp[i];
-                float delta = amount * d;
-                if (threshold > 0)
-                {
-                    // Smooth ramp from 0 at half the threshold to 1 at the threshold.
-                    float w = MathF.Min(MathF.Max((MathF.Abs(d) - 0.5f * threshold) / (0.5f * threshold), 0), 1);
-                    delta *= w * w * (3 - 2 * w);
-                }
-                if (delta < 0) delta *= 0.5f;
-                t[i] = MathF.Min(MathF.Max(l + delta, 0), 1);
+                if (y[i] == 0) { t[i] = 0; continue; }
+                // A peak: the upper part of a neighbourhood with real contrast (not flat sky).
+                float contrast = hp[i] - lp[i];
+                bool peak = deconv && contrast > minContrast && y[i] - lp[i] >= 0.6f * contrast;
+                t[i] = MathF.Min(MathF.Max(MathF.Max(o[i], lp[i]), 0), peak ? 1 : MathF.Min(hp[i], 1));
             }
         });
     }
@@ -461,7 +528,7 @@ public static partial class PostProcess
             // Below ~0.25 px the blur is the identity and the mask vanishes (a down-sampled preview
             // of a 1 px sharpening legitimately shows nothing).
             float sigma = d.SharpenRadius * scale;
-            if (sigma >= 0.25f) Sharpen(t, n, w, target, sigma, d.Sharpen, d.SharpenMasking, ovLuma != null ? StarCap(ovLuma) : null);
+            if (sigma >= 0.25f) Sharpen(t, n, w, target.Copy(), sigma, d.Sharpen, d.SharpenMasking, d.SharpenMethod);
         }
         var r = img.R.Data; var g = img.G.Data; var b = img.B.Data;
         Par.Rows(img.Height, w * 4, (y0, y1) =>

@@ -117,18 +117,22 @@ is the same `AstroCore`, built for plain `net9.0`:
 * **GPU denoise** is Windows only (Direct3D 11); on Linux non-local means and BM3D run on the CPU
   (`GpuDenoise.Portable.cs` is the stub that makes the callers take the CPU paths).
 * **Not yet on Linux**: copying the preview to the clipboard (Avalonia has no portable image
-  clipboard), native menus (the menu bar lives inside the window), app icon packaging. The Windows app's
-  Background / Stars tabs, star removal window (the CLI `starnet` command works), Contrast block, band
-  softness and hot-pixel sliders have not reached the Linux front-end yet; projects that use them still
-  open there (the Stars tab is ignored).
+  clipboard), native menus (the menu bar lives inside the window), app icon packaging. Otherwise the
+  Linux front-end follows the Mac app (1.19.1): Background / Stars tabs, star removal, Channel mix,
+  Tab to hide the side panes, movable Pixel Math / Matrix windows, crop straightening, bright spots.
+  The Windows (WPF) front-end lacks the last five for now (it opens projects that use them).
 * **HiDPI / 4K screens**: Avalonia scales the interface from `Xft.dpi` or the `AVALONIA_*` / `QT_*`
   scale variables; without any of them a 4K monitor would get scale 1 and 11 px text. The app
   therefore asks the X server for the screen's pixel and physical size before starting and sets
   the scale itself (quarter steps from 1.5× up to 3×, physical sizes over 90 cm or outside 50–400 dpi are
-  treated as bogus and a ≥ 2000-px-tall screen gets 2×). Force a value with `--scale 1.5` or
-  `COMBINECOLORS_SCALE=1.5`; `GDK_SCALE` is honoured too. The choice is printed on stderr.
-* The interface follows the Windows app, so the keyboard shortcuts above apply (Ctrl). The same
-  `--prefs <file>`, `--screenshot <png>` (plus `--screenshot-delay <s>`) developer switches exist;
+  treated as bogus and a ≥ 2000-px-tall screen gets 2×; `QT_AUTO_SCREEN_SCALE_FACTOR` and a 96 dpi
+  `Xft.dpi` on such a screen do not stop it). **View ▸ Interface Size** (Automatic, 100–300 %) saves
+  a fixed size, applied on the next start (the app offers to restart); `--scale 1.5` or
+  `COMBINECOLORS_SCALE=1.5` override everything; `GDK_SCALE` is honoured too. The choice is printed on stderr.
+* The interface follows the Windows app, so the keyboard shortcuts above apply (Ctrl); Tab hides the
+  side panes. The same `--prefs <file>`, `--screenshot <png>` (plus `--screenshot-delay <s>`) developer
+  switches exist, plus `--hide-panes`, `--open-editor crop:<deg>` / `dust:<channel>` and
+  `--editor-action apply` / `spots:bright:x,y;…` for screenshots;
   preferences live in `~/.local/share/CombineColors/preferences.json`.
 
 Building and running (any OS with the .NET 9 SDK; no Linux machine is needed to build):

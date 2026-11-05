@@ -29,14 +29,15 @@ public sealed class SliderRow : Grid, IRefreshable
     readonly Action<float> set;
     readonly float lo, hi, defaultValue;
     readonly bool logarithmic;
+    readonly float curve;
     readonly string format;
     readonly Slider slider;
     readonly TextBox field;
     bool updating;
 
-    public SliderRow(string title, Func<float> get, Action<float> set, float lo, float hi, float defaultValue, string format = "0.00", bool logarithmic = false, string? help = null, string? note = null, double labelWidth = 70)
+    public SliderRow(string title, Func<float> get, Action<float> set, float lo, float hi, float defaultValue, string format = "0.00", bool logarithmic = false, string? help = null, string? note = null, double labelWidth = 70, float curve = 1)
     {
-        this.get = get; this.set = set; this.lo = lo; this.hi = hi; this.defaultValue = defaultValue; this.logarithmic = logarithmic; this.format = format;
+        this.get = get; this.set = set; this.lo = lo; this.hi = hi; this.defaultValue = defaultValue; this.logarithmic = logarithmic; this.format = format; this.curve = curve;
         Margin = new Thickness(0, 1, 0, 1);
         ColumnDefinitions.Add(new ColumnDefinition(labelWidth, GridUnitType.Pixel));
         ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
@@ -63,14 +64,16 @@ public sealed class SliderRow : Grid, IRefreshable
     double ToPosition(float v)
     {
         if (logarithmic) return (Math.Log(Math.Max(v, lo)) - Math.Log(lo)) / (Math.Log(hi) - Math.Log(lo));
-        return (v - lo) / (hi - lo);
+        double t = (v - lo) / (hi - lo);
+        // Linear sliders: the value follows position^curve (> 1 gives finer control near the low end).
+        return curve == 1 ? t : Math.Pow(Math.Min(Math.Max(t, 0), 1), 1 / curve);
     }
 
     float FromPosition(double p)
     {
         double t = Math.Min(Math.Max(p, 0), 1);
         if (logarithmic) return (float)Math.Exp(Math.Log(lo) + t * (Math.Log(hi) - Math.Log(lo)));
-        return (float)(lo + t * (hi - lo));
+        return (float)(lo + (curve == 1 ? t : Math.Pow(t, curve)) * (hi - lo));
     }
 
     string Format(float v) => v.ToString(format, CultureInfo.InvariantCulture);
@@ -83,6 +86,14 @@ public sealed class SliderRow : Grid, IRefreshable
             if (v != get()) set(v);
         }
         Refresh();
+    }
+
+    /// <summary>Colours the slider's filled track and thumb (e.g. with a channel's colour).</summary>
+    public SliderRow Tinted(IBrush brush)
+    {
+        foreach (var key in new[] { "SliderTrackValueFill", "SliderTrackValueFillPointerOver", "SliderTrackValueFillPressed", "SliderThumbBackground", "SliderThumbBackgroundPointerOver", "SliderThumbBackgroundPressed" })
+            slider.Resources[key] = brush;
+        return this;
     }
 
     public void Refresh()
@@ -243,6 +254,9 @@ public sealed class ControlBlock : Border
     public string Title { get; }
     public event Action<bool>? ExpandedChanged;
 
+    readonly Button resetButton;
+    Func<bool>? resetEnabled;
+
     public ControlBlock(string title, double width)
     {
         Title = title;
@@ -260,6 +274,15 @@ public sealed class ControlBlock : Border
         Grid.SetColumn(titleButton, 0); grid.Children.Add(titleButton);
         scroller = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Width = width, Content = Content };
         Grid.SetColumn(scroller, 1); grid.Children.Add(scroller);
+        // The block's reset (icon at the top right), shown once <see cref="SetReset"/> gives it an action.
+        resetButton = new Button
+        {
+            Content = new TextBlock { Text = "↺", FontSize = 11 }, Padding = new Thickness(3, 0, 3, 0), MinHeight = 0, MinWidth = 0,
+            Background = Brushes.Transparent, BorderThickness = new Thickness(0), Focusable = false, Cursor = new Cursor(StandardCursorType.Hand),
+            HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 1, 14, 0), IsVisible = false,
+        };
+        resetButton.Click += (_, _) => resetAction?.Invoke();
+        Grid.SetColumn(resetButton, 1); grid.Children.Add(resetButton);
         Child = grid;
         UpdateLook();
     }
@@ -270,16 +293,38 @@ public sealed class ControlBlock : Border
         set { expanded = value; UpdateLook(); }
     }
 
+    Action? resetAction;
+
+    /// <summary>The block's reset: enabled while <paramref name="enabled"/> says the block is not neutral.</summary>
+    public void SetReset(string help, Func<bool> enabled, Action action)
+    {
+        resetAction = action; resetEnabled = enabled;
+        ToolTip.SetTip(resetButton, help);
+        Content.Margin = new Thickness(6, 16, 6, 5);
+        RefreshReset();
+    }
+
+    void RefreshReset()
+    {
+        if (resetEnabled == null) return;
+        resetButton.IsVisible = expanded;
+        bool on = resetEnabled();
+        resetButton.IsEnabled = on;
+        resetButton.Opacity = on ? 1 : 0.35;
+    }
+
     void UpdateLook()
     {
         scroller.IsVisible = expanded;
         titleButton.Foreground = expanded ? AppTheme.AccentBrush : Brushes.Gray;
         titleButton.Background = expanded ? new SolidColorBrush(Color.FromArgb(50, 10, 110, 209)) : new SolidColorBrush(Color.FromArgb(20, 255, 255, 255));
         ToolTip.SetTip(titleButton, expanded ? $"Collapse {Title}" : $"Expand {Title}");
+        RefreshReset();
     }
 
     public void RefreshAll()
     {
+        RefreshReset();
         foreach (var c in Content.Children) RefreshTree(c);
     }
 
@@ -333,9 +378,9 @@ public static class Ui
 
     public static IBrush Tint(ChannelKind k) => k switch
     {
-        ChannelKind.Ha => Brushes.Red,
+        ChannelKind.Ha => Brushes.Orange,
         ChannelKind.OIII => new SolidColorBrush(Color.FromRgb(48, 176, 199)),
-        ChannelKind.SII => Brushes.Orange,
+        ChannelKind.SII => Brushes.Red,
         ChannelKind.Hb => Brushes.RoyalBlue,
         ChannelKind.Red => new SolidColorBrush(Color.FromRgb(255, 77, 77)),
         ChannelKind.Green => new SolidColorBrush(Color.FromRgb(77, 230, 77)),

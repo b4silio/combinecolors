@@ -23,6 +23,18 @@ public static class DustModels
 }
 
 /// <summary>
+/// What a spot corrects: a darker patch (the shadow of a dust mote, divided out like a flat would) or a
+/// brighter one (the halo of a star that star removal left behind: light added on top of the scene, subtracted).
+/// </summary>
+public enum SpotPolarity { Dark, Bright }
+
+public static class SpotPolarities
+{
+    public static readonly SpotPolarity[] All = [SpotPolarity.Dark, SpotPolarity.Bright];
+    public static string DisplayName(this SpotPolarity p) => p == SpotPolarity.Dark ? "Dark spots" : "Bright spots";
+}
+
+/// <summary>
 /// A circular region around a dust shadow (mote or donut) to be flattened. Coordinates are in
 /// oriented image pixels with the pixel-edge convention: pixel (i, j) covers [i, i+1) × [j, j+1).
 /// </summary>
@@ -38,14 +50,17 @@ public sealed partial class DustSpot : IEquatable<DustSpot>
     public double Smoothness;
     /// <summary>Fraction of the radius over which the correction fades out beyond the shadow.</summary>
     public double Feather;
+    /// <summary>A shadow (dust) or a glow (a star halo left by star removal).</summary>
+    public SpotPolarity Polarity;
 
-    public DustSpot(double x, double y, double radius, DustModel model = DustModel.Surface, double smoothness = 3, double feather = 0.2, Guid? id = null)
+    public DustSpot(double x, double y, double radius, DustModel model = DustModel.Surface, double smoothness = 3, double feather = 0.2, Guid? id = null,
+                    SpotPolarity polarity = SpotPolarity.Dark)
     {
         Id = id ?? Guid.NewGuid(); X = x; Y = y; Radius = radius;
-        Model = model; Smoothness = smoothness; Feather = feather;
+        Model = model; Smoothness = smoothness; Feather = feather; Polarity = polarity;
     }
 
-    internal DustRemoval.Options Options => new(Model, Smoothness, Feather);
+    internal DustRemoval.Options Options => new(Model, Smoothness, Feather, Polarity);
 
     public DustSpot Clone() => (DustSpot)MemberwiseClone();
 
@@ -62,6 +77,14 @@ public sealed partial class DustSpot : IEquatable<DustSpot>
         return s;
     }
 
+    /// <summary>The spot after a fine rotation of the image by <paramref name="degrees"/> (<see cref="FineRotation"/>).</summary>
+    public DustSpot RotatedByDegrees(double degrees, int imageWidth, int imageHeight)
+    {
+        var s = Clone();
+        (s.X, s.Y) = FineRotation.Rotate(X, Y, degrees, imageWidth, imageHeight);
+        return s;
+    }
+
     /// <summary>The spot after an unoriented image (imageWidth × imageHeight) is oriented (flip, then quarter turns).</summary>
     public DustSpot Applying(Orientation o, int imageWidth, int imageHeight)
     {
@@ -71,9 +94,9 @@ public sealed partial class DustSpot : IEquatable<DustSpot>
         return s;
     }
 
-    public bool Equals(DustSpot? o) => o != null && Id == o.Id && X == o.X && Y == o.Y && Radius == o.Radius && Model == o.Model && Smoothness == o.Smoothness && Feather == o.Feather;
+    public bool Equals(DustSpot? o) => o != null && Id == o.Id && X == o.X && Y == o.Y && Radius == o.Radius && Model == o.Model && Smoothness == o.Smoothness && Feather == o.Feather && Polarity == o.Polarity;
     public override bool Equals(object? obj) => Equals(obj as DustSpot);
-    public override int GetHashCode() => HashCode.Combine(Id, X, Y, Radius, Model, Smoothness, Feather);
+    public override int GetHashCode() => HashCode.Combine(Id, X, Y, Radius, Model, Smoothness, Feather, Polarity);
 }
 
 /// <summary>
@@ -90,15 +113,22 @@ public sealed partial class DustSettings : IEquatable<DustSettings>
     public double Smoothness = 3;
     /// <summary>Feather given to new spots.</summary>
     public double Feather = 0.2;
+    /// <summary>Polarity given to new spots.</summary>
+    public SpotPolarity Polarity = SpotPolarity.Dark;
+    /// <summary>Largest radius the fit may give a new bright spot, in pixels (0 = 1 % of the image's long side).</summary>
+    public double BrightMaxRadius = 0;
+
+    /// <summary>The cap on bright-spot radii for an image of the given size.</summary>
+    public double ResolvedBrightMaxRadius(int width, int height) => BrightMaxRadius > 0 ? BrightMaxRadius : Math.Max(24, Math.Max(width, height) * 0.01);
 
     public bool IsEmpty => Spots.Values.All(l => l.Count == 0);
     public List<DustSpot> SpotsFor(ChannelKind kind) => Spots.TryGetValue(kind, out var l) ? l : new List<DustSpot>();
     /// <summary>A spot with the parameters for new spots.</summary>
-    public DustSpot NewSpot(double x, double y, double radius) => new(x, y, radius, Model, Smoothness, Feather);
+    public DustSpot NewSpot(double x, double y, double radius) => new(x, y, radius, Model, Smoothness, Feather, polarity: Polarity);
 
     public DustSettings Clone()
     {
-        var c = new DustSettings { Model = Model, Smoothness = Smoothness, Feather = Feather };
+        var c = new DustSettings { Model = Model, Smoothness = Smoothness, Feather = Feather, Polarity = Polarity, BrightMaxRadius = BrightMaxRadius };
         foreach (var (k, v) in Spots) c.Spots[k] = v.Select(s => s.Clone()).ToList();
         return c;
     }
@@ -120,10 +150,30 @@ public sealed partial class DustSettings : IEquatable<DustSettings>
 /// divided by it (stars included: they were dimmed by the same shadow). The correction fades out
 /// over the outer <c>feather</c> fraction of the radius so the edge is seamless; pixels beyond the
 /// radius are untouched, zero (padding) pixels stay zero.
+/// <para>
+/// Bright spots (star halos left by star removal) go through the same estimate on the reciprocal of
+/// the ratio — a glow is a "shadow" of 1 / ratio — so detection, outline, smoothing and fit are shared;
+/// the correction is then additive: the excess over the background surface, B·(ratio − 1) smoothed, is
+/// subtracted (a halo is light added on top of the scene, not a multiplicative loss), which keeps the
+/// nebula's own contrast under it.
+/// </para>
 /// </summary>
 public static class DustRemoval
 {
-    public readonly record struct Options(DustModel Model = DustModel.Surface, double Smoothness = 3, double Feather = 0.2);
+    public readonly record struct Options(DustModel Model = DustModel.Surface, double Smoothness = 3, double Feather = 0.2, SpotPolarity Polarity = SpotPolarity.Dark);
+
+    /// <summary>Star-mask threshold (in noise units) of the spot window: bright spots are the bright thing
+    /// themselves, so only very compact, very bright peaks are left out of their estimate.</summary>
+    static float StarSigma(SpotPolarity p) => p == SpotPolarity.Dark ? 6 : 30;
+
+    /// <summary>The ratio a dark-spot estimate works on: itself for dark spots, its reciprocal for bright ones.</summary>
+    static PlanarImage Oriented(PlanarImage q, SpotPolarity p)
+    {
+        if (p != SpotPolarity.Bright) return q;
+        var d = q.Data;
+        for (int i = 0; i < d.Length; i++) if (d[i] > 0 && d[i] != 1) d[i] = 1 / d[i];
+        return q;
+    }
 
     /// <summary>Transmission range accepted for a shadow (dust never brightens; a little over 1 is allowed for the diffraction rim of a donut).</summary>
     const float TransmissionLo = 0.05f, TransmissionHi = 1.5f;
@@ -147,7 +197,7 @@ public static class DustRemoval
     {
         var sh = Shadow(image, spot, others ?? []);
         if (sh == null) return false;
-        var win = sh.Window; var t = sh.Transmission;
+        var win = sh.Window; var t = sh.Transmission; var bg = sh.Background;
         for (int y = 0; y < win.Height; y++)
         {
             int row = (win.Y + y) * image.Width + win.X;
@@ -156,18 +206,28 @@ public static class DustRemoval
             {
                 float g = t.Data[trow + x];
                 float v = image.Data[row + x];
-                if (v != 0 && g != 1) image.Data[row + x] = v / g;
+                if (v == 0 || g == 1) continue;
+                if (bg != null)
+                {
+                    // Glow: subtract the excess over the background (never down to zero, which means padding).
+                    float b = bg.Data[trow + x];
+                    image.Data[row + x] = MathF.Max(v - b * (g - 1), MathF.Min(v, b) * 0.02f);
+                }
+                else image.Data[row + x] = v / g;
             }
         }
         return true;
     }
 
-    /// <summary>Window around a spot and the effective transmission inside it (1 where nothing changes).</summary>
+    /// <summary>Window around a spot and the effective transmission inside it (1 where nothing changes). For a
+    /// bright spot the transmission is the brightening (≥ 1) and <see cref="Background"/> the surface it sits on:
+    /// the correction subtracts background × (transmission − 1).</summary>
     public sealed class ShadowMap
     {
         public PixelRect Window;
         public PlanarImage Transmission;
-        public ShadowMap(PixelRect window, PlanarImage transmission) { Window = window; Transmission = transmission; }
+        public PlanarImage? Background;
+        public ShadowMap(PixelRect window, PlanarImage transmission, PlanarImage? background = null) { Window = window; Transmission = transmission; Background = background; }
     }
 
     /// <summary>
@@ -186,12 +246,13 @@ public static class DustRemoval
         double r = Math.Max(spot.Radius, 3);
         var options = spot.Options;
         bool surfaceModel = options.Model == DustModel.Surface;
-        var a = Analysis.Create(image, spot.X, spot.Y, r, others, surfaceModel ? 1.8 : 1.7);
+        bool bright = options.Polarity == SpotPolarity.Bright;
+        var a = Analysis.Create(image, spot.X, spot.Y, r, others, surfaceModel ? 1.8 : 1.7, StarSigma(options.Polarity));
         if (a == null) return null;
         int w = a.Window.Width, h = a.Window.Height, n = w * h;
         var t = new PlanarImage(w, h, 1);
         var mask = a.Mask;
-        PlanarImage? raw = null, weight = null, exclude = null;
+        PlanarImage? raw = null, weight = null, exclude = null, background = null;
         double sigma = Math.Max(0.5, options.Smoothness);
         float featherPx = (float)Math.Max(2, options.Feather * r);
         // Two passes: the first star mask may flag the bright side of a deep shadow edge; masking the
@@ -201,12 +262,16 @@ public static class DustRemoval
         {
             if (pass == 1 && raw != null)
             {
+                // Flattened window (raw is in the dark-spot sense: a glow's reciprocal).
                 var flat = a.Crop.Copy();
-                Vec.Div(flat.Data, raw.Data, flat.Data);
-                mask = a.StarMaskOf(flat, 4);
+                if (bright) Vec.Mul(flat.Data, raw.Data, flat.Data);
+                else Vec.Div(flat.Data, raw.Data, flat.Data);
+                mask = a.StarMaskOf(flat, bright ? StarSigma(SpotPolarity.Bright) : 4);
             }
-            var q = a.Ratio(mask, exclude);
-            if (q == null) return null;
+            var qb = a.RatioAndBackground(mask, exclude);
+            if (qb == null) return null;
+            var q = Oriented(qb.Value.ratio, options.Polarity);
+            background = qb.Value.background;
             if (options.Model == DustModel.Radial)
             {
                 var p = RadialProfile(q, mask, a.Rad, r, Math.Max(2, options.Smoothness));
@@ -242,14 +307,19 @@ public static class DustRemoval
             }
         }
         if (raw == null) return null;
+        // The clamped estimate back in its own sense: a transmission, or a brightening for a glow.
+        float Value(int i)
+        {
+            float v = MathF.Min(MathF.Max(raw.Data[i], TransmissionLo), TransmissionHi);
+            return bright ? 1 / v : v;
+        }
         if (weight != null)
         {
             for (int i = 0; i < n; i++)
             {
                 float f = weight.Data[i];
                 if (f <= 0) continue;
-                float v = MathF.Min(MathF.Max(raw.Data[i], TransmissionLo), TransmissionHi);
-                t.Data[i] = 1 + (v - 1) * f;
+                t.Data[i] = 1 + (Value(i) - 1) * f;
             }
         }
         else
@@ -261,11 +331,10 @@ public static class DustRemoval
                 float d = a.Rad.Data[i];
                 if (d >= fr) continue;
                 float f = d <= inner ? 1 : 0.5f * (1 + MathF.Cos(MathF.PI * (d - inner) / MathF.Max(fr - inner, 1e-3f)));
-                float v = MathF.Min(MathF.Max(raw.Data[i], TransmissionLo), TransmissionHi);
-                t.Data[i] = 1 + (v - 1) * f;
+                t.Data[i] = 1 + (Value(i) - 1) * f;
             }
         }
-        return new ShadowMap(a.Window, t);
+        return new ShadowMap(a.Window, t, bright ? background : null);
     }
 
     /// <summary>
@@ -337,15 +406,20 @@ public static class DustRemoval
     ///
     /// Shadows of stacked data can be very shallow (a few ‰ of the sky level) yet obvious after
     /// stretching, so the detection threshold is set by the bin-to-bin noise of the profile rather
-    /// than by a fixed depth.
+    /// than by a fixed depth. <paramref name="maxRadius"/> (0 = none) caps the radius proposed (bright
+    /// spots: a halo is a local thing).
     /// </summary>
-    public static DustSpot? Fit(PlanarImage image, double x, double y, double r0, double smoothness = 3)
+    public static DustSpot? Fit(PlanarImage image, double x, double y, double r0, double smoothness = 3, SpotPolarity polarity = SpotPolarity.Dark,
+                                double maxRadius = 0)
     {
-        double cx = x, cy = y, r = Math.Max(r0, 12);
+        float ss = StarSigma(polarity);
+        double cap = maxRadius > 0 ? Math.Max(maxRadius, 4) : double.PositiveInfinity;
+        double cx = x, cy = y, r = Math.Min(Math.Max(r0, 12), cap);
         bool found = false;
         // The search never grows past a fraction of the image (a window of the whole frame is slow
-        // and only finds vignetting), nor past ten times the starting radius.
-        double maxSearch = Math.Min(Math.Min(Math.Min(image.Width, image.Height) / 6.0, 900), r * 10);
+        // and only finds vignetting), nor past ten times the starting radius — nor, with a cap, past
+        // a few times the largest radius allowed (it needs sky around the spot, no more).
+        double maxSearch = Math.Min(Math.Min(Math.Min(Math.Min(image.Width, image.Height) / 6.0, 900), r * 10), cap * 2.5);
         for (int iteration = 0; iteration < 4; iteration++)
         {
             // Extent: the radial profile out to a few times the current radius; the shadow ends where
@@ -354,10 +428,11 @@ public static class DustRemoval
             foreach (var factor in iteration == 0 ? new[] { 2.5, 5, 10 } : new[] { 1.6 })
             {
                 double search = Math.Min(r * factor, maxSearch);
-                var a = Analysis.Create(image, cx, cy, search);
+                var a = Analysis.Create(image, cx, cy, search, starSigma: ss);
                 if (a == null) break;
-                var q = a.Ratio(a.Mask);
-                if (q == null) break;
+                var q0 = a.Ratio(a.Mask);
+                if (q0 == null) break;
+                var q = Oriented(q0, polarity);
                 var pc = RadialProfileWithCounts(q, a.Mask, a.Rad, search, Math.Max(2, smoothness));
                 if (pc == null || pc.Value.profile.Length < 10) break;
                 var (p, counts) = pc.Value;
@@ -387,14 +462,23 @@ public static class DustRemoval
             int edge = -1;
             for (int i = prof.Length - 1; i >= 0; i--) if (prof[i] < outerLevel - 0.15f * dep) { edge = i; break; }
             if (edge < 3) break;
-            double newR = Math.Min((edge + 1) * 1.25 + 2, maxSearch * 0.8);
+            double newR = Math.Min(Math.Min((edge + 1) * 1.25 + 2, maxSearch * 0.8), cap);
+            // A glow next to a brightness step (mosaic edge, nebula) has a tail that never ends:
+            // conservatively at most a couple of half-widths.
+            if (polarity == SpotPolarity.Bright)
+            {
+                int halfIdx = -1;
+                for (int i = prof.Length - 1; i >= 0; i--) if (prof[i] < outerLevel - 0.5f * dep) { halfIdx = i; break; }
+                if (halfIdx >= 0) newR = Math.Min(newR, (halfIdx + 1) * 2.2 + 2);
+            }
             // Centre: centroid of the pixels darker than half the depth, measured with the background
             // fitted close around the new radius (a far annulus extrapolates nebulosity badly). The
             // binary weight is far less sensitive to gradients than the darkening itself.
-            var b = Analysis.Create(image, cx, cy, newR);
+            var b = Analysis.Create(image, cx, cy, newR, starSigma: ss);
             if (b == null) break;
-            var qb = b.Ratio(b.Mask);
-            if (qb == null) break;
+            var qb0 = b.Ratio(b.Mask);
+            if (qb0 == null) break;
+            var qb = Oriented(qb0, polarity);
             double sx = 0, sy = 0, sw = 0;
             int bw = b.Window.Width, bh = b.Window.Height;
             float half = outerLevel - 0.5f * dep;
@@ -411,7 +495,7 @@ public static class DustRemoval
             if (Math.Abs(newR - r) < 1 && moved < 0.5) { r = newR; break; }
             r = newR;
         }
-        return found ? new DustSpot(cx, cy, r) : null;
+        return found ? new DustSpot(cx, cy, r, polarity: polarity) : null;
     }
 
     // Pieces
@@ -428,7 +512,8 @@ public static class DustRemoval
         /// <summary>1 under the other spots (null when none overlaps the window).</summary>
         public PlanarImage? Excluded;
 
-        public static Analysis? Create(PlanarImage image, double cx, double cy, double radius, IReadOnlyList<DustSpot>? others = null, double outerFactor = 1.7)
+        public static Analysis? Create(PlanarImage image, double cx, double cy, double radius, IReadOnlyList<DustSpot>? others = null, double outerFactor = 1.7,
+                                       float starSigma = 6)
         {
             others ??= [];
             double outer = radius * outerFactor;
@@ -446,7 +531,7 @@ public static class DustRemoval
                 for (int x = 0; x < w; x++) { float dx = x + 0.5f - lcx; rad[x, y] = MathF.Sqrt(dx * dx + dy * dy); }
             }
             a.Rad = rad;
-            var m = BuildStarMask(a.Crop, radius, 6);
+            var m = BuildStarMask(a.Crop, radius, starSigma);
             // Other spots overlapping the window are masked so that their shadows do not bias the
             // background fit (the mask is also reused for the second pass through `Excluded`).
             var ex = new PlanarImage(w, h);
@@ -497,7 +582,10 @@ public static class DustRemoval
         /// crop / B where B is the background surface fitted to the annulus outside the spot — or, with
         /// <paramref name="exclude"/>, to every unmasked pixel outside the excluded area (1 where undefined).
         /// </summary>
-        public PlanarImage? Ratio(PlanarImage mask, PlanarImage? exclude = null)
+        public PlanarImage? Ratio(PlanarImage mask, PlanarImage? exclude = null) => RatioAndBackground(mask, exclude)?.ratio;
+
+        /// <summary>The ratio and the background surface it divides by.</summary>
+        public (PlanarImage ratio, PlanarImage background)? RatioAndBackground(PlanarImage mask, PlanarImage? exclude = null)
         {
             var b = BackgroundSurface(mask, exclude);
             if (b == null) return null;
@@ -508,7 +596,7 @@ public static class DustRemoval
                 float v = Crop.Data[i], bb = b.Data[i];
                 if (v > 0 && bb > 0) q.Data[i] = v / bb;
             }
-            return q;
+            return (q, b);
         }
 
         /// <summary>

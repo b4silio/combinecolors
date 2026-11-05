@@ -45,6 +45,22 @@ static class DialogBase
         w.Content = panel;
         return w.ShowDialog(owner);
     }
+
+    /// <summary>Modal question with two buttons; true for the first.</summary>
+    public static async Task<bool> Confirm(Window owner, string title, string text, string yes, string no)
+    {
+        var w = Make(owner, title, 440);
+        bool result = false;
+        var panel = new StackPanel { Margin = new Thickness(16) };
+        panel.Children.Add(new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, FontSize = 12, Margin = new Thickness(0, 0, 0, 12) });
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        buttons.Children.Add(Cancel(no, () => w.Close()));
+        buttons.Children.Add(Default(yes, () => { result = true; w.Close(); }));
+        panel.Children.Add(buttons);
+        w.Content = panel;
+        await w.ShowDialog(owner);
+        return result;
+    }
 }
 
 /// <summary>Asks for a name.</summary>
@@ -129,11 +145,11 @@ public sealed class ColorFileWindow
         panel.Children.Add(new TextBlock { Text = $"{f.FileName} is a colour image", FontWeight = FontWeight.Bold, FontSize = 13 });
         panel.Children.Add(new TextBlock { Text = $"{f.Width} × {f.Height} · {f.FormatDescription}", FontSize = 11, Foreground = Brushes.Gray, Margin = new Thickness(0, 0, 0, 8) });
         TextBlock rgbText = new(), starsText = new(); StackPanel customRow = new(); TextBlock first1 = new(), second1 = new();
-        var seg = Ui.Segmented(new[] { "rgb", "dualBand", "stars" }, m => m switch { "dualBand" => "Dual-band", "stars" => "Keep as RGB (stars)", _ => "Split RGB" }, () => mode, v => { mode = v; model.Preferences.Set("colorFileMode", v); UpdateMode(); }, out _);
+        var seg = Ui.Segmented(new[] { "rgb", "dualBand", "stars" }, m => m switch { "dualBand" => "Dual-band", "stars" => "Stars tab (RGB)", _ => "Split RGB" }, () => mode, v => { mode = v; model.Preferences.Set("colorFileMode", v); UpdateMode(); }, out _);
         panel.Children.Add(seg);
         rgbText = new TextBlock { Text = "The red, green and blue planes become the R, G and B channels (broadband colour).", FontSize = 11, Foreground = Brushes.Gray, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 8) };
         panel.Children.Add(rgbText);
-        starsText = new TextBlock { Text = "The image stays an RGB image and is blended on top of the result as stars (a stars-only image from a star-removal tool, or any RGB frame whose stars are wanted); the channel slots are untouched. Brightness, contrast, blend mode and the luminance mask are in the RGB stars block.", FontSize = 11, Foreground = Brushes.Gray, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 8) };
+        starsText = new TextBlock { Text = "The image goes to the Stars tab as R, G and B (a stars-only image from a star-removal tool, or any RGB frame whose stars are wanted) and is blended on top of the background by the Combine stars block; the Background channels are untouched and the tab shown does not change.", FontSize = 11, Foreground = Brushes.Gray, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 8) };
         panel.Children.Add(starsText);
         dualPanel.Children.Add(new TextBlock { Text = "One-shot-colour images taken through a dual-band filter hold one emission line in the red channel and the other in green/blue. They are extracted into two monochrome channels.", FontSize = 11, Foreground = Brushes.Gray, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 8) });
         var columns = new DockPanel();
@@ -183,7 +199,7 @@ public sealed class ColorFileWindow
             saveButton.IsVisible = dualBand;
             customRow.IsVisible = settings.Preset == DualBandPreset.Custom;
             var (a, b) = settings.OutputKinds;
-            addButton.Content = dualBand ? $"Add {a.ShortName()} + {b.ShortName()}" : starsMode ? "Use as stars layer" : "Use as RGB";
+            addButton.Content = dualBand ? $"Add {a.ShortName()} + {b.ShortName()}" : starsMode ? "Put on the Stars tab" : "Use as RGB";
             title1.Text = a.DisplayName(); title2.Text = b.DisplayName();
             first1.Text = $"{a.DisplayName()} from camera R/G/B"; second1.Text = $"{b.DisplayName()} from camera R/G/B";
             if (dualBand && preview1.Source == null) RefreshPreview();
@@ -299,10 +315,52 @@ public static class ExportWindow
 }
 
 /// <summary>Combination matrix editor (applies live).</summary>
+/// <summary>
+/// Movable, non-modal tool windows (Pixel Math, matrix): unlike a dialog they leave the preview visible and
+/// usable, so the effect of an edit shows right away. One window per id; asking for an open one brings it to
+/// the front. They stay above the main window and remember where they were put (preferences).
+/// </summary>
+public static class EditorPanels
+{
+    static readonly Dictionary<string, Window> open = new();
+
+    /// <summary>Brings the panel <paramref name="id"/> to the front when it is open.</summary>
+    public static bool Activate(string id)
+    {
+        if (!open.TryGetValue(id, out var w)) return false;
+        w.Activate();
+        return true;
+    }
+
+    /// <summary>Shows <paramref name="w"/> as the panel <paramref name="id"/>: first at the right edge of the
+    /// owner (over the palettes, away from the picture), afterwards where it was left.</summary>
+    public static Task Show(Window owner, Window w, string id, Preferences prefs)
+    {
+        string key = "editorPanel." + id;
+        w.WindowStartupLocation = WindowStartupLocation.Manual;
+        w.ShowInTaskbar = false;
+        var parts = prefs.GetString(key)?.Split(',');
+        if (parts is { Length: 2 } && int.TryParse(parts[0], out var x) && int.TryParse(parts[1], out var y))
+            w.Position = new PixelPoint(x, y);
+        else
+        {
+            double scale = owner.RenderScaling;
+            double width = (double.IsNaN(w.Width) ? 440 : w.Width) * scale;
+            w.Position = new PixelPoint((int)Math.Max(owner.Position.X, owner.Position.X + owner.Bounds.Width * scale - width - 16 * scale), owner.Position.Y + (int)(60 * scale));
+        }
+        open[id] = w;
+        w.Closing += (_, _) => prefs.Set(key, $"{w.Position.X},{w.Position.Y}");
+        w.Closed += (_, _) => open.Remove(id);
+        w.Show(owner);
+        return Task.CompletedTask;
+    }
+}
+
 public static class MatrixEditorWindow
 {
     public static Task Show(Window owner, ProjectModel model)
     {
+        if (EditorPanels.Activate("matrix")) return Task.CompletedTask;
         var w = DialogBase.Make(owner, "Combination matrix", 440);
         var panel = new StackPanel { Margin = new Thickness(16) };
         panel.Children.Add(new TextBlock { Text = "Combination matrix", FontWeight = FontWeight.Bold, FontSize = 13 });
@@ -360,7 +418,7 @@ public static class MatrixEditorWindow
         panel.Children.Add(buttons);
         w.Content = panel;
         Refresh();
-        return w.ShowDialog(owner);
+        return EditorPanels.Show(owner, w, "matrix", model.Preferences);
     }
 }
 
@@ -386,6 +444,7 @@ public static class PixelMathEditorWindow
 
     public static Task Show(Window owner, ProjectModel model)
     {
+        if (EditorPanels.Activate("pixelMath")) return Task.CompletedTask;
         var w = DialogBase.Make(owner, "Pixel Math", 800);
         var root = new DockPanel { Margin = new Thickness(16) };
         var left = new StackPanel { Width = 450 };
@@ -484,7 +543,7 @@ public static class PixelMathEditorWindow
         root.Children.Add(left);
         w.Content = root;
         Validate();
-        return w.ShowDialog(owner);
+        return EditorPanels.Show(owner, w, "pixelMath", model.Preferences);
     }
 
     static PixelMathProgram MatrixAsProgram(PaletteMatrix m)

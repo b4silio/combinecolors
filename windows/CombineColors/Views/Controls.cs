@@ -26,14 +26,15 @@ public sealed class SliderRow : Grid, IRefreshable
     readonly Action<float> set;
     readonly float lo, hi, defaultValue;
     readonly bool logarithmic;
+    readonly float curve;
     readonly string format;
     readonly Slider slider;
     readonly TextBox field;
     bool updating;
 
-    public SliderRow(string title, Func<float> get, Action<float> set, float lo, float hi, float defaultValue, string format = "0.00", bool logarithmic = false, string? help = null, string? note = null, double labelWidth = 70)
+    public SliderRow(string title, Func<float> get, Action<float> set, float lo, float hi, float defaultValue, string format = "0.00", bool logarithmic = false, string? help = null, string? note = null, double labelWidth = 70, float curve = 1)
     {
-        this.get = get; this.set = set; this.lo = lo; this.hi = hi; this.defaultValue = defaultValue; this.logarithmic = logarithmic; this.format = format;
+        this.get = get; this.set = set; this.lo = lo; this.hi = hi; this.defaultValue = defaultValue; this.logarithmic = logarithmic; this.format = format; this.curve = curve;
         Margin = new Thickness(0, 1, 0, 1);
         ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(labelWidth) });
         ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -58,14 +59,16 @@ public sealed class SliderRow : Grid, IRefreshable
     double ToPosition(float v)
     {
         if (logarithmic) return (Math.Log(Math.Max(v, lo)) - Math.Log(lo)) / (Math.Log(hi) - Math.Log(lo));
-        return (v - lo) / (hi - lo);
+        double t = (v - lo) / (hi - lo);
+        // Linear sliders: the value follows position^curve (> 1 gives finer control near the low end).
+        return curve == 1 ? t : Math.Pow(Math.Min(Math.Max(t, 0), 1), 1 / curve);
     }
 
     float FromPosition(double p)
     {
         double t = Math.Min(Math.Max(p, 0), 1);
         if (logarithmic) return (float)Math.Exp(Math.Log(lo) + t * (Math.Log(hi) - Math.Log(lo)));
-        return (float)(lo + t * (hi - lo));
+        return (float)(lo + (curve == 1 ? t : Math.Pow(t, curve)) * (hi - lo));
     }
 
     string Format(float v) => v.ToString(format, CultureInfo.InvariantCulture);
@@ -348,9 +351,9 @@ public static class Ui
 
     public static Brush Tint(ChannelKind k) => k switch
     {
-        ChannelKind.Ha => Brushes.Red,
+        ChannelKind.Ha => Brushes.Orange,
         ChannelKind.OIII => new SolidColorBrush(Color.FromRgb(48, 176, 199)),
-        ChannelKind.SII => Brushes.Orange,
+        ChannelKind.SII => Brushes.Red,
         ChannelKind.Hb => Brushes.RoyalBlue,
         ChannelKind.Red => new SolidColorBrush(Color.FromRgb(255, 77, 77)),
         ChannelKind.Green => new SolidColorBrush(Color.FromRgb(77, 230, 77)),

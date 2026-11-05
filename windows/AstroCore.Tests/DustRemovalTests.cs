@@ -126,6 +126,52 @@ public class DustRemovalTests
         Assert.Null(DustRemoval.Fit(plain, 140, 100, 20));
     }
 
+    /// <summary>Bright spots: a star halo left by star removal is light added on top of the sky; it is found
+    /// like a mote and subtracted.</summary>
+    [Fact]
+    public void BrightSpotRemovesAHalo()
+    {
+        var truth = Synth.Channel(900, 700, background: 0.01f, nebula: 0, stars: 0, noise: 0.0002f, seed: 11, gradient: 0.002f);
+        var img = truth.Copy();
+        for (int y = 0; y < img.Height; y++) for (int x = 0; x < img.Width; x++)
+        {
+            float d = MathF.Sqrt(MathF.Pow(x + 0.5f - 450, 2) + MathF.Pow(y + 0.5f - 350, 2));
+            img[x, y] = truth[x, y] + 0.004f * MathF.Exp(-MathF.Pow(d / 22, 2)) + 0.0015f * MathF.Exp(-MathF.Pow(d / 45, 2));
+        }
+        var before = BlockError(img, truth, 450, 350, 30);
+        Assert.True(before.median > 0.08f);
+        var fitted = DustRemoval.Fit(img, 458, 343, 15, polarity: SpotPolarity.Bright);
+        Assert.NotNull(fitted);
+        Assert.Equal(SpotPolarity.Bright, fitted!.Polarity);
+        A.Close(450, fitted.X, 3); A.Close(350, fitted.Y, 3);
+        Assert.InRange(fitted.Radius, 45, 130);
+        foreach (var model in DustModels.All)
+        {
+            var spot = fitted.Clone(); spot.Model = model;
+            var healed = DustRemoval.Heal(img, [spot]);
+            var after = BlockError(healed, truth, 450, 350, 40);
+            Assert.True(after.median < 0.015f, $"{model} median {after.median}"); Assert.True(after.max < 0.06f, $"{model} max {after.max}");
+        }
+        // The cap keeps a bright fit local.
+        var capped = DustRemoval.Fit(img, 458, 343, 15, polarity: SpotPolarity.Bright, maxRadius: 30);
+        Assert.NotNull(capped);
+        Assert.True(capped!.Radius <= 30);
+        A.Close(450, capped.X, 3); A.Close(350, capped.Y, 3);
+        var ds = new DustSettings();
+        Assert.Equal(80, ds.ResolvedBrightMaxRadius(8000, 6000));
+        ds.BrightMaxRadius = 50;
+        Assert.Equal(50, ds.ResolvedBrightMaxRadius(8000, 6000));
+        // A bright fit on plain sky finds nothing.
+        Assert.Null(DustRemoval.Fit(truth, 450, 350, 20, polarity: SpotPolarity.Bright));
+        // Spots keep their polarity through a document; old spots are dark.
+        Assert.Equal(SpotPolarity.Bright, DustSpot.Parse(fitted.ToJson().ToJsonString()).Polarity);
+        Assert.Equal(SpotPolarity.Dark, DustSpot.Parse("""{"x": 1, "y": 2, "radius": 3}""").Polarity);
+        var settings = new DustSettings { Polarity = SpotPolarity.Bright, BrightMaxRadius = 40 };
+        Assert.Equal(SpotPolarity.Bright, settings.NewSpot(1, 1, 5).Polarity);
+        var back = DustSettings.FromJson(settings.ToJson());
+        Assert.Equal(SpotPolarity.Bright, back.Polarity); Assert.Equal(40, back.BrightMaxRadius);
+    }
+
     [Fact]
     public void SpotsAtTheBorderAndOutsideAreHandled()
     {

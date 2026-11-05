@@ -25,6 +25,14 @@ public sealed partial class BackgroundSample : IEquatable<BackgroundSample>
         return s;
     }
 
+    /// <summary>The sample after a fine rotation of the image by <paramref name="degrees"/> (<see cref="FineRotation"/>).</summary>
+    public BackgroundSample RotatedByDegrees(double degrees, int imageWidth, int imageHeight)
+    {
+        var s = Clone();
+        (s.X, s.Y) = FineRotation.Rotate(X, Y, degrees, imageWidth, imageHeight);
+        return s;
+    }
+
     public bool Equals(BackgroundSample? o) => o != null && Id == o.Id && X == o.X && Y == o.Y;
     public override bool Equals(object? obj) => Equals(obj as BackgroundSample);
     public override int GetHashCode() => HashCode.Combine(Id, X, Y);

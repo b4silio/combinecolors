@@ -97,6 +97,16 @@ public sealed partial class GradientGesture : IEquatable<GradientGesture>
         return g;
     }
 
+    /// <summary>The guide after a fine rotation of the image by <paramref name="degrees"/> (<see cref="FineRotation"/>).</summary>
+    public GradientGesture RotatedByDegrees(double degrees, int imageWidth, int imageHeight)
+    {
+        var g = Clone();
+        (g.X, g.Y) = FineRotation.Rotate(X, Y, degrees, imageWidth, imageHeight);
+        (g.X2, g.Y2) = FineRotation.Rotate(X2, Y2, degrees, imageWidth, imageHeight);
+        g.Angle = Angle + degrees * Math.PI / 180;
+        return g;
+    }
+
     /// <summary>The guide after an unoriented image is oriented (flip, then quarter turns).</summary>
     public GradientGesture Applying(Orientation o, int imageWidth, int imageHeight)
     {
@@ -132,6 +142,19 @@ public sealed partial class GradientRegion : IEquatable<GradientRegion>
             case OrientationOp.FlipHorizontal: r.X = imageWidth - X; break;
             case OrientationOp.FlipVertical: r.Y = imageHeight - Y; break;
         }
+        return r;
+    }
+
+    /// <summary>The region after a fine rotation of the image by <paramref name="degrees"/>: the centre turns;
+    /// the region stays axis-aligned and grows to the bounding box of the turned ellipse (it protects a
+    /// little more, never less).</summary>
+    public GradientRegion RotatedByDegrees(double degrees, int imageWidth, int imageHeight)
+    {
+        var r = Clone();
+        (r.X, r.Y) = FineRotation.Rotate(X, Y, degrees, imageWidth, imageHeight);
+        double t = degrees * Math.PI / 180, c = Math.Cos(t), s = Math.Sin(t);
+        r.A = Math.Sqrt(A * A * c * c + B * B * s * s);
+        r.B = Math.Sqrt(A * A * s * s + B * B * c * c);
         return r;
     }
 
@@ -185,6 +208,14 @@ public sealed partial class GradientSpec : IEquatable<GradientSpec>
         var s = Clone();
         s.Gesture = Gesture.Applying(op, imageWidth, imageHeight);
         s.Samples = Samples.Select(p => p.Applying(op, imageWidth, imageHeight)).ToList();
+        return s;
+    }
+
+    public GradientSpec RotatedByDegrees(double degrees, int imageWidth, int imageHeight)
+    {
+        var s = Clone();
+        s.Gesture = Gesture.RotatedByDegrees(degrees, imageWidth, imageHeight);
+        s.Samples = Samples.Select(p => p.RotatedByDegrees(degrees, imageWidth, imageHeight)).ToList();
         return s;
     }
 
@@ -249,6 +280,16 @@ public sealed partial class GradientSettings : IEquatable<GradientSettings>
         var g = Clone();
         g.Specs = Specs.ToDictionary(kv => kv.Key, kv => kv.Value.Applying(op, imageWidth, imageHeight));
         g.Protect = Protect.Select(r => r.Applying(op, imageWidth, imageHeight)).ToList();
+        return g;
+    }
+
+    /// <summary>Everything turned with a fine rotation of the image by <paramref name="degrees"/>.</summary>
+    public GradientSettings RotatedByDegrees(double degrees, int imageWidth, int imageHeight)
+    {
+        if (degrees == 0) return this;
+        var g = Clone();
+        g.Specs = Specs.ToDictionary(kv => kv.Key, kv => kv.Value.RotatedByDegrees(degrees, imageWidth, imageHeight));
+        g.Protect = Protect.Select(r => r.RotatedByDegrees(degrees, imageWidth, imageHeight)).ToList();
         return g;
     }
 

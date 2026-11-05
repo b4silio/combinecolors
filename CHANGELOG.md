@@ -8,6 +8,9 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 ## [1.19.1] – 2026-11-05
 
 - Fix: Sharpen was a high-frequency boost (it brightened bright areas and fine texture). It now deconvolves (Richardson–Lucy against a Gaussian of the radius, damped on noise) by default, with a corrected unsharp mask as the other choice; both are kept from making rings around stars
+- Linux catches up with the macOS app: star removal with StarNet2 (Tools menu; downloads the Linux package), Background / Stars tabs (Ctrl+1 / Ctrl+2), Contrast block, Balance switch, block resets, Combine stars, hot pixels, band softness, Default preset, Close Image (Ctrl+W); and the 1.16–1.19.1 features — Channel mix under the palettes, Tab hides the side panels, movable Pixel Math / Matrix windows, Hα orange / SII red, data-relative stretches, straighten / turn in the crop editor (any angle, drag around the crop, Constrain to image, Level), bright spots with Max radius, the new Sharpen
+- Linux: View ▸ Interface Size (Automatic, 100–300 %, applied on restart) for screens where the automatic scale is wrong; the automatic choice no longer gives up on 4K screens when QT_AUTO_SCREEN_SCALE_FACTOR or a 96 dpi Xft.dpi is set
+- Windows: the shared engine brings the data-relative stretches (Stretch block shows only the method's parameters, Highlights as % clipped, absolute values read-out), the Sharpen method switch and the fixed sharpening, Hα orange / SII red; projects with a crop angle or bright spots open and render as on the Mac (setting them needs the macOS or Linux app for now)
 
 ## [1.19.0] – 2026-11-05
 
@@ -16,14 +19,14 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 ## [1.18.0] – 2026-11-05
 
 - Bright spots in the dust editor (Dark spots / Bright spots switch): removes star halos left behind by star removal — fitted like a dust shadow, the glow above the surrounding sky subtracted; drawn as orange dotted circles; CLI --dust-polarity
-- macOS only; the Windows / Linux builds treat every spot as a dark one
+- macOS only at first (Linux from 1.19.1); the Windows build heals bright spots of a project but cannot add them
 
 ## [1.17.0] – 2026-11-05
 
 - Straighten / turn in the crop editor: the picture turns under the upright crop (Angle slider and field, any angle, quarter-turn buttons, drag in the band around the crop with a rotate cursor; ⇧ whole degrees, quarter turns catch the pointer); a fine grid while turned; Constrain to image keeps empty corners out of the crop; Auto fits the largest crop inside the turned picture
 - On Apply whole quarter turns are exact and the rest (±45°) is resampled once from the untouched data (Lanczos-3, clamped against ringing, ≈ 0.1 s per 40 MP channel); dust spots, gradient guides, samples, protected regions and painted maps turn with the picture; the angle is stored in projects and recent sets
 - Stretch block labels widened (Highlights (%) no longer truncated)
-- macOS only; the Windows / Linux builds do not read the angle yet
+- macOS only at first (Linux from 1.19.1); the Windows build opens turned projects but has no angle control
 
 ## [1.16.0] – 2026-11-04
 
@@ -34,7 +37,7 @@ version, a `fix` / `perf` / `refactor` / `docs` / `build` commit bumps the patch
 - Pixel Math and Matrix editors open as movable panels instead of dialogs over the preview, so edits are seen live
 - No window toolbar (Add Images ⌘O and Export ⌘E stay in the File menu): a lower title bar
 - Hα is shown in orange and SII in red
-- These changes are in the macOS app only; the Windows / Linux builds are unchanged
+- These changes were in the macOS app only (Linux caught up in 1.19.1; Windows has the stretch changes and the colours)
 
 ## [1.15.1] – 2026-11-04
 

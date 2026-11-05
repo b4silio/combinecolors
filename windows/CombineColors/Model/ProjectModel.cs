@@ -707,12 +707,7 @@ public sealed partial class ProjectModel : INotifyPropertyChanged
             // A stored correction map (sidecar) comes in the orientation of the file.
             CorrectionMap? map = null;
             if (it.Path != null && CorrectionMap.Read(it.Path, it.Kind, it.Plane.Width, it.Plane.Height) is CorrectionMap stored)
-            {
-                var m = stored;
-                if (orient.Flipped) m = m.Applying(OrientationOp.FlipHorizontal);
-                for (int r = 0; r < orient.Rotation; r++) m = m.Applying(OrientationOp.RotateClockwise);
-                map = m;
-            }
+                map = stored.Oriented(orient);
             var healed = Process(oriented, it.Kind, dust, gradient, map == null ? null : (map, (float)corr.StrengthFor(it.Kind)));
             built[i] = new ChannelSource(it.Kind, healed, it.FileName, it.Path, it.Format);
             originals[i] = oriented;

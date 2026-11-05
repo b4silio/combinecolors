@@ -351,7 +351,12 @@ public static class Convolve
     }
 
     /// <summary>Grey-level dilation: maximum over a k×k window, edges extended (vImageMax).</summary>
-    public static PlanarImage DilateMax(PlanarImage src, int k)
+    public static PlanarImage DilateMax(PlanarImage src, int k) => RankFilter(src, k, true);
+
+    /// <summary>Grey-level erosion: minimum over a k×k window, edges extended (vImageMin).</summary>
+    public static PlanarImage ErodeMin(PlanarImage src, int k) => RankFilter(src, k, false);
+
+    static PlanarImage RankFilter(PlanarImage src, int k, bool max)
     {
         int w = src.Width, h = src.Height, r = k / 2;
         var tmp = new PlanarImage(w, h);
@@ -363,9 +368,10 @@ public static class Convolve
                 int row = y * w;
                 for (int x = 0; x < w; x++)
                 {
-                    float m = float.NegativeInfinity;
+                    float m = max ? float.NegativeInfinity : float.PositiveInfinity;
                     int a = Math.Max(0, x - r), b = Math.Min(w - 1, x + r);
-                    for (int xx = a; xx <= b; xx++) m = MathF.Max(m, s[row + xx]);
+                    if (max) for (int xx = a; xx <= b; xx++) m = MathF.Max(m, s[row + xx]);
+                    else for (int xx = a; xx <= b; xx++) m = MathF.Min(m, s[row + xx]);
                     t[row + x] = m;
                 }
             }
@@ -379,7 +385,11 @@ public static class Convolve
                 var drow = d.AsSpan(y * w, w);
                 int a = Math.Max(0, y - r), b = Math.Min(h - 1, y + r);
                 t.AsSpan(a * w, w).CopyTo(drow);
-                for (int yy = a + 1; yy <= b; yy++) Vec.Max(drow, t.AsSpan(yy * w, w), drow);
+                for (int yy = a + 1; yy <= b; yy++)
+                {
+                    if (max) Vec.Max(drow, t.AsSpan(yy * w, w), drow);
+                    else Vec.Min(drow, t.AsSpan(yy * w, w), drow);
+                }
             }
         });
         return dst;

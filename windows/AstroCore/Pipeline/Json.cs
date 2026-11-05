@@ -218,10 +218,10 @@ public sealed partial class StretchSettings : IJsonSettings
     {
         ["method"] = SettingsJson.V(Method), ["targetBackground"] = SettingsJson.V(TargetBackground), ["shadowsClipping"] = SettingsJson.V(ShadowsClipping),
         ["highlightsPercentile"] = SettingsJson.V(HighlightsPercentile), ["linked"] = SettingsJson.V(Linked),
-        ["mtfShadows"] = SettingsJson.V(MtfShadows), ["mtfMidtones"] = SettingsJson.V(MtfMidtones), ["mtfHighlights"] = SettingsJson.V(MtfHighlights),
-        ["arcsinhStretch"] = SettingsJson.V(ArcsinhStretch),
-        ["ghsLogD"] = SettingsJson.V(GhsLogD), ["ghsB"] = SettingsJson.V(GhsB), ["ghsSP"] = SettingsJson.V(GhsSP), ["ghsLP"] = SettingsJson.V(GhsLP), ["ghsHP"] = SettingsJson.V(GhsHP),
-        ["logK"] = SettingsJson.V(LogK), ["gamma"] = SettingsJson.V(Gamma),
+        ["mtfMidtonesSigma"] = SettingsJson.V(MtfMidtonesSigma), ["arcsinhStrength"] = SettingsJson.V(ArcsinhStrength),
+        ["ghsStrength"] = SettingsJson.V(GhsStrength), ["ghsB"] = SettingsJson.V(GhsB),
+        ["ghsSPPercentile"] = SettingsJson.V(GhsSPPercentile), ["ghsLPPercentile"] = SettingsJson.V(GhsLPPercentile), ["ghsHPPercentile"] = SettingsJson.V(GhsHPPercentile),
+        ["logStrength"] = SettingsJson.V(LogStrength), ["gamma"] = SettingsJson.V(Gamma),
     };
 
     public static StretchSettings FromJson(JsonObject? c)
@@ -232,11 +232,13 @@ public sealed partial class StretchSettings : IJsonSettings
             Method = SettingsJson.E(c, "method", d.Method), TargetBackground = SettingsJson.F(c, "targetBackground", d.TargetBackground),
             ShadowsClipping = SettingsJson.F(c, "shadowsClipping", d.ShadowsClipping), HighlightsPercentile = SettingsJson.F(c, "highlightsPercentile", d.HighlightsPercentile),
             Linked = SettingsJson.B(c, "linked", d.Linked),
-            MtfShadows = SettingsJson.F(c, "mtfShadows", d.MtfShadows), MtfMidtones = SettingsJson.F(c, "mtfMidtones", d.MtfMidtones), MtfHighlights = SettingsJson.F(c, "mtfHighlights", d.MtfHighlights),
-            ArcsinhStretch = SettingsJson.F(c, "arcsinhStretch", d.ArcsinhStretch),
-            GhsLogD = SettingsJson.F(c, "ghsLogD", d.GhsLogD), GhsB = SettingsJson.F(c, "ghsB", d.GhsB), GhsSP = SettingsJson.F(c, "ghsSP", d.GhsSP),
-            GhsLP = SettingsJson.F(c, "ghsLP", d.GhsLP), GhsHP = SettingsJson.F(c, "ghsHP", d.GhsHP),
-            LogK = SettingsJson.F(c, "logK", d.LogK), Gamma = SettingsJson.F(c, "gamma", d.Gamma),
+            // The absolute manual parameters of before 1.16 (mtfMidtones, arcsinhStretch, ghsLogD, ghsSP…, logK)
+            // have no data-independent equivalent: such projects get the relative defaults.
+            MtfMidtonesSigma = SettingsJson.F(c, "mtfMidtonesSigma", d.MtfMidtonesSigma), ArcsinhStrength = SettingsJson.F(c, "arcsinhStrength", d.ArcsinhStrength),
+            GhsStrength = SettingsJson.F(c, "ghsStrength", d.GhsStrength), GhsB = SettingsJson.F(c, "ghsB", d.GhsB),
+            GhsSPPercentile = SettingsJson.F(c, "ghsSPPercentile", d.GhsSPPercentile), GhsLPPercentile = SettingsJson.F(c, "ghsLPPercentile", d.GhsLPPercentile),
+            GhsHPPercentile = SettingsJson.F(c, "ghsHPPercentile", d.GhsHPPercentile),
+            LogStrength = SettingsJson.F(c, "logStrength", d.LogStrength), Gamma = SettingsJson.F(c, "gamma", d.Gamma),
         };
     }
 }
@@ -443,12 +445,14 @@ public sealed partial class DetailSettings : IJsonSettings
     {
         ["micro"] = SettingsJson.V(Micro), ["texture"] = SettingsJson.V(Texture), ["clarity"] = SettingsJson.V(Clarity), ["dehaze"] = SettingsJson.V(Dehaze), ["lowFrequency"] = SettingsJson.V(LowFrequency),
         ["sharpen"] = SettingsJson.V(Sharpen), ["sharpenRadius"] = SettingsJson.V(SharpenRadius), ["sharpenMasking"] = SettingsJson.V(SharpenMasking),
+        ["sharpenMethod"] = SettingsJson.V(SharpenMethod),
     };
 
     public static DetailSettings FromJson(JsonObject? c) => new()
     {
         Micro = SettingsJson.F(c, "micro", 0), Texture = SettingsJson.F(c, "texture", 0), Clarity = SettingsJson.F(c, "clarity", 0), Dehaze = SettingsJson.F(c, "dehaze", 0), LowFrequency = SettingsJson.F(c, "lowFrequency", 0),
         Sharpen = SettingsJson.F(c, "sharpen", 0), SharpenRadius = SettingsJson.F(c, "sharpenRadius", 1.5f), SharpenMasking = SettingsJson.F(c, "sharpenMasking", 0),
+        SharpenMethod = SettingsJson.E(c, "sharpenMethod", SharpenMethod.Deconvolution),
     };
 }
 
@@ -563,12 +567,13 @@ public sealed partial class DustSpot : IJsonSettings
     {
         ["id"] = SettingsJson.V(Id), ["x"] = SettingsJson.V(X), ["y"] = SettingsJson.V(Y), ["radius"] = SettingsJson.V(Radius),
         ["model"] = SettingsJson.V(Model), ["smoothness"] = SettingsJson.V(Smoothness), ["feather"] = SettingsJson.V(Feather),
+        ["polarity"] = SettingsJson.V(Polarity),
     };
 
     public static DustSpot FromJson(JsonObject? c) => new(
         SettingsJson.D(c, "x", 0), SettingsJson.D(c, "y", 0), SettingsJson.D(c, "radius", 30),
         SettingsJson.E(c, "model", DustModel.Surface), SettingsJson.D(c, "smoothness", 3), SettingsJson.D(c, "feather", 0.2),
-        SettingsJson.G(c, "id"));
+        SettingsJson.G(c, "id"), SettingsJson.E(c, "polarity", SpotPolarity.Dark));
 
     public static DustSpot Parse(string json) => FromJson(SettingsJson.ParseObject(json));
 }
@@ -584,13 +589,21 @@ public sealed partial class DustSettings : IJsonSettings
             foreach (var s in list) a.Add(s.ToJson());
             spots[k.RawValue()] = a;
         }
-        return new JsonObject { ["spots"] = spots, ["model"] = SettingsJson.V(Model), ["smoothness"] = SettingsJson.V(Smoothness), ["feather"] = SettingsJson.V(Feather) };
+        return new JsonObject
+        {
+            ["spots"] = spots, ["model"] = SettingsJson.V(Model), ["smoothness"] = SettingsJson.V(Smoothness), ["feather"] = SettingsJson.V(Feather),
+            ["polarity"] = SettingsJson.V(Polarity), ["brightMaxRadius"] = SettingsJson.V(BrightMaxRadius),
+        };
     }
 
     public static DustSettings FromJson(JsonObject? c)
     {
         var d = new DustSettings();
-        var s = new DustSettings { Model = SettingsJson.E(c, "model", d.Model), Smoothness = SettingsJson.D(c, "smoothness", d.Smoothness), Feather = SettingsJson.D(c, "feather", d.Feather) };
+        var s = new DustSettings
+        {
+            Model = SettingsJson.E(c, "model", d.Model), Smoothness = SettingsJson.D(c, "smoothness", d.Smoothness), Feather = SettingsJson.D(c, "feather", d.Feather),
+            Polarity = SettingsJson.E(c, "polarity", d.Polarity), BrightMaxRadius = SettingsJson.D(c, "brightMaxRadius", d.BrightMaxRadius),
+        };
         if (SettingsJson.Obj(c, "spots") is JsonObject so)
             foreach (var kv in so)
                 if (ChannelKinds.FromRawValue(kv.Key) is ChannelKind k && kv.Value is JsonArray arr)
@@ -721,7 +734,7 @@ public sealed partial class ProjectDocument : IJsonSettings
         var doc = new JsonObject
         {
             ["version"] = SettingsJson.V(Version), ["channels"] = channels, ["settings"] = Settings.ToJson(), ["presets"] = presets,
-            ["rotation"] = SettingsJson.V(Rotation), ["flipped"] = SettingsJson.V(Flipped), ["dust"] = Dust.ToJson(), ["gradient"] = Gradient.ToJson(), ["corrections"] = Corrections.ToJson(),
+            ["rotation"] = SettingsJson.V(Rotation), ["flipped"] = SettingsJson.V(Flipped), ["angle"] = SettingsJson.V(Angle), ["dust"] = Dust.ToJson(), ["gradient"] = Gradient.ToJson(), ["corrections"] = Corrections.ToJson(),
         };
         if (StarsFile != null) doc["starsFile"] = SettingsJson.V(StarsFile);
         if (StarsLayer != null) doc["starsLayer"] = StarsLayer.ToJson();
@@ -740,6 +753,7 @@ public sealed partial class ProjectDocument : IJsonSettings
             Crop = SettingsJson.Has(c, "crop") ? PixelRectJson.FromJson(SettingsJson.Obj(c, "crop")) : d.Crop,
             Rotation = ((SettingsJson.I(c, "rotation", d.Rotation) % 4) + 4) % 4,
             Flipped = SettingsJson.B(c, "flipped", d.Flipped),
+            Angle = SettingsJson.D(c, "angle", d.Angle),
             Dust = SettingsJson.Obj(c, "dust") is JsonObject du ? DustSettings.FromJson(du) : d.Dust,
             Gradient = SettingsJson.Obj(c, "gradient") is JsonObject gr ? GradientSettings.FromJson(gr) : d.Gradient,
             Corrections = SettingsJson.Obj(c, "corrections") is JsonObject co ? CorrectionSettings.FromJson(co) : d.Corrections,

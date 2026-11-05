@@ -38,7 +38,7 @@ using AstroCore;
 //      --crop x,y,w,h         shared crop rectangle (full-resolution pixels); "auto" trims empty borders
 //      --save-project <file>  write a project file (channel paths, crop, settings) instead of/besides rendering
 //      --dust <kind>:x,y,r[;x,y,r…]  heal dust spots on a channel before anything else (repeatable; a project's
-//                             spots are applied too);  --dust-model surface | radial;  --dust-smooth <px>;  --dust-feather <0..0.5>
+//                             spots are applied too);  --dust-model surface | radial;  --dust-smooth <px>;  --dust-feather <0..0.5>;  --dust-polarity dark | bright (star halos)
 //                             (the three parameters apply to the spots given with --dust)
 //      --gradient <kind>:line:x0,y0,x1,y1 | <kind>:ellipse:cx,cy,a,b[,angle°] | <kind>:poly[:degree] | <kind>:samples[:perRow[,tolerance]]
 //                             (samples: a grid of background samples with a spline / kriging surface;  --gradient-surface spline | kriging;
@@ -165,6 +165,7 @@ switch (command)
         if (Option("--dust-model") is string dm && EnumRaw.Parse<DustModel>(dm) is DustModel m) dust.Model = m;
         if (Option("--dust-smooth") is string ds && double.TryParse(ds, NumberStyles.Float, CultureInfo.InvariantCulture, out var dsv)) dust.Smoothness = dsv;
         if (Option("--dust-feather") is string df && double.TryParse(df, NumberStyles.Float, CultureInfo.InvariantCulture, out var dfv)) dust.Feather = dfv;
+        if (Option("--dust-polarity") is string dp && EnumRaw.Parse<SpotPolarity>(dp) is SpotPolarity pol) dust.Polarity = pol;
         while (Option("--dust") is string d)
         {
             var parts = d.Split(':', 2);

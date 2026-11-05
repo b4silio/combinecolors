@@ -394,18 +394,35 @@ public sealed partial class DetailSettings : IEquatable<DetailSettings>
     public float Dehaze = 0;
     /// <summary>−0.5…2: local contrast of the largest structures (radius ≈ 50 % of the width).</summary>
     public float LowFrequency = 0;
-    /// <summary>0…2: unsharp-mask amount on the luminance.</summary>
+    /// <summary>0…2: sharpening amount on the luminance.</summary>
     public float Sharpen = 0;
-    /// <summary>Unsharp-mask radius (Gaussian σ) in full-resolution pixels.</summary>
+    /// <summary>Blur undone by the sharpening (Gaussian σ) in full-resolution pixels.</summary>
     public float SharpenRadius = 1.5f;
+    /// <summary>How the sharpening is done.</summary>
+    public SharpenMethod SharpenMethod = SharpenMethod.Deconvolution;
     /// <summary>0…1: protects low-contrast (noise) areas from the sharpening, like Camera Raw's Masking.</summary>
     public float SharpenMasking = 0;
     public bool IsNeutral => Micro == 0 && Texture == 0 && Clarity == 0 && Dehaze == 0 && LowFrequency == 0 && Sharpen == 0;
 
     public DetailSettings Clone() => (DetailSettings)MemberwiseClone();
-    public bool Equals(DetailSettings? o) => o != null && Micro == o.Micro && Texture == o.Texture && Clarity == o.Clarity && Dehaze == o.Dehaze && LowFrequency == o.LowFrequency && Sharpen == o.Sharpen && SharpenRadius == o.SharpenRadius && SharpenMasking == o.SharpenMasking;
+    public bool Equals(DetailSettings? o) => o != null && Micro == o.Micro && Texture == o.Texture && Clarity == o.Clarity && Dehaze == o.Dehaze && LowFrequency == o.LowFrequency && Sharpen == o.Sharpen && SharpenRadius == o.SharpenRadius && SharpenMasking == o.SharpenMasking && SharpenMethod == o.SharpenMethod;
     public override bool Equals(object? obj) => Equals(obj as DetailSettings);
-    public override int GetHashCode() => HashCode.Combine(Micro, Texture, Clarity, Dehaze, LowFrequency, Sharpen, SharpenRadius, SharpenMasking);
+    public override int GetHashCode() => HashCode.Combine(Micro, Texture, Clarity, Dehaze, LowFrequency, Sharpen, SharpenRadius, HashCode.Combine(SharpenMasking, SharpenMethod));
+}
+
+public enum SharpenMethod
+{
+    /// <summary>Richardson–Lucy deconvolution of a Gaussian blur of the given radius: steepens edges and
+    /// pulls in small stars and detail, like undoing seeing / optics blur.</summary>
+    Deconvolution,
+    /// <summary>Unsharp mask: adds the difference to a blurred copy (a high-frequency boost).</summary>
+    UnsharpMask,
+}
+
+public static class SharpenMethods
+{
+    public static readonly SharpenMethod[] All = [SharpenMethod.Deconvolution, SharpenMethod.UnsharpMask];
+    public static string DisplayName(this SharpenMethod m) => m == SharpenMethod.Deconvolution ? "Deconvolution" : "Unsharp mask";
 }
 
 public enum DenoiseMethod { Wavelets, NonLocalMeans, Guided, Bm3d }

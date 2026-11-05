@@ -37,10 +37,38 @@ public sealed class PreviewControl : Control
     PixelRect? crop; public PixelRect? Crop { get => crop; set { crop = value; InvalidateVisual(); } }
     bool cropEditing; public bool CropEditing { get => cropEditing; set { cropEditing = value; UpdateCursor(); InvalidateVisual(); } }
     PixelRect? cropDraft; public PixelRect? CropDraft { get => cropDraft; set { cropDraft = value; InvalidateVisual(); } }
+    /// <summary>Fine rotation already applied to the channels, and the one being edited with the crop (degrees, clockwise).
+    /// While they differ the picture is turned on screen under the upright crop; the channels are resampled on Apply.</summary>
+    double fineAngle; public double FineAngle { get => fineAngle; set { if (fineAngle == value) return; fineAngle = value; InvalidateVisual(); } }
+    double cropAngle; public double CropAngle { get => cropAngle; set { if (cropAngle == value) return; cropAngle = value; InvalidateVisual(); } }
+    /// <summary>Where the crop being edited may go (image coordinates): the canvas of the turned picture, sideways after an
+    /// odd number of quarter turns, so it can reach outside the shown picture.</summary>
+    Rect cropBounds; public Rect CropBounds
+    {
+        get => cropBounds;
+        set
+        {
+            if (cropBounds == value) return;
+            var old = cropBounds;
+            cropBounds = value;
+            // The turned canvas went sideways (or back): show all of it.
+            if (cropEditing && old.Width > 0 && value.Size != old.Size) Fit(value);
+            InvalidateVisual();
+        }
+    }
+    Rect CropLimits => cropEditing && cropBounds.Width > 0 ? cropBounds : new Rect(new Point(0, 0), imageSize);
+    public event Action<double>? CropAngleChange;
+    /// <summary>Width (view units) of the band around the crop where a drag turns the picture.</summary>
+    const double TurnZone = 160;
+    double turnStartAngle, turnStartPointer;
     CropOverlayMode cropOverlay = CropOverlayMode.Frame; public CropOverlayMode CropOverlay { get => cropOverlay; set { cropOverlay = value; InvalidateVisual(); } }
     bool dustEditing; public bool DustEditing { get => dustEditing; set { dustEditing = value; UpdateCursor(); InvalidateVisual(); } }
     List<DustSpot> dustSpots = new(); public List<DustSpot> DustSpots { get => dustSpots; set { dustSpots = value; InvalidateVisual(); } }
     Guid? selectedDustSpot; public Guid? SelectedDustSpot { get => selectedDustSpot; set { selectedDustSpot = value; InvalidateVisual(); } }
+    /// <summary>New spots are bright spots: a dotted circle of the largest fitted radius follows the pointer; right-drag changes it.</summary>
+    bool dustBrightMode; public bool DustBrightMode { get => dustBrightMode; set { if (dustBrightMode == value) return; dustBrightMode = value; InvalidateVisual(); } }
+    double dustMaxRadius = 40; public double DustMaxRadius { get => dustMaxRadius; set { if (dustMaxRadius == value) return; dustMaxRadius = value; InvalidateVisual(); } }
+    Point? dustPointer; bool maxRadiusResizing; Point maxRadiusStart; double maxRadiusStartValue;
     bool gradientEditing; public bool GradientEditing { get => gradientEditing; set { gradientEditing = value; UpdateCursor(); InvalidateVisual(); } }
     GradientGesture? gradientGesture; public GradientGesture? GradientGesture { get => gradientGesture; set { gradientGesture = value; InvalidateVisual(); } }
     GradientGesture? gradientRefined; public GradientGesture? GradientRefined { get => gradientRefined; set { gradientRefined = value; InvalidateVisual(); } }
@@ -101,6 +129,7 @@ public sealed class PreviewControl : Control
     public event Action<Point>? DustAdd;
     public event Action<Guid?>? DustSelect;
     public event Action? DustDelete;
+    public event Action<double>? DustMaxRadiusChanged;
     public event Action<GradientGesture>? GradientGestureChanged;
     public event Action<List<GradientRegion>>? GradientRegionsChanged;
     public event Action<Point>? GradientRegionAdd;
@@ -110,7 +139,7 @@ public sealed class PreviewControl : Control
     public event Action<List<BackgroundSample>>? GradientSamplesChanged;
     public event Action<Guid?>? GradientSampleSelect;
 
-    enum DragKind { None, Pan, Move, Resize, Create, DustPan, DustMove, DustResize, GradientPan, GradientCreate, GradientHandle, GradientMove, RegionMove, RegionResize, SampleMove, Paint }
+    enum DragKind { None, Pan, Move, Resize, Create, Turn, DustPan, DustMove, DustResize, GradientPan, GradientCreate, GradientHandle, GradientMove, RegionMove, RegionResize, SampleMove, Paint }
     Guid dragSample; BackgroundSample? dragSampleStart;
     DragKind drag = DragKind.None;
     Point dragLast, dragStart, dragAnchor;
@@ -131,6 +160,9 @@ public sealed class PreviewControl : Control
     static readonly IPen HandlePen = new Pen(Brushes.Black, 1);
     static readonly IPen DustPen = new Pen(new SolidColorBrush(Color.FromArgb(217, 255, 255, 255)), 1, new DashStyle([4, 3], 0));
     static readonly IPen DustSelectedPen = new Pen(Brushes.Gold, 1.5);
+    static readonly IPen DustBrightPen = new Pen(new SolidColorBrush(Color.FromArgb(230, 255, 149, 0)), 1.5, new DashStyle([1, 2], 0));
+    static readonly IPen DustBrightSelectedPen = new Pen(Brushes.Yellow, 1.5, new DashStyle([1, 2], 0));
+    static readonly IPen DustMaxRadiusPen = new Pen(new SolidColorBrush(Color.FromArgb(180, 255, 149, 0)), 1, new DashStyle([1, 3], 0));
 
     public PreviewControl()
     {
@@ -203,6 +235,20 @@ public sealed class PreviewControl : Control
 
     public bool IsActualSize => Math.Abs(Zoom * Backing - 1) < 0.01;
 
+    /// <summary>The zoom of "Fit" (the crop, else the whole image, with a small margin).</summary>
+    public double FitZoom
+    {
+        get
+        {
+            var r = FitTarget;
+            if (r.Width <= 0 || r.Height <= 0 || ActualWidth <= 0) return Zoom;
+            return Math.Min(ActualWidth / r.Width, ActualHeight / r.Height) * 0.97;
+        }
+    }
+
+    /// <summary>The view shows the fitted picture (zoom within 1 % of the fit zoom).</summary>
+    public bool IsFitted => FitZoom > 0 && Math.Abs(Zoom - FitZoom) / FitZoom < 0.01;
+
     public void SetZoom(double z, Point anchor)
     {
         if (imageSize.Width <= 0) return;
@@ -240,6 +286,48 @@ public sealed class PreviewControl : Control
 
     void UpdateCursor() => Cursor = new Cursor(spaceHeld ? StandardCursorType.Hand : cropEditing || dustEditing || gradientEditing || correctionEditing ? StandardCursorType.Cross : StandardCursorType.Arrow);
 
+    /// <summary>Cursor where a drag turns the picture: a rotate arrow in a dark disc.</summary>
+    static Cursor? turnCursor;
+    static Cursor TurnCursor
+    {
+        get
+        {
+            if (turnCursor != null) return turnCursor;
+            try
+            {
+                var bmp = new RenderTargetBitmap(new PixelSize(24, 24));
+                using (var dc = bmp.CreateDrawingContext())
+                {
+                    dc.DrawEllipse(new SolidColorBrush(Color.FromArgb(150, 0, 0, 0)), null, new Point(12, 12), 11, 11);
+                    var pen = new Pen(Brushes.White, 2);
+                    var g = new StreamGeometry();
+                    using (var c = g.Open())
+                    {
+                        // Three quarters of a circle and an arrow head at its end.
+                        c.BeginFigure(new Point(18, 12), false);
+                        c.ArcTo(new Point(12, 6), new Size(6, 6), 0, true, SweepDirection.Clockwise);
+                        c.EndFigure(false);
+                        c.BeginFigure(new Point(9, 3), false); c.LineTo(new Point(12, 6)); c.LineTo(new Point(9, 9)); c.EndFigure(false);
+                    }
+                    dc.DrawGeometry(null, pen, g);
+                }
+                turnCursor = new Cursor(bmp, new PixelPoint(12, 12));
+            }
+            catch { turnCursor = new Cursor(StandardCursorType.Hand); }
+            return turnCursor;
+        }
+    }
+
+    /// <summary>In the band around the crop being edited (outside it, within TurnZone): a drag there turns the picture.</summary>
+    bool InTurnZone(Point p)
+    {
+        if (!cropEditing || cropDraft is not PixelRect d) return false;
+        var c = ViewRect(ToRect(d));
+        return !c.Inflate(8).Contains(p) && c.Inflate(TurnZone).Contains(p);
+    }
+
+    static double AngleOf(Point p, Rect c) => Math.Atan2(p.Y - c.Center.Y, p.X - c.Center.X) * 180 / Math.PI;
+
     // Rendering
 
     public override void Render(DrawingContext dc)
@@ -254,7 +342,18 @@ public sealed class PreviewControl : Control
             UpdateScalingMode();
             Dispatcher.UIThread.Post(NotifyViewport);
         }
-        if (frame is PreviewFrame f) dc.DrawImage(f.Bitmap, ViewRect(f.Rect));
+        if (frame is PreviewFrame f)
+        {
+            double turn = cropEditing ? cropAngle - fineAngle : 0;
+            if (turn != 0)
+            {
+                // Turn about the picture's centre (clockwise on screen), no render: the channels are resampled on Apply.
+                var ic = ViewPoint(new Point(imageSize.Width / 2, imageSize.Height / 2));
+                var m = Matrix.CreateTranslation(-ic.X, -ic.Y) * Matrix.CreateRotation(turn * Math.PI / 180) * Matrix.CreateTranslation(ic.X, ic.Y);
+                using (dc.PushTransform(m)) dc.DrawImage(f.Bitmap, ViewRect(f.Rect));
+            }
+            else dc.DrawImage(f.Bitmap, ViewRect(f.Rect));
+        }
         DrawCropOverlay(dc);
         DrawDustOverlay(dc);
         DrawGradientOverlay(dc);
@@ -315,7 +414,7 @@ public sealed class PreviewControl : Control
         PixelRect? rect = cropEditing ? cropDraft : (cropOverlay == CropOverlayMode.Hidden ? null : crop);
         bool cropOnly = !cropEditing && cropOverlay == CropOverlayMode.CropOnly;
         if (rect is not PixelRect r) return;
-        var full = ViewRect(new Rect(new Point(0, 0), imageSize)).Intersect(new Rect(-2, -2, ActualWidth + 4, ActualHeight + 4));
+        var full = ViewRect(new Rect(new Point(0, 0), imageSize).Union(CropLimits)).Intersect(new Rect(-2, -2, ActualWidth + 4, ActualHeight + 4));
         var c = ViewRect(ToRect(r));
         var dim = cropOnly ? BackBrush : DimBrush;
         // Four rectangles around the crop.
@@ -329,12 +428,25 @@ public sealed class PreviewControl : Control
         foreach (var p in parts) if (p.Width > 0 && p.Height > 0) dc.FillRectangle(dim, p);
         if (!cropOnly) dc.DrawRectangle(null, cropEditing ? CropEditPen : CropPen, Snap(c));
         if (cropEditing)
+        {
+            // Thirds; a finer grid while the picture is turned, to level it against.
+            int n = cropAngle != fineAngle || drag == DragKind.Turn ? 8 : 3;
+            for (int i = 1; i < n; i++)
+            {
+                double x = c.Left + c.Width * i / n, y = c.Top + c.Height * i / n;
+                dc.DrawLine(CropGridPen, new Point(x, c.Top), new Point(x, c.Bottom));
+                dc.DrawLine(CropGridPen, new Point(c.Left, y), new Point(c.Right, y));
+            }
+        }
+        if (cropEditing)
             for (int i = 0; i < 8; i++)
             {
                 var h = HandlePoint(i, c);
                 dc.DrawRectangle(Brushes.White, HandlePen, new Rect(h.X - 5, h.Y - 5, 10, 10), 2, 2);
             }
     }
+
+    static readonly IPen CropGridPen = new Pen(new SolidColorBrush(Color.FromArgb(90, 255, 255, 255)), 0.5);
 
     static Rect Snap(Rect r) => new(Math.Round(r.X) + 0.5, Math.Round(r.Y) + 0.5, Math.Max(0, Math.Round(r.Width) - 1), Math.Max(0, Math.Round(r.Height) - 1));
 
@@ -359,15 +471,30 @@ public sealed class PreviewControl : Control
         {
             var c = ViewPoint(new Point(s.X, s.Y));
             double r = s.Radius * Zoom;
+            // Bright spots (star halos) are orange dotted circles, the selected one yellow dotted.
+            bool bright = s.Polarity == SpotPolarity.Bright;
             if (s.Id == selectedDustSpot)
             {
-                dc.DrawEllipse(null, DustSelectedPen, c, r, r);
+                dc.DrawEllipse(null, bright ? DustBrightSelectedPen : DustSelectedPen, c, r, r);
                 dc.DrawLine(DustSelectedPen, new Point(c.X - 4, c.Y), new Point(c.X + 4, c.Y));
                 dc.DrawLine(DustSelectedPen, new Point(c.X, c.Y - 4), new Point(c.X, c.Y + 4));
                 var h = DustHandlePoint(s);
                 dc.DrawEllipse(Brushes.Gold, HandlePen, h, 5, 5);
             }
-            else dc.DrawEllipse(null, DustPen, c, r, r);
+            else dc.DrawEllipse(null, bright ? DustBrightPen : DustPen, c, r, r);
+        }
+        // The largest radius a click gives a new bright spot, at the pointer.
+        if (dustBrightMode && (maxRadiusResizing ? maxRadiusStart : dustPointer) is Point bp)
+        {
+            double r = Math.Max(dustMaxRadius * Zoom, 2);
+            dc.DrawEllipse(null, DustMaxRadiusPen, bp, r, r);
+            if (maxRadiusResizing)
+            {
+                var text = new FormattedText($"max r = {dustMaxRadius:0} px", System.Globalization.CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Typeface.Default, 11, Brushes.White);
+                var at = new Point(bp.X - text.Width / 2, bp.Y - r - 22);
+                dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(128, 0, 0, 0)), null, new Rect(at.X - 4, at.Y - 2, text.Width + 8, text.Height + 4), 3, 3);
+                dc.DrawText(text, at);
+            }
         }
     }
 
@@ -623,6 +750,13 @@ public sealed class PreviewControl : Control
             e.Pointer.Capture(this); e.Handled = true; InvalidateVisual();
             return;
         }
+        if (dustEditing && dustBrightMode && props.IsRightButtonPressed)
+        {
+            var rp = e.GetPosition(this);
+            maxRadiusResizing = true; maxRadiusStart = rp; maxRadiusStartValue = dustMaxRadius;
+            e.Pointer.Capture(this); e.Handled = true; InvalidateVisual();
+            return;
+        }
         if (!props.IsLeftButtonPressed) { base.OnPointerPressed(e); return; }
         Focus();
         var p = e.GetPosition(this);
@@ -651,6 +785,12 @@ public sealed class PreviewControl : Control
                     if (Dist(p, h) <= 8) { drag = DragKind.Resize; dragHandle = i; dragRect = d; e.Pointer.Capture(this); e.Handled = true; return; }
                 }
                 if (c.Contains(p)) { drag = DragKind.Move; dragRect = d; dragAnchor = ip; e.Pointer.Capture(this); e.Handled = true; return; }
+                // In the band around the crop: turn the picture (farther out, a drag draws a new crop).
+                if (InTurnZone(p))
+                {
+                    drag = DragKind.Turn; turnStartAngle = cropAngle; turnStartPointer = AngleOf(p, c);
+                    e.Pointer.Capture(this); e.Handled = true; InvalidateVisual(); return;
+                }
             }
             drag = DragKind.Create; dragStart = ip; e.Pointer.Capture(this);
         }
@@ -686,6 +826,16 @@ public sealed class PreviewControl : Control
         var ip = ImagePoint(p);
         Hover?.Invoke(ip);
         bool left = e.GetCurrentPoint(this).Properties.IsLeftButtonPressed;
+        if (maxRadiusResizing)
+        {
+            // Horizontal movement scales the radius (exponentially, as for the brush).
+            double lng = Math.Max(imageSize.Width, imageSize.Height);
+            dustMaxRadius = Math.Round(Math.Min(Math.Max(maxRadiusStartValue * Math.Exp((p.X - maxRadiusStart.X) / 120), 4), Math.Max(lng * 0.1, 40)));
+            DustMaxRadiusChanged?.Invoke(dustMaxRadius);
+            InvalidateVisual();
+            return;
+        }
+        if (dustEditing && dustBrightMode) { dustPointer = p; InvalidateVisual(); }
         if (correctionEditing && (!spaceHeld || brushResizing))
         {
             if (brushResizing)
@@ -709,7 +859,9 @@ public sealed class PreviewControl : Control
             return;
         }
         if (!left && drag != DragKind.None) { drag = DragKind.None; e.Pointer.Capture(null); UpdateCursor(); }
-        Point ClampPoint(Point q) => new(Math.Min(Math.Max(q.X, 0), imageSize.Width), Math.Min(Math.Max(q.Y, 0), imageSize.Height));
+        var lim = CropLimits;
+        Point ClampPoint(Point q) => new(Math.Min(Math.Max(q.X, lim.Left), lim.Right), Math.Min(Math.Max(q.Y, lim.Top), lim.Bottom));
+        if (cropEditing && drag == DragKind.None && !spaceHeld) Cursor = InTurnZone(p) ? TurnCursor : new Cursor(StandardCursorType.Cross);
         if (GradientMouseMove(p, ip)) return;
         switch (drag)
         {
@@ -751,8 +903,22 @@ public sealed class PreviewControl : Control
             {
                 var r = dragRect;
                 int x = (int)Math.Round(dragRect.X + ip.X - dragAnchor.X), y = (int)Math.Round(dragRect.Y + ip.Y - dragAnchor.Y);
-                x = Math.Min(Math.Max(0, x), (int)imageSize.Width - r.Width); y = Math.Min(Math.Max(0, y), (int)imageSize.Height - r.Height);
+                int lx0 = (int)Math.Round(lim.Left), ly0 = (int)Math.Round(lim.Top), lx1 = (int)Math.Round(lim.Right), ly1 = (int)Math.Round(lim.Bottom);
+                x = Math.Min(Math.Max(lx0, x), lx1 - r.Width); y = Math.Min(Math.Max(ly0, y), ly1 - r.Height);
                 cropDraft = new PixelRect(x, y, r.Width, r.Height); InvalidateVisual(); CropDraftChanged?.Invoke(cropDraft);
+                break;
+            }
+            case DragKind.Turn:
+            {
+                if (cropDraft is not PixelRect d) break;
+                double delta = AngleOf(p, ViewRect(ToRect(d))) - turnStartPointer;
+                if (delta > 180) delta -= 360; else if (delta < -180) delta += 360;
+                // A tenth of a degree; with Shift whole degrees. Quarter turns (and 0) catch the pointer within 1.5°.
+                double a = turnStartAngle + delta;
+                a = e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? Math.Round(a) : Math.Round(a * 10) / 10;
+                double quarter = Math.Round(a / 90) * 90;
+                if (Math.Abs(a - quarter) < 1.5) a = quarter;
+                CropAngleChange?.Invoke(a);
                 break;
             }
             case DragKind.Resize:
@@ -771,6 +937,7 @@ public sealed class PreviewControl : Control
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
+        if (maxRadiusResizing && e.InitialPressMouseButton == MouseButton.Right) { maxRadiusResizing = false; dustPointer = e.GetPosition(this); e.Pointer.Capture(null); e.Handled = true; InvalidateVisual(); return; }
         if (brushResizing && e.InitialPressMouseButton == MouseButton.Right) { brushResizing = false; e.Pointer.Capture(null); e.Handled = true; InvalidateVisual(); return; }
         if (e.InitialPressMouseButton != MouseButton.Left) { base.OnPointerReleased(e); return; }
         if (drag == DragKind.DustPan && !dragMoved)
@@ -779,15 +946,23 @@ public sealed class PreviewControl : Control
             if (ip.X >= 0 && ip.Y >= 0 && ip.X < imageSize.Width && ip.Y < imageSize.Height) DustAdd?.Invoke(ip); else DustSelect?.Invoke(null);
         }
         GradientMouseUp();
+        if (drag == DragKind.Turn) InvalidateVisual();
         drag = DragKind.None;
         e.Pointer.Capture(null);
         UpdateCursor();
     }
 
-    protected override void OnPointerExited(PointerEventArgs e) { base.OnPointerExited(e); Hover?.Invoke(null); if (brushPoint != null && !brushResizing) { brushPoint = null; InvalidateVisual(); } }
+    protected override void OnPointerExited(PointerEventArgs e)
+    {
+        base.OnPointerExited(e); Hover?.Invoke(null);
+        if (brushPoint != null && !brushResizing) { brushPoint = null; InvalidateVisual(); }
+        if (dustPointer != null && !maxRadiusResizing) { dustPointer = null; InvalidateVisual(); }
+    }
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
+        // Ctrl / Alt combinations are menu shortcuts (Ctrl+1 / Ctrl+2 switch tabs), never the plain keys below.
+        if ((e.KeyModifiers & (KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.Meta)) != 0) { base.OnKeyDown(e); return; }
         switch (e.Key)
         {
             case Key.Add: case Key.OemPlus: Perform(ZoomAction.ZoomIn); e.Handled = true; break;

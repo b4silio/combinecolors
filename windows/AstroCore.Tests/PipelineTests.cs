@@ -426,7 +426,7 @@ public class TolerantDecodingTests
     {
         var json = """
         {"version": 1, "channels": [{"kind": "Ha", "path": "/x/ha.fits"}],
-         "settings": {"paletteID": "hoo", "mode": "matrix", "stars": {"enabled": true}, "stretch": {"method": "ghs", "ghsLogD": 3.5, "bogus": 1},
+         "settings": {"paletteID": "hoo", "mode": "matrix", "stars": {"enabled": true}, "stretch": {"method": "ghs", "ghsStrength": 3.5, "bogus": 1},
                       "normalization": {"method": "noSuchMethod"}, "post": {"saturation": 1.5}, "channels": {"OIII": {"gain": 2}}},
          "crop": {"x": 1, "y": 2, "width": 30, "height": 40}}
         """;
@@ -436,7 +436,7 @@ public class TolerantDecodingTests
         Assert.True(doc.Settings.Stars.Enabled);
         Assert.Equal(StarsStretchMode.Auto, doc.Settings.Stars.Stretch);            // missing key → default
         Assert.Equal(StretchMethod.Ghs, doc.Settings.Stretch.Method);
-        Assert.Equal(3.5f, doc.Settings.Stretch.GhsLogD);
+        Assert.Equal(3.5f, doc.Settings.Stretch.GhsStrength);
         Assert.Equal(new StretchSettings().TargetBackground, doc.Settings.Stretch.TargetBackground);
         Assert.Equal(new NormalizationSettings().Method, doc.Settings.Normalization.Method);   // unknown value → default
         Assert.Equal(0, doc.Rotation);                                                    // missing → no rotation

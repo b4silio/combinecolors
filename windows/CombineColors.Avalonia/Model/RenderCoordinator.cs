@@ -41,6 +41,12 @@ public sealed class PreviewRequest
     public StarsLayer? Stars;
     /// <summary>Live hand-painted correction of one channel (the corrections editor).</summary>
     public (CorrectionMap map, float strength, ChannelKind kind, float? pedestal)? Correction;
+    /// <summary>
+    /// Stars tab with the combination on: the rendered Background tab the result is blended onto,
+    /// with the Background tab's settings (its Combine stars block).
+    /// </summary>
+    public StarsLayer? Background;
+    public CombineSettings? BackgroundSettings;
 }
 
 /// <summary>Serial, latest-wins background renderer.</summary>
@@ -142,10 +148,22 @@ public sealed class RenderCoordinator
             result = cache.Render(request, key);
         }
         else result = Renderer.Render(request);
-        var bmp = DisplayBitmaps.Make(result.Image);
+        var shown = result.Image;
+        if (req.Background is StarsLayer bg && req.BackgroundSettings is CombineSettings bs && bg.Width == fullW && bg.Height == fullH)
+        {
+            var bgPlanes = bg.Input(level, x0, y0, cw, ch).Planes;
+            if (bgPlanes.Count == 3 && bgPlanes[0].Width == cw && bgPlanes[0].Height == ch)
+            {
+                var img = new RGBImage(bgPlanes[0].Copy(), bgPlanes[1].Copy(), bgPlanes[2].Copy());
+                var stats = result.Image.Planes.Select(p => Statistics.Compute(p)).ToList();
+                Renderer.BlendProcessedStars(img, result.Image, stats, bs);
+                shown = img;
+            }
+        }
+        var bmp = DisplayBitmaps.Make(shown);
         return new PreviewFrame
         {
-            Bitmap = bmp, Rgb = result.Image, Level = level, Rect = rect, Millis = result.Millis, RanFrom = result.RanFrom, ReusedChannels = result.ReusedChannels, PostStretch = result.PostStretch,
+            Bitmap = bmp, Rgb = shown, Level = level, Rect = rect, Millis = result.Millis, RanFrom = result.RanFrom, ReusedChannels = result.ReusedChannels, PostStretch = result.PostStretch,
             ChannelStretch = result.ChannelStretch, Settings = req.Settings,
         };
     }

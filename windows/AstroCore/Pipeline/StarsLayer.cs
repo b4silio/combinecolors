@@ -35,6 +35,10 @@ public sealed class StarsLayer
     /// <summary>The layer after an orientation operation.</summary>
     public StarsLayer Applying(OrientationOp op) => new(Planes.Select(p => p.Applying(op)).ToList(), FileName, Path, FormatDescription, Processed);
 
+    /// <summary>The layer after a fine rotation by <paramref name="degrees"/> (<see cref="FineRotation"/>).</summary>
+    public StarsLayer RotatedByDegrees(double degrees)
+        => degrees == 0 ? this : new(Planes.Select(p => p.RotatedByDegrees(degrees)).ToList(), FileName, Path, FormatDescription, Processed);
+
     /// <summary>The planes at a pyramid level, cropped (the request a render needs).</summary>
     public StarsInput Input(int level, int x, int y, int width, int height)
     {

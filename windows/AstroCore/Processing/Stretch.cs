@@ -17,34 +17,47 @@ public static class StretchMethods
     };
 }
 
-/// <summary>User-facing stretch parameters.</summary>
+/// <summary>
+/// User-facing stretch parameters.
+/// <para>
+/// The manual methods (MTF, arcsinh, GHS, log) are set <em>relative to the data</em>: their strength is
+/// in units of the channel's noise (MADN) on the black-point-to-white-point range, so the same slider
+/// position gives a similar picture on a deep, clean stack and on a short, noisy one, and the whole
+/// slider range is usable on linear data. <see cref="ResolvedStretch"/> holds the absolute numbers.
+/// </para>
+/// </summary>
 public sealed partial class StretchSettings : IEquatable<StretchSettings>
 {
     public StretchMethod Method = StretchMethod.AutoSTF;
     /// <summary>Auto STF: where the median lands (PixInsight default 0.25).</summary>
     public float TargetBackground = 0.2f;
-    /// <summary>Auto black point in units of MADN below the median (PixInsight default −2.8).</summary>
+    /// <summary>Auto black point in units of MADN below the median (PixInsight default −2.8). Every method.</summary>
     public float ShadowsClipping = -2.8f;
-    /// <summary>Highlight clipping as a percentile in [0,1]; 1 = none.</summary>
+    /// <summary>Highlight clipping as a percentile in [0,1]; 1 = none. Every method.</summary>
     public float HighlightsPercentile = 1;
     /// <summary>Use the same transform for all channels (computed from the averaged statistics).</summary>
     public bool Linked = true;
-    // Manual MTF (applied in the normalised [0,1] domain after the automatic black point).
-    public float MtfShadows = 0;
-    public float MtfMidtones = 0.5f;
-    public float MtfHighlights = 1;
-    // Arcsinh
-    public float ArcsinhStretch = 200;
-    // GHS
-    public float GhsLogD = 5;      // D = exp(logD) - 1
+    /// <summary>Manual MTF: midtones balance in noise units (absolute midtones = this × MADN on the range).
+    /// The sky, 2.8 noises above the default black point, lands near 2.8 / (2.8 + this): 10 → ≈ 0.22.</summary>
+    public float MtfMidtonesSigma = 10;
+    /// <summary>Arcsinh: stretch factor in inverse noise units (absolute factor = this / MADN on the range).</summary>
+    public float ArcsinhStrength = 1;
+    /// <summary>GHS: stretch factor D in inverse noise units (absolute D = this / MADN on the range).</summary>
+    public float GhsStrength = 0.1f;
     public float GhsB = 2;
-    public float GhsSP = 0;
-    public float GhsLP = 0;
-    public float GhsHP = 1;
-    // Log
-    public float LogK = 2000;
+    /// <summary>GHS symmetry point, shadow and highlight protection points as percentiles of the image
+    /// (0…100: the share of pixels darker; 50 ≈ the sky background, 100 = the brightest pixel).</summary>
+    public float GhsSPPercentile = 0;
+    public float GhsLPPercentile = 0;
+    public float GhsHPPercentile = 100;
+    /// <summary>Log: k in inverse noise units (absolute k = this / MADN on the range).</summary>
+    public float LogStrength = 1;
     /// <summary>Output gamma after the stretch (1 = none).</summary>
     public float Gamma = 1;
+
+    /// <summary>The parameters each method uses (the stretch block shows only these).</summary>
+    public bool UsesTargetBackground => Method == StretchMethod.AutoSTF;
+    public bool UsesClipping => Method != StretchMethod.None;
 
     public StretchSettings Clone() => (StretchSettings)MemberwiseClone();
     public bool Equals(StretchSettings? o) => o != null && SettingsJson.SameJson(this, o);
@@ -276,7 +289,7 @@ public static class Stretch
 
     /// <summary>Resolve the settings for a channel with the given (already normalised) statistics.</summary>
     public static ResolvedStretch Resolve(StretchSettings s, ChannelStats stats)
-        => Resolve(s, stats.Median, stats.Madn, stats.Percentile(s.HighlightsPercentile), stats.Max);
+        => Resolve(s, stats.Median, stats.Madn, stats.Percentile(s.HighlightsPercentile), stats.Max, stats.Percentile);
 
     /// <summary>Linked resolution: statistics are averaged across channels.</summary>
     public static ResolvedStretch ResolveLinked(StretchSettings s, IReadOnlyList<ChannelStats> stats)
@@ -290,10 +303,19 @@ public static class Stretch
             mx = MathF.Max(mx, st.Max);
         }
         med /= stats.Count; madn /= stats.Count;
-        return Resolve(s, med, madn, hl, mx);
+        return Resolve(s, med, madn, hl, mx, q =>
+        {
+            float sum = 0;
+            foreach (var st in stats) sum += st.Percentile(q);
+            return sum / stats.Count;
+        });
     }
 
-    public static ResolvedStretch Resolve(StretchSettings s, float median, float madn, float highlight, float max)
+    /// <summary>
+    /// <paramref name="percentile"/>(q) (q in 0…1) gives the image's value below which that share of the
+    /// pixels lies (GHS points); without it the GHS points fall back to the black point / the white point.
+    /// </summary>
+    public static ResolvedStretch Resolve(StretchSettings s, float median, float madn, float highlight, float max, Func<double, float>? percentile = null)
     {
         var r = new ResolvedStretch { Method = s.Method, Gamma = s.Gamma };
         if (s.Method == StretchMethod.None) return r;
@@ -306,19 +328,29 @@ public static class Stretch
             r.Midtones = Mtf(s.TargetBackground, MathF.Max(median - r.C0, 1e-7f) / MathF.Max(r.C1 - r.C0, 1e-7f));
         }
         else r.Midtones = auto.midtones;
+        // The noise on the normalised range: the unit of the manual methods' strengths.
+        float range = MathF.Max(r.C1 - r.C0, 1e-12f);
+        float sigma = madn > 0 ? MathF.Min(MathF.Max(madn / range, 1e-7f), 1) : 1e-3f;
+        // A point of the image (percentile 0…100) on the normalised range.
+        float Point(float pct, float fallback)
+        {
+            if (percentile == null) return fallback;
+            if (pct <= 0) return 0;
+            if (pct >= 100) return 1;
+            return MathF.Min(MathF.Max((percentile(pct / 100.0) - r.C0) / range, 0), 1);
+        }
         switch (s.Method)
         {
-            case StretchMethod.Mtf:
-                r.Midtones = s.MtfMidtones;
-                r.MtfShadows = s.MtfShadows;
-                r.MtfHighlights = s.MtfHighlights;
-                break;
-            case StretchMethod.Arcsinh: r.ArcsinhStretch = s.ArcsinhStretch; break;
+            case StretchMethod.Mtf: r.Midtones = MathF.Min(MathF.Max(s.MtfMidtonesSigma * sigma, 1e-7f), 0.999f); break;
+            case StretchMethod.Arcsinh: r.ArcsinhStretch = MathF.Max(s.ArcsinhStrength, 0) / sigma; break;
             case StretchMethod.Ghs:
-                r.GhsD = MathF.Exp(s.GhsLogD) - 1;
-                r.GhsB = s.GhsB; r.GhsSP = s.GhsSP; r.GhsLP = s.GhsLP; r.GhsHP = s.GhsHP;
+                r.GhsD = MathF.Max(s.GhsStrength, 0) / sigma;
+                r.GhsB = s.GhsB;
+                r.GhsSP = Point(s.GhsSPPercentile, 0);
+                r.GhsLP = MathF.Min(Point(s.GhsLPPercentile, 0), r.GhsSP);
+                r.GhsHP = MathF.Max(Point(s.GhsHPPercentile, 1), r.GhsSP);
                 break;
-            case StretchMethod.Log: r.LogK = s.LogK; break;
+            case StretchMethod.Log: r.LogK = MathF.Max(s.LogStrength, 0) / sigma; break;
         }
         return r;
     }

@@ -139,10 +139,23 @@ public sealed class CorrectionMap
         return new CorrectionMap(swaps ? ImageHeight : ImageWidth, swaps ? ImageWidth : ImageHeight, Plane.Applying(op)) { Version = Version };
     }
 
+    /// <summary>The map after a fine rotation of the image by <paramref name="degrees"/> (resampled; what turns
+    /// out of the frame is lost, what comes in is unpainted).</summary>
+    public CorrectionMap RotatedByDegrees(double degrees)
+        => degrees == 0 ? this : new CorrectionMap(ImageWidth, ImageHeight, Plane.RotatedByDegrees(degrees)) { Version = Version + 1 };
+
+    /// <summary>The map of an unoriented image (a sidecar) oriented like the channels.</summary>
+    public CorrectionMap Oriented(Orientation o)
+    {
+        var m = o.Flipped ? Applying(OrientationOp.FlipHorizontal) : this;
+        for (int i = 0; i < o.Rotation; i++) m = m.Applying(OrientationOp.RotateClockwise);
+        return m.RotatedByDegrees(o.Angle);
+    }
+
     /// <summary>The map of the unoriented image (what the sidecar stores): the orientation undone.</summary>
     public CorrectionMap Unoriented(Orientation o)
     {
-        var m = this;
+        var m = RotatedByDegrees(-o.Angle);
         for (int i = 0; i < (4 - o.Rotation) % 4; i++) m = m.Applying(OrientationOp.RotateClockwise);
         if (o.Flipped) m = m.Applying(OrientationOp.FlipHorizontal);
         return m;

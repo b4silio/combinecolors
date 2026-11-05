@@ -56,6 +56,8 @@ public sealed partial class ProjectDocument
     public int Rotation = 0;
     /// <summary>Horizontal mirror applied before the rotation (see <see cref="AstroCore.Orientation"/>).</summary>
     public bool Flipped = false;
+    /// <summary>Fine rotation in degrees after the quarter turns (see <see cref="AstroCore.Orientation"/>); the crop is in the turned picture.</summary>
+    public double Angle = 0;
     /// <summary>Dust spots healed on the loaded channels (oriented coordinates) and the estimation parameters.</summary>
     public DustSettings Dust = new();
     /// <summary>Gradient models removed from the loaded channels (oriented coordinates) and the shared protected regions.</summary>
@@ -70,8 +72,8 @@ public sealed partial class ProjectDocument
 
     public Orientation Orientation
     {
-        get => new(Rotation, Flipped);
-        set { Rotation = value.Rotation; Flipped = value.Flipped; }
+        get => new(Rotation, Flipped, Angle);
+        set { Rotation = value.Rotation; Flipped = value.Flipped; Angle = value.Angle; }
     }
 
     /// <summary>Pretty-printed JSON with sorted keys (the same layout the macOS build writes).</summary>

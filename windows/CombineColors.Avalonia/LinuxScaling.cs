@@ -8,30 +8,53 @@ namespace CombineColors;
 /// <c>Xft.dpi</c> or the AVALONIA_* / QT_* scale variables; without any of them a 4K monitor
 /// gets scale 1 and the whole interface is illegible. Before the platform starts, this reads the
 /// screen's pixel and physical size from the X server and sets AVALONIA_GLOBAL_SCALE_FACTOR
-/// when the display is clearly high-density. <c>--scale 1.5</c> or COMBINECOLORS_SCALE=1.5 force a value.
+/// when the display is clearly high-density. <c>--scale 1.5</c>, COMBINECOLORS_SCALE=1.5 or View ▸ Interface Size
+/// (the <c>uiScale</c> preference, read here before the platform starts) force a value.
 /// </summary>
 static class LinuxScaling
 {
     public const double Minimum = 1, Maximum = 3;
 
+    /// <summary>Preference key of the interface size chosen in the app (0 or missing = automatic).</summary>
+    public const string PreferenceKey = "uiScale";
+    /// <summary>The sizes offered in View ▸ Interface Size.</summary>
+    public static readonly double[] Choices = [1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+    /// <summary>What decided the scale at startup (shown in the menu).</summary>
+    public static string Source { get; private set; } = "automatic";
+
     public static void Apply(string[] args)
     {
         if (!OperatingSystem.IsLinux()) return;
         double? forced = Forced(args);
-        if (forced is double f) { Set(f); return; }
-        foreach (var v in new[] { "AVALONIA_GLOBAL_SCALE_FACTOR", "AVALONIA_SCREEN_SCALE_FACTORS", "AVALONIA_USE_PHYSICAL_DPI", "QT_SCALE_FACTOR", "QT_SCREEN_SCALE_FACTORS", "QT_AUTO_SCREEN_SCALE_FACTOR" })
-            if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable(v))) return;
-        if (Parse(Environment.GetEnvironmentVariable("GDK_SCALE")) is double gdk && gdk > 1) { Set(gdk); return; }
+        if (forced is double f) { Source = "--scale / COMBINECOLORS_SCALE"; Set(f); return; }
+        if (Preferred(args) is double pref) { Source = "Interface Size"; Set(pref); return; }
+        foreach (var v in new[] { "AVALONIA_GLOBAL_SCALE_FACTOR", "AVALONIA_SCREEN_SCALE_FACTORS", "QT_SCALE_FACTOR", "QT_SCREEN_SCALE_FACTORS" })
+            if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable(v))) { Source = v; return; }
+        if (Parse(Environment.GetEnvironmentVariable("GDK_SCALE")) is double gdk && gdk > 1) { Source = "GDK_SCALE"; Set(gdk); return; }
         var screen = X11Screen.Read();
         if (screen == null) return;
-        if (screen.Value.xftDpi is double xft && xft > 0) return;   // Avalonia honours Xft.dpi itself
-        var (w, h, wmm, hmm, _) = screen.Value;
+        var (w, h, wmm, hmm, xftDpi) = screen.Value;
+        // Avalonia honours Xft.dpi itself — unless it is the 96 dpi default on a screen that is plainly 4K or more
+        // (tiling window managers and XWayland often leave it there), which would give an illegible 1×.
+        if (xftDpi is double xft && xft > 0 && (xft > 96 || Math.Min(w, h) < 2000)) { Source = "Xft.dpi"; return; }
+        // AVALONIA_USE_PHYSICAL_DPI / QT_AUTO_SCREEN_SCALE_FACTOR (often exported for Qt apps) make Avalonia trust the
+        // reported physical size, which XWayland makes up: the choice below handles that too.
         var s = Choose(w, h, wmm, hmm);
         if (s > 1)
         {
             Console.Error.WriteLine($"CombineColors: UI scale {s.ToString("0.##", CultureInfo.InvariantCulture)} for a {w}\u00d7{h} px screen of {wmm}\u00d7{hmm} mm (override with --scale or COMBINECOLORS_SCALE)");
             Set(s);
         }
+        else Console.Error.WriteLine($"CombineColors: UI scale 1 for a {w}\u00d7{h} px screen of {wmm}\u00d7{hmm} mm (View \u25b8 Interface Size, --scale or COMBINECOLORS_SCALE change it)");
+    }
+
+    /// <summary>The interface size saved by View ▸ Interface Size (in the --prefs file or the default preferences).</summary>
+    static double? Preferred(string[] args)
+    {
+        string? path = null;
+        for (int i = 0; i + 1 < args.Length; i++) if (args[i] == "--prefs") path = args[i + 1];
+        var prefs = new Model.Preferences(path);
+        return prefs.GetDouble(PreferenceKey) is double v && v > 0 ? Math.Clamp(v, Minimum, Maximum) : null;
     }
 
     /// <summary>The scale for a screen: from the physical density when the server reports a plausible size, else from the pixel count.</summary>

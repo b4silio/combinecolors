@@ -281,7 +281,8 @@ A Windows port lives in `windows/` (C# / .NET 9, WPF): same processing, same pal
 controls, same project files. The same .NET code also builds a Linux app
 (`windows/CombineColors.Avalonia`, Avalonia UI) and a Linux CLI; the native SwiftUI app stays the
 macOS build. See [windows/README.md](windows/README.md) for building both and the Linux runtime
-requirements (on a 4K screen the Linux app picks its own UI scale; `--scale 1.5` overrides it).
+requirements (on a 4K screen the Linux app picks its own UI scale; View ▸ Interface Size or `--scale 1.5`
+overrides it).
 
 ## Building
 
@@ -499,9 +500,9 @@ See `PLAN.md` for the phase plan and the test matrix.
 
 ## Limitations / ideas
 
-* Star removal needs StarNet2 (downloaded on first use). The Windows / Linux
-  builds have neither star removal nor the Background / Stars tabs yet (they
-  still blend one RGB stars image).
+* Star removal needs StarNet2 (downloaded on first use, on every platform).
+  The Windows build has no crop angle, bright spots or Channel mix pane yet
+  (it opens projects that use them); the Linux build has everything.
 * Gradients are not corrected; the normalisation assumes a flat sky.
 * Only the primary HDU of a FITS file is read; compressed FITS (`.fz`) is not
   supported, nor are Zstandard-compressed or distributed XISF files.

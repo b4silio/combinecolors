@@ -31,6 +31,13 @@ public sealed class ChannelStripView : DockPanel
     /// <summary>The three channel editors; the open one is highlighted.</summary>
     readonly StackPanel tools = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(Pad, Pad, Pad, 0) };
     IPointer? captured;
+    /// <summary>Remove Stars and the Background / Stars tabs, under the editor buttons.</summary>
+    readonly StackPanel header = new();
+    readonly StackPanel tabs = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(Pad, 5, Pad, 0) };
+    readonly Button removeStars;
+
+    /// <summary>The Remove Stars button was pressed (the window opens the star removal dialog).</summary>
+    public event Action? RemoveStarsRequested;
 
     public ChannelStripView(ProjectModel model, Window owner)
     {
@@ -40,8 +47,16 @@ public sealed class ChannelStripView : DockPanel
         DockPanel.SetDock(histogram, Dock.Bottom);
         Children.Add(histogram);
         var sep = new Separator(); DockPanel.SetDock(sep, Dock.Bottom); Children.Add(sep);
-        DockPanel.SetDock(tools, Dock.Top);
-        Children.Add(tools);
+        header.Children.Add(tools);
+        // Star removal (StarNet2) replaces the channels by their starless versions (Background tab
+        // only; kept in place on the Stars tab so the tabs below do not move).
+        removeStars = Ui.SmallButton("☆ Remove Stars…", () => RemoveStarsRequested?.Invoke(),
+            "Remove the stars of the Background channels with StarNet2 (a free program, downloaded once): writes _bg and _stars files, switches the channels to the _bg ones and puts the stars on the Stars tab");
+        removeStars.Width = SlotWidth; removeStars.Margin = new Thickness(Pad, 3, Pad, 0); removeStars.FontSize = 10;
+        header.Children.Add(removeStars);
+        header.Children.Add(tabs);
+        DockPanel.SetDock(header, Dock.Top);
+        Children.Add(header);
         var scroller = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = slots };
         Children.Add(scroller);
         // One gesture for the whole column so that a held press can move between slots.
@@ -57,8 +72,8 @@ public sealed class ChannelStripView : DockPanel
     {
         switch (what)
         {
-            case Change.Sources: case Change.SlotThumbnails: case Change.Dust: case Change.Peek: case Change.Crop: Rebuild(); break;
-            case Change.Gradient: case Change.Corrections: RebuildTools(); break;
+            case Change.Sources: case Change.SlotThumbnails: case Change.Dust: case Change.Peek: case Change.Crop: case Change.Layer: Rebuild(); break;
+            case Change.Gradient: case Change.Corrections: case Change.Status: case Change.Stars: RebuildTools(); break;
             case Change.Frame: histogram.Histogram = model.Histogram; break;
         }
     }
@@ -84,6 +99,25 @@ public sealed class ChannelStripView : DockPanel
             b.IsEnabled = model.Sources.Count > 0;
             if (active) b.Background = new SolidColorBrush(Color.FromArgb(110, 0, 122, 255));
             tools.Children.Add(b);
+        }
+        removeStars.IsEnabled = model.Sources.Count > 0 && model.ActiveLayer == ImageLayer.Background && !model.IsRemovingStars;
+        if (model.IsRemovingStars) removeStars.Background = new SolidColorBrush(Color.FromArgb(90, 0, 122, 255)); else removeStars.ClearValue(Button.BackgroundProperty);
+        // Background / Stars tabs: two sets of channels, each with its own settings.
+        tabs.Children.Clear();
+        foreach (var layer in ImageLayers.All)
+        {
+            bool active = model.ActiveLayer == layer;
+            int count = model.LayerSources(layer).Count;
+            var l = layer;
+            var b = Ui.SmallButton((layer == ImageLayer.Background ? "☁ BG" : "✦ Stars") + (count > 0 ? $"  {count}" : ""), () => model.SwitchLayer(l),
+                layer == ImageLayer.Background
+                    ? "Background: the starless channels and their settings (Ctrl+1). The Combine stars block blends the Stars tab in."
+                    : "Stars: the star channels with settings of their own (Ctrl+2) — from Remove Stars, Load RGB stars or dropped here.");
+            b.Width = (SlotWidth - 4) / 2; b.Margin = new Thickness(0, 0, layer == ImageLayer.Background ? 4 : 0, 0); b.Padding = new Thickness(2, 2, 2, 2);
+            b.FontWeight = active ? FontWeight.Bold : FontWeight.Normal;
+            if (active) { b.Background = new SolidColorBrush(Color.FromArgb(115, 0, 122, 255)); b.BorderBrush = AppTheme.AccentBrush; }
+            b.IsEnabled = active || model.CanSwitchLayer;
+            tabs.Children.Add(b);
         }
     }
 

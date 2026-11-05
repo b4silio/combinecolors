@@ -33,7 +33,12 @@ public sealed class MainWindow : Window
     readonly Border topToolbar = new();
     readonly Border zoomToolbar = new();
     readonly Border emptyState = new();
-    MenuItem? recentMenu, undoItem, redoItem, hqItem, limitsMenu;
+    readonly Grid main = new();
+    readonly DockPanel right = new();
+    readonly GridSplitter splitter;
+    GridLength rightWidth = new(460, GridUnitType.Pixel);
+    MenuItem? panesItem;
+    MenuItem? recentMenu, undoItem, redoItem, hqItem, limitsMenu, closeItem, rotateItem, flipHItem, flipVItem, trimItem;
     bool dialogPending;
     /// <summary>Command key: ⌘ on macOS, Ctrl elsewhere.</summary>
     static readonly KeyModifiers Cmd = OperatingSystem.IsMacOS() ? KeyModifiers.Meta : KeyModifiers.Control;
@@ -51,6 +56,7 @@ public sealed class MainWindow : Window
         controls = new ControlsStripView(model);
         palettes.MatrixRequested += async () => await MatrixEditorWindow.Show(this, model);
         palettes.PixelMathRequested += async () => await PixelMathEditorWindow.Show(this, model);
+        channels.RemoveStarsRequested += ShowStarRemoval;
 
         var menu = BuildMenu();
         DockPanel.SetDock(menu, Dock.Top); Root.Children.Add(menu);
@@ -58,7 +64,6 @@ public sealed class MainWindow : Window
         var controlsSep = new Separator { Margin = new Thickness(0) }; DockPanel.SetDock(controlsSep, Dock.Bottom);
         DockPanel.SetDock(controls, Dock.Bottom); Root.Children.Add(controls); Root.Children.Add(controlsSep);
 
-        var main = new Grid();
         main.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
         main.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star) { MinWidth = 440 });
         main.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
@@ -66,24 +71,98 @@ public sealed class MainWindow : Window
         Grid.SetColumn(channels, 0); main.Children.Add(channels);
         BuildPreviewArea();
         Grid.SetColumn(previewArea, 1); main.Children.Add(previewArea);
-        var splitter = new GridSplitter { Width = 5, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Stretch, Background = AppTheme.PanelBorder, ResizeDirection = GridResizeDirection.Columns };
+        splitter = new GridSplitter { Width = 5, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Stretch, Background = AppTheme.PanelBorder, ResizeDirection = GridResizeDirection.Columns };
         Grid.SetColumn(splitter, 2); main.Children.Add(splitter);
-        var right = new DockPanel();
         var presets = new PresetBarView(model, this);
         DockPanel.SetDock(presets, Dock.Bottom); right.Children.Add(presets);
         var presetSep = new Separator { Margin = new Thickness(0) }; DockPanel.SetDock(presetSep, Dock.Bottom); right.Children.Add(presetSep);
+        // Channel mix between the palettes and the presets: weights and palette make the combination together.
+        var mix = new ChannelMixView(model); DockPanel.SetDock(mix, Dock.Bottom); right.Children.Add(mix);
+        var mixSep = new Separator { Margin = new Thickness(0) }; DockPanel.SetDock(mixSep, Dock.Bottom); right.Children.Add(mixSep);
         right.Children.Add(palettes);
         Grid.SetColumn(right, 3); main.Children.Add(right);
         Root.Children.Add(main);
 
         WirePreview();
         WireSpacePan();
+        // Tab (no modifiers, not while typing) hides / shows the side panes and the crop / zoom toolbars.
+        AddHandler(KeyDownEvent, (_, e) =>
+        {
+            if (e.Key != Key.Tab || e.KeyModifiers != KeyModifiers.None || IsTextInputFocused()) return;
+            PanesHidden = !PanesHidden; e.Handled = true;
+        }, RoutingStrategies.Tunnel);
         model.Changed += OnChanged;
         model.FitRequested += () => Dispatcher.UIThread.Post(() => preview.Perform(ZoomAction.Fit));
         DropHelpers.Accept(this, OpenPaths);
         Closing += (_, _) => { model.SaveRecentState(); model.Preferences.Flush(); };
         UpdateTitle();
         RefreshToolbars();
+    }
+
+    /// <summary>
+    /// The side panes (channel column, palettes + channel mix + presets) and the crop / zoom toolbars are
+    /// hidden, leaving the preview and the processing strip (Tab, View menu). Editor toolbars and the crop's
+    /// Apply / Cancel stay while open. Never saved: every launch starts with them shown.
+    /// </summary>
+    public bool PanesHidden
+    {
+        get => panesHidden;
+        set
+        {
+            if (panesHidden == value) return;
+            panesHidden = value;
+            var col = main.ColumnDefinitions[3];
+            if (value) { rightWidth = col.Width; col.MinWidth = 0; col.Width = new GridLength(0); }
+            else { col.Width = rightWidth; col.MinWidth = 380; }
+            channels.IsVisible = !value; splitter.IsVisible = !value; right.IsVisible = !value;
+            if (panesItem != null) panesItem.Header = value ? "Show Side Panels" : "Hide Side Panels";
+            RefreshToolbars();
+        }
+    }
+    bool panesHidden;
+
+    /// <summary>
+    /// View ▸ Interface Size: the UI scale (fonts, panes, controls), saved and applied when the app starts (Avalonia takes
+    /// the scale before the window exists), so a change offers to restart. Automatic = the screen's own density.
+    /// </summary>
+    MenuItem InterfaceSizeMenu()
+    {
+        double saved = model.Preferences.GetDouble(LinuxScaling.PreferenceKey) ?? 0;
+        var menu = new MenuItem { Header = $"Interface Size (now {RenderScaling * 100:0} %)" };
+        ToolTip.SetTip(menu, "Scales the fonts, panes and controls. Automatic follows the screen (now from " + LinuxScaling.Source + ").");
+        void Add(string header, double value)
+        {
+            var it = new MenuItem { Header = header, ToggleType = MenuItemToggleType.Radio, IsChecked = value == saved || (value == 0 && !LinuxScaling.Choices.Contains(saved)) };
+            it.Click += async (_, _) =>
+            {
+                model.Preferences.Set(LinuxScaling.PreferenceKey, value);
+                model.Preferences.Flush();
+                if (await DialogBase.Confirm(this, "Interface size", "The new interface size applies when CombineColors starts again. Restart now? (The current set reopens from Recent sets.)", "Restart now", "Later"))
+                    Restart();
+            };
+            menu.Items.Add(it);
+        }
+        Add("Automatic", 0);
+        menu.Items.Add(new Separator());
+        foreach (var c in LinuxScaling.Choices) Add($"{c * 100:0} %", c);
+        return menu;
+    }
+
+    /// <summary>Starts a new instance with the same command line and closes this one.</summary>
+    void Restart()
+    {
+        try
+        {
+            var args = Environment.GetCommandLineArgs();
+            var exe = Environment.ProcessPath ?? args[0];
+            var psi = new System.Diagnostics.ProcessStartInfo(exe) { UseShellExecute = false };
+            // Run through `dotnet CombineColors.dll`: the dll is the first argument.
+            if (Path.GetFileNameWithoutExtension(exe).Equals("dotnet", StringComparison.OrdinalIgnoreCase)) psi.ArgumentList.Add(args[0]);
+            foreach (var a in args.Skip(1)) psi.ArgumentList.Add(a);
+            System.Diagnostics.Process.Start(psi);
+        }
+        catch (Exception e) { model.ErrorMessage = "Could not restart: " + e.Message; return; }
+        Close();
     }
 
     /// <summary>Files passed on the command line, dropped or chosen: projects open, images load.</summary>
@@ -123,7 +202,8 @@ public sealed class MainWindow : Window
         file.Items.Add(new Separator());
         file.Items.Add(Item("Export Combined Image…", async () => { if (model.Sources.Count > 0) await ExportWindow.Show(this, model); }, Key.E, Cmd));
         file.Items.Add(new Separator());
-        file.Items.Add(Item("Remove All Channels", model.RemoveAll));
+        closeItem = Item("Close Image", model.CloseImage, Key.W, Cmd);
+        file.Items.Add(closeItem);
         file.Items.Add(new Separator());
         file.Items.Add(Item(OperatingSystem.IsMacOS() ? "Quit" : "Exit", Close, Key.Q, Cmd));
         menu.Items.Add(file);
@@ -134,9 +214,27 @@ public sealed class MainWindow : Window
         edit.Items.Add(new Separator());
         edit.Items.Add(Item("Copy Preview Image", () => model.CopyPreviewToClipboard(), Key.C, Cmd | KeyModifiers.Shift));
         menu.Items.Add(edit);
+        var tools = new MenuItem { Header = "_Tools" };
+        tools.Items.Add(Item("Remove Stars with StarNet2…", () =>
+        {
+            // Star removal works on the Background tab's channels.
+            if (model.ActiveLayer == ImageLayer.Stars) model.SwitchLayer(ImageLayer.Background);
+            if (model.ActiveLayer == ImageLayer.Background) ShowStarRemoval();
+        }));
         var view = new MenuItem { Header = "_View" };
+        view.Items.Add(Item("Background Tab", () => model.SwitchLayer(ImageLayer.Background), Key.D1, Cmd));
+        view.Items.Add(Item("Stars Tab", () => model.SwitchLayer(ImageLayer.Stars), Key.D2, Cmd));
+        view.Items.Add(new Separator());
+        panesItem = Item("Hide Side Panels", () => PanesHidden = !PanesHidden);
+        panesItem.InputGesture = new KeyGesture(Key.Tab);   // shown only: the window handles Tab itself
+        view.Items.Add(panesItem);
+        if (OperatingSystem.IsLinux()) view.Items.Add(InterfaceSizeMenu());
+        view.Items.Add(new Separator());
         view.Items.Add(Item("Fit to Window", () => preview.Perform(ZoomAction.Fit), Key.D0, Cmd));
-        view.Items.Add(Item("Actual Size", () => preview.Perform(ZoomAction.ActualSize), Key.D1, Cmd));
+        // Plain "1" is handled by the preview (shown here, not bound: Cmd+1 is the Background tab).
+        var actual = Item("Actual Size", () => preview.Perform(ZoomAction.ActualSize));
+        actual.InputGesture = new KeyGesture(Key.D1);
+        view.Items.Add(actual);
         hqItem = new MenuItem { Header = "High Quality Preview", ToggleType = MenuItemToggleType.CheckBox };
         hqItem.Click += (_, _) => model.HighQualityPreview = hqItem.IsChecked;
         view.Items.Add(hqItem);
@@ -150,11 +248,19 @@ public sealed class MainWindow : Window
         }
         view.Items.Add(limitsMenu);
         view.Items.Add(new Separator());
-        view.Items.Add(Item("Rotate Clockwise", model.RotateClockwise, Key.R, Cmd));
-        view.Items.Add(Item("Flip Horizontal", model.FlipHorizontal, Key.H, Cmd | KeyModifiers.Shift));
-        view.Items.Add(Item("Flip Vertical", model.FlipVertical, Key.V, Cmd | KeyModifiers.Shift));
-        view.Items.Add(Item("Auto Trim Borders", model.AutoCrop));
+        rotateItem = Item("Rotate Clockwise", model.RotateClockwise, Key.R, Cmd); view.Items.Add(rotateItem);
+        flipHItem = Item("Flip Horizontal", model.FlipHorizontal, Key.H, Cmd | KeyModifiers.Shift); view.Items.Add(flipHItem);
+        flipVItem = Item("Flip Vertical", model.FlipVertical, Key.V, Cmd | KeyModifiers.Shift); view.Items.Add(flipVItem);
+        trimItem = Item("Auto Trim Borders", model.AutoCrop); view.Items.Add(trimItem);
         menu.Items.Add(view);
+        menu.Items.Add(tools);
+        file.SubmenuOpened += (_, _) => closeItem!.IsEnabled = !((model.Sources.Count == 0 && !model.HasStars && model.ProjectPath == null) || model.IsRemovingStars);
+        view.SubmenuOpened += (_, _) =>
+        {
+            bool can = model.Sources.Count > 0 && !model.IsLoading && model.EditingTool == null;
+            rotateItem!.IsEnabled = can; flipHItem!.IsEnabled = can; flipVItem!.IsEnabled = can;
+            trimItem!.IsEnabled = model.Sources.Count > 0 && model.EditingTool == null;
+        };
         var help = new MenuItem { Header = "_Help" };
         help.Items.Add(Item("About CombineColors", async () => await AboutWindow.Show(this)));
         menu.Items.Add(help);
@@ -195,6 +301,13 @@ public sealed class MainWindow : Window
         try { model.SaveProject(path); } catch (Exception e) { model.ErrorMessage = e.Message; }
     }
 
+    /// <summary>Opens the star removal (StarNet2) dialog on the Background channels.</summary>
+    void ShowStarRemoval()
+    {
+        if (model.Sources.Count == 0 || model.ActiveLayer != ImageLayer.Background) return;
+        _ = StarRemovalWindow.Show(this, model);
+    }
+
     void UpdateTitle() => Title = model.ProjectPath is string p ? $"{Path.GetFileNameWithoutExtension(p)} — CombineColors" : "CombineColors";
 
     // ---- Preview area ----------------------------------------------------------------------------
@@ -233,6 +346,8 @@ public sealed class MainWindow : Window
     {
         preview.ViewportChanged += (rect, scale) => { model.Viewport = new Viewport(rect, scale); statusBar.ZoomPercent = scale * 100; };
         preview.Hover += p => model.UpdateHover(p);
+        preview.DustMaxRadiusChanged += r => model.DustBrightMaxRadius = r;
+        preview.CropAngleChange += a => model.SetCropAngle(a);
         preview.CropDraftChanged += r => model.CropDraft = r;
         preview.DustSpotsChanged += spots => model.UpdateDustSpots(spots);
         preview.DustAdd += p => model.AddDustSpot(p);
@@ -249,7 +364,8 @@ public sealed class MainWindow : Window
         preview.StrokeBegin += model.BeginCorrectionStroke;
         preview.Paint += (a, b, invert) => model.PaintCorrection(a, b, invert);
         preview.BrushRadiusChanged += r => model.CorrectionBrushRadius = r;
-        preview.DoubleClick += () => preview.Perform(preview.IsActualSize ? ZoomAction.Fit : ZoomAction.ActualSize);
+        // Fit first; from the fitted view, 1:1.
+        preview.DoubleClick += () => preview.Perform(preview.IsFitted ? ZoomAction.ActualSize : ZoomAction.Fit);
         preview.KeyDown += (_, e) =>
         {
             if (model.DustEditing != null)
@@ -322,10 +438,16 @@ public sealed class MainWindow : Window
         preview.Crop = model.Crop;
         preview.CropEditing = model.CropEditing;
         preview.CropDraft = model.CropDraft;
+        preview.FineAngle = model.Orientation.Angle;
+        preview.CropAngle = model.CropEditing ? model.CropAngleDraft : model.Orientation.Angle;
+        var eb = model.CropEditBounds;
+        preview.CropBounds = model.CropEditing ? new Rect(eb.X, eb.Y, eb.Width, eb.Height) : default;
         preview.CropOverlay = model.CropOverlay;
         preview.DustEditing = model.DustEditing != null;
         preview.DustSpots = model.DustEditing is ChannelKind k ? model.DustSpots(k) : new List<DustSpot>();
         preview.SelectedDustSpot = model.SelectedDustSpot;
+        preview.DustBrightMode = model.DustEditing != null && model.DustDraft?.Polarity == SpotPolarity.Bright;
+        preview.DustMaxRadius = model.DustBrightMaxRadius;
         bool gradientEditing = model.GradientEditing != null;
         preview.GradientEditing = gradientEditing;
         preview.GradientGesture = model.EditedGradientSpec?.Gesture;
@@ -353,7 +475,7 @@ public sealed class MainWindow : Window
         switch (what)
         {
             case Change.Frame: preview.Frame = model.Frame; break;
-            case Change.Sources: SyncPreview(); RefreshToolbars(); break;
+            case Change.Sources: case Change.Layer: SyncPreview(); RefreshToolbars(); break;
             case Change.Crop: case Change.Dust: case Change.Gradient: case Change.Corrections: SyncPreview(); RefreshToolbars(); break;
             case Change.Status: if (hqItem != null) hqItem.IsChecked = model.HighQualityPreview; break;
             case Change.Settings: UpdateUndo(); break;
@@ -401,8 +523,9 @@ public sealed class MainWindow : Window
     void RefreshToolbars()
     {
         bool hasSources = model.Sources.Count > 0;
-        zoomToolbar.IsVisible = hasSources;
-        topToolbar.IsVisible = hasSources;
+        bool editing = model.DustEditing != null || model.GradientEditing != null || model.CorrectionEditing != null || model.CropEditing;
+        zoomToolbar.IsVisible = hasSources && !panesHidden;
+        topToolbar.IsVisible = hasSources && (!panesHidden || editing);
         RefreshEmptyState();
         if (!hasSources) return;
         var panel = new StackPanel();
@@ -411,11 +534,18 @@ public sealed class MainWindow : Window
         else if (model.CorrectionEditing != null) panel.Children.Add(CorrectionToolbar());
         else if (model.CropEditing)
         {
+            // Kept while editing (only refreshed), so dragging the Angle slider is not interrupted by a rebuild.
+            if (cropToolbar != null && topToolbar.Child == cropToolbar) { RefreshCropToolbar(); return; }
             var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
             row.Children.Add(Ui.SmallButton("Apply", model.CommitCropEditing, "Return"));
             row.Children.Add(Ui.SmallButton("Cancel", model.CancelCropEditing, "Esc"));
             panel.Children.Add(row);
             panel.Children.Add(CropFields());
+            panel.Children.Add(CropAngleControls());
+            cropToolbar = panel;
+            topToolbar.Child = panel;
+            RefreshCropToolbar();
+            return;
         }
         else
         {
@@ -439,8 +569,47 @@ public sealed class MainWindow : Window
         topToolbar.Child = panel;
     }
 
+    Control? cropToolbar;
+    readonly List<(TextBox Box, int Index)> cropFieldBoxes = new();
+    SliderRow? angleRow; CheckBox? constrainBox; Button? levelButton;
+
+    void RefreshCropToolbar()
+    {
+        var d = model.CropDraft ?? new PixelRect(0, 0, 0, 0);
+        foreach (var (tb, i) in cropFieldBoxes)
+            if (!tb.IsFocused) tb.Text = (i switch { 0 => d.X, 1 => d.Y, 2 => d.Width, _ => d.Height }).ToString(CultureInfo.InvariantCulture);
+        angleRow?.Refresh();
+        if (constrainBox != null) constrainBox.IsChecked = model.CropConstrain;
+        if (levelButton != null) levelButton.IsEnabled = model.CropAngleDraft != 0;
+    }
+
+    /// <summary>Straightening in the crop editor: the picture turns under the upright crop (applied with the crop).</summary>
+    Control CropAngleControls()
+    {
+        var panel = new StackPanel { HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 6, 0, 0), Width = 230 };
+        panel.Children.Add(new Border { Height = 1, Background = AppTheme.PanelBorder, Margin = new Thickness(0, 0, 0, 4) });
+        angleRow = new SliderRow("Angle", () => (float)model.CropAngleDraft, v => model.SetCropAngle(v), -180, 180, 0, "0.00", false,
+            "Turns the picture under the crop, clockwise for positive angles, all the way round (double-click to reset). Dragging in the band around the crop (up to 160 px from it) turns it too (Shift: whole degrees; quarter turns catch the pointer). On Apply whole quarter turns are exact and only the rest (±45°) is resampled.",
+            "°", 52);
+        panel.Children.Add(angleRow);
+        var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 2, 0, 0) };
+        row.Children.Add(Ui.IconButton("↺", () => model.SetCropAngle(model.CropAngleDraft - 90), "Turn a quarter counter-clockwise"));
+        row.Children.Add(Ui.IconButton("↻", () => model.SetCropAngle(model.CropAngleDraft + 90), "Turn a quarter clockwise"));
+        constrainBox = new CheckBox { Content = "Constrain to image", FontSize = 11, MinHeight = 20, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 6, 0) };
+        ToolTip.SetTip(constrainBox, "While turning, the crop shrinks (keeping its shape and centre) so no empty corner gets inside it");
+        constrainBox.Click += (_, _) => model.CropConstrain = constrainBox.IsChecked == true;
+        row.Children.Add(constrainBox);
+        levelButton = Ui.SmallButton("Level", () => model.SetCropAngle(0), "Back to 0: no fine turn (quarter turns and flips stay)");
+        levelButton.Margin = new Thickness(0);
+        row.Children.Add(levelButton);
+        panel.Children.Add(row);
+        panel.Children.Add(new TextBlock { Text = "Drag around the crop to turn", FontSize = 9, Foreground = Brushes.Gray, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 2, 0, 0) });
+        return panel;
+    }
+
     Control CropFields()
     {
+        cropFieldBoxes.Clear();
         var grid = new Grid { Margin = new Thickness(0, 4, 0, 0), HorizontalAlignment = HorizontalAlignment.Right };
         grid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto)); grid.ColumnDefinitions.Add(new ColumnDefinition(60, GridUnitType.Pixel));
         string[] names = ["X", "Y", "W", "H"];
@@ -462,6 +631,7 @@ public sealed class MainWindow : Window
             tb.KeyDown += (_, e) => { if (e.Key is Key.Return or Key.Enter) { Commit(); e.Handled = true; } };
             tb.LostFocus += (_, _) => Commit();
             Grid.SetRow(tb, i); Grid.SetColumn(tb, 1); grid.Children.Add(tb);
+            cropFieldBoxes.Add((tb, i));
         }
         return grid;
     }
@@ -502,6 +672,21 @@ public sealed class MainWindow : Window
             0, 0.5f, 0.2f, "0.00", help: "Fraction of the radius over which the correction fades out beyond the shadow", labelWidth: 46) { Width = 170, Margin = new Thickness(6, 0, 0, 0) };
         row2.Children.Add(feather);
         panel.Children.Add(row2);
+        // Dark spots (dust shadows) or bright spots (star halos left by star removal).
+        var polarity = selected?.Polarity ?? draft.Polarity;
+        var rowP = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 4, 0, 0) };
+        var polSeg = Ui.Segmented(SpotPolarities.All, p => p.DisplayName(), () => model.SelectedDustSpotValue?.Polarity ?? model.DustDraft?.Polarity ?? SpotPolarity.Dark,
+            p => { if (model.SelectedDustSpotValue is DustSpot sp) { var c = sp.Clone(); c.Polarity = p; model.UpdateSelectedDustSpot(c); } else model.UpdateDustDefaults(d => d.Polarity = p); }, out _);
+        ToolTip.SetTip(polSeg, "Dark spots: dust shadows, divided out like a flat (white dashed circles).\nBright spots: star halos left behind by star removal, the glow above the surrounding sky subtracted (orange dotted circles).\nEdits the selected spot, or the kind of new spots.");
+        rowP.Children.Add(polSeg);
+        if (polarity == SpotPolarity.Bright)
+        {
+            float longSide = model.ImageSize is Size isz ? (float)Math.Max(isz.Width, isz.Height) : 4000;
+            var maxR = new SliderRow("Max radius", () => (float)model.DustBrightMaxRadius, v => model.DustBrightMaxRadius = v, 4, Math.Max(longSide * 0.1f, 40), Math.Max(24, longSide * 0.01f), "0", true,
+                "Largest radius a click gives a new bright spot (the fit stays inside it; halos are local). Right-drag on the preview changes it too; the dotted orange circle at the pointer shows it.", "px", 78) { Width = 250, Margin = new Thickness(6, 0, 0, 0) };
+            rowP.Children.Add(maxR);
+        }
+        panel.Children.Add(rowP);
         var row3 = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 4, 0, 0) };
         row3.Children.Add(new TextBlock { Text = $"{spots.Count} spot{(spots.Count == 1 ? "" : "s")}", FontSize = 11, Foreground = Brushes.Gray, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
         var fit = Ui.SmallButton("Fit", model.RefitSelectedDustSpot, "Re-centre and resize the selected spot on the shadow found around it"); fit.IsEnabled = selected != null; row3.Children.Add(fit);
@@ -525,7 +710,7 @@ public sealed class MainWindow : Window
             Field("X", sel.X, (s, v) => s.X = v, 64); Field("Y", sel.Y, (s, v) => s.Y = v, 64); Field("R", sel.Radius, (s, v) => s.Radius = Math.Max(3, v), 56);
             panel.Children.Add(row4);
         }
-        panel.Children.Add(new TextBlock { Text = "Click a shadow to add a fitted spot · drag to move · drag the handle to resize · drag empty sky to pan", FontSize = 9, Foreground = Brushes.Gray, Margin = new Thickness(0, 4, 0, 0), HorizontalAlignment = HorizontalAlignment.Right });
+        panel.Children.Add(new TextBlock { Text = "Click a shadow (or, with Bright spots, a halo) to add a fitted spot · drag to move · drag the handle to resize · drag empty sky to pan", FontSize = 9, Foreground = Brushes.Gray, Margin = new Thickness(0, 4, 0, 0), HorizontalAlignment = HorizontalAlignment.Right });
         return panel;
     }
 
@@ -698,6 +883,7 @@ public sealed class MainWindow : Window
     {
         if (model.Sources.Count > 0) { emptyState.IsVisible = false; return; }
         emptyState.IsVisible = true;
+        if (model.ActiveLayer == ImageLayer.Stars) { emptyState.Child = EmptyStarsState(); return; }
         var panel = new StackPanel { Width = 540 };
         panel.Children.Add(new TextBlock { Text = "🖼", FontSize = 44, Foreground = Brushes.Gray, HorizontalAlignment = HorizontalAlignment.Center });
         panel.Children.Add(new TextBlock { Text = "Drop stacked FITS or TIFF channels here", FontSize = 20, Foreground = Brushes.WhiteSmoke, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 8, 0, 4) });
@@ -723,6 +909,22 @@ public sealed class MainWindow : Window
             }
         }
         emptyState.Child = panel;
+    }
+
+    Control EmptyStarsState()
+    {
+        var panel = new StackPanel { Width = 560 };
+        panel.Children.Add(new TextBlock { Text = "✦", FontSize = 44, Foreground = Brushes.Gray, HorizontalAlignment = HorizontalAlignment.Center });
+        panel.Children.Add(new TextBlock { Text = "Stars tab", FontSize = 20, Foreground = Brushes.WhiteSmoke, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 8, 0, 4) });
+        panel.Children.Add(new TextBlock { Text = "Drop the star channels here (stars-only images, one per filter, or an RGB stars image).\nThey get settings of their own; the Combine stars block of the Background tab blends them in.\nRemove Stars… and Load RGB stars… on the Background tab fill this tab too.", FontSize = 12, Foreground = Brushes.Silver, TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap });
+        var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 10, 0, 0) };
+        var open = new Button { Content = "Open star images…", Padding = new Thickness(12, 4, 12, 4), Margin = new Thickness(0, 0, 8, 0) };
+        open.Click += async (_, _) => { var p = await Panels.OpenImages(this); if (p.Count > 0) model.LoadFiles(p); };
+        var back = new Button { Content = "Back to the Background tab", Padding = new Thickness(12, 4, 12, 4) };
+        back.Click += (_, _) => model.SwitchLayer(ImageLayer.Background);
+        row.Children.Add(open); row.Children.Add(back);
+        panel.Children.Add(row);
+        return panel;
     }
 }
 

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -130,6 +131,7 @@ public sealed class ControlsStripView : Border
                 if (Signature() != structure) Rebuild(); else RefreshAll();
                 break;
             case Change.Sources: case Change.Context: case Change.Stars: case Change.Layer: Rebuild(); break;
+            case Change.Frame: stretchNote?.Refresh(); break;
         }
     }
 
@@ -141,7 +143,7 @@ public sealed class ControlsStripView : Border
         var avail = model.AvailableKinds;
         var parts = new List<string>
         {
-            string.Join(",", avail.SortedByRaw().Select(k => k.RawValue())), s.Stretch.Method.ToString(), s.StretchStage.ToString(), s.Stretch.Linked.ToString(),
+            string.Join(",", avail.SortedByRaw().Select(k => k.RawValue())), s.Stretch.Method.ToString(), s.StretchStage.ToString(), s.Stretch.Linked.ToString(), s.Detail.SharpenMethod.ToString(),
             s.Normalization.Method.ToString(), s.Luminance.Enabled.ToString(), s.Luminance.Preset.ToString(), s.Luminance.ResolvedExpression(avail) ?? "-",
             s.Denoise.Method.ToString(), s.Stars.Enabled.ToString(), s.Stars.UseMask.ToString(), s.Mode.ToString(), s.PixelMath.HasLuminance.ToString(),
             model.Context?.Reference?.ToString() ?? "-", s.ColorBands.IsNeutral.ToString(), s.Detail.Equals(new DetailSettings()).ToString(), s.Denoise.Equals(new DenoiseSettings()).ToString(),
@@ -174,8 +176,10 @@ public sealed class ControlsStripView : Border
 
     // Helpers binding into the settings.
 
-    SliderRow S(string title, Func<CombineSettings, float> get, Action<CombineSettings, float> set, float lo, float hi, float def, string format = "0.00", bool log = false, string? help = null, string? note = null, double labelWidth = 70)
-        => new(title, () => get(model.Settings), v => model.UpdateSettings(s => set(s, v)), lo, hi, def, format, log, help, note, labelWidth);
+    SliderRow S(string title, Func<CombineSettings, float> get, Action<CombineSettings, float> set, float lo, float hi, float def, string format = "0.00", bool log = false, string? help = null, string? note = null, double labelWidth = 70, float curve = 1)
+        => new(title, () => get(model.Settings), v => model.UpdateSettings(s => set(s, v)), lo, hi, def, format, log, help, note, labelWidth, curve);
+
+    static readonly FontFamily MonoFont = new("Consolas");
 
     IntSliderRow I(string title, Func<CombineSettings, int> get, Action<CombineSettings, int> set, int lo, int hi, int def, string? help = null)
         => new(title, () => get(model.Settings), v => model.UpdateSettings(s => set(s, v)), lo, hi, def, help);
@@ -235,40 +239,77 @@ public sealed class ControlsStripView : Border
 
     void StretchSection(StackPanel p)
     {
+        const double lw = 82;
         var s = model.Settings;
+        var st = s.Stretch;
         p.Children.Add(M("Method", x => x.Stretch.Method, (x, v) => x.Stretch.Method = v, StretchMethods.All, m => m.DisplayName()));
         p.Children.Add(M("Order", x => x.StretchStage, (x, v) => x.StretchStage = v, StretchStages.All, m => m.ShortName(), "Stretch first: each channel is stretched, then combined. Combine first: the linear channels are combined, then the colour image is stretched."));
-        p.Children.Add(C("Linked channels", x => x.Stretch.Linked, (x, v) => x.Stretch.Linked = v, "Same stretch for all channels"));
-        if (s.Stretch.Method != StretchMethod.None)
-        {
-            p.Children.Add(S("Target bg", x => x.Stretch.TargetBackground, (x, v) => x.Stretch.TargetBackground = v, 0.02f, 0.6f, 0.2f, help: "Where the median background lands after the stretch (PixInsight STF default 0.25)."));
-            p.Children.Add(S("Shadow clip", x => x.Stretch.ShadowsClipping, (x, v) => x.Stretch.ShadowsClipping = v, -6, 0, -2.8f, "0.0", help: "Black point in MADN units below the median (STF default −2.8)."));
-            p.Children.Add(S("Highlights", x => x.Stretch.HighlightsPercentile, (x, v) => x.Stretch.HighlightsPercentile = v, 0.9f, 1, 1, "0.0000", help: "Percentile mapped to white (1 = no highlight clipping)."));
-        }
-        switch (s.Stretch.Method)
+        if (st.Method != StretchMethod.None) p.Children.Add(C("Linked channels", x => x.Stretch.Linked, (x, v) => x.Stretch.Linked = v, "Same stretch for all channels"));
+        if (st.UsesTargetBackground)
+            p.Children.Add(S("Target bg", x => x.Stretch.TargetBackground, (x, v) => x.Stretch.TargetBackground = v, 0.02f, 0.6f, 0.2f, help: "Where the median background lands after the stretch (PixInsight STF default 0.25).", labelWidth: lw));
+        if (st.UsesClipping)
+            p.Children.Add(S("Shadow clip", x => x.Stretch.ShadowsClipping, (x, v) => x.Stretch.ShadowsClipping = v, -6, 0, -2.8f, "0.0", help: "Black point in noise units (MADN) below the median background (STF default −2.8). Closer to 0 darkens the sky.", labelWidth: lw));
+        // The manual strengths are relative to the data's noise, so the same values suit any linear stack.
+        switch (st.Method)
         {
             case StretchMethod.Mtf:
-                p.Children.Add(S("Shadows", x => x.Stretch.MtfShadows, (x, v) => x.Stretch.MtfShadows = v, 0, 0.5f, 0, "0.000"));
-                p.Children.Add(S("Midtones", x => x.Stretch.MtfMidtones, (x, v) => x.Stretch.MtfMidtones = v, 0.001f, 0.999f, 0.5f, "0.000", log: true));
-                p.Children.Add(S("Highlights", x => x.Stretch.MtfHighlights, (x, v) => x.Stretch.MtfHighlights = v, 0.5f, 1, 1, "0.000"));
+                p.Children.Add(S("Midtones", x => x.Stretch.MtfMidtonesSigma, (x, v) => x.Stretch.MtfMidtonesSigma = v, 0.3f, 1000, 10, "0.0", log: true,
+                    help: "Midtones balance in noise units: lower is brighter. The sky (2.8 noises above the default black point) lands near 2.8 / (2.8 + value): 3 ≈ 0.5, 10 ≈ 0.2, 100 ≈ 0.03. The absolute midtones (PixInsight HistogramTransformation) are shown below.", labelWidth: lw));
                 break;
             case StretchMethod.Arcsinh:
-                p.Children.Add(S("Stretch", x => x.Stretch.ArcsinhStretch, (x, v) => x.Stretch.ArcsinhStretch = v, 1, 5000, 200, "0", log: true));
+                p.Children.Add(S("Stretch", x => x.Stretch.ArcsinhStrength, (x, v) => x.Stretch.ArcsinhStrength = v, 0.01f, 100, 1, "0.00", log: true,
+                    help: "Stretch factor relative to the noise: 1 puts the sky near 0.2 on most linear stacks, 0.1 near 0.05, 10 near 0.35. The absolute factor (PixInsight ArcsinhStretch) is shown below.", labelWidth: lw));
                 break;
             case StretchMethod.Ghs:
-                p.Children.Add(S("ln(D+1)", x => x.Stretch.GhsLogD, (x, v) => x.Stretch.GhsLogD = v, 0, 12, 5, help: "Stretch factor (logarithmic)."));
-                p.Children.Add(S("b", x => x.Stretch.GhsB, (x, v) => x.Stretch.GhsB = v, 0, 15, 2, help: "Local intensity: how concentrated the stretch is around the symmetry point."));
-                p.Children.Add(S("SP", x => x.Stretch.GhsSP, (x, v) => x.Stretch.GhsSP = v, 0, 1, 0, "0.000", help: "Symmetry point."));
-                p.Children.Add(S("LP", x => x.Stretch.GhsLP, (x, v) => x.Stretch.GhsLP = v, 0, 1, 0, "0.000", help: "Shadow protection point."));
-                p.Children.Add(S("HP", x => x.Stretch.GhsHP, (x, v) => x.Stretch.GhsHP = v, 0, 1, 1, "0.000", help: "Highlight protection point."));
+                p.Children.Add(S("Stretch", x => x.Stretch.GhsStrength, (x, v) => x.Stretch.GhsStrength = v, 0.001f, 100, 0.1f, "0.000", log: true,
+                    help: "Stretch factor D relative to the noise. The absolute ln(D+1) (PixInsight / Siril GHS) is shown below.", labelWidth: lw));
+                p.Children.Add(S("b", x => x.Stretch.GhsB, (x, v) => x.Stretch.GhsB = v, 0, 15, 2, "0.0", help: "Local intensity: how concentrated the stretch is around the symmetry point (0 = exponential).", labelWidth: lw));
+                p.Children.Add(S("SP", x => x.Stretch.GhsSPPercentile, (x, v) => x.Stretch.GhsSPPercentile = v, 0, 100, 0, "0.0",
+                    help: "Symmetry point, as the share of the image's pixels darker than it: 0 = the black point, ≈ 50 = the sky background, 90+ = nebula. The contrast is greatest around it.", note: "%", labelWidth: lw, curve: 2));
+                p.Children.Add(S("LP", x => x.Stretch.GhsLPPercentile, (x, v) => x.Stretch.GhsLPPercentile = v, 0, 100, 0, "0.0",
+                    help: "Shadow protection: below this percentile the curve continues as a straight line (never above SP).", note: "%", labelWidth: lw, curve: 2));
+                p.Children.Add(S("HP", x => x.Stretch.GhsHPPercentile, (x, v) => x.Stretch.GhsHPPercentile = v, 0, 100, 100, "0.00",
+                    help: "Highlight protection: above this percentile the curve continues as a straight line, keeping star cores from saturating (100 = none; never below SP).", note: "%", labelWidth: lw, curve: 0.5f));
                 break;
             case StretchMethod.Log:
-                p.Children.Add(S("k", x => x.Stretch.LogK, (x, v) => x.Stretch.LogK = v, 1, 100000, 2000, "0", log: true));
+                p.Children.Add(S("Strength", x => x.Stretch.LogStrength, (x, v) => x.Stretch.LogStrength = v, 0.01f, 100, 1, "0.00", log: true,
+                    help: "k relative to the noise: 1 puts the sky near 0.17 on most linear stacks. The absolute k is shown below.", labelWidth: lw));
                 break;
         }
-        p.Children.Add(S("Gamma", x => x.Stretch.Gamma, (x, v) => x.Stretch.Gamma = v, 0.3f, 3, 1, log: true));
-        if (!s.Stretch.Linked && s.StretchStage == StretchStage.PreCombine && s.Stretch.Method == StretchMethod.AutoSTF)
-            p.Children.Add(Ui.Caption("Unlinked auto-stretch equalises every channel: normalisation and gain have no visible effect."));
+        // Highlight clipping shown as the share of pixels clipped to white (0…2 %).
+        if (st.UsesClipping)
+            p.Children.Add(S("Highlights", x => (1 - x.Stretch.HighlightsPercentile) * 100, (x, v) => x.Stretch.HighlightsPercentile = 1 - Math.Min(Math.Max(v, 0), 100) / 100, 0, 2, 0, "0.000",
+                help: "Share of the pixels clipped to white (the white point). Auto STF keeps the background on target; the other methods keep their strength relative to the noise, so the picture brightens moderately.", note: "%", labelWidth: lw, curve: 3));
+        p.Children.Add(S("Gamma", x => x.Stretch.Gamma, (x, v) => x.Stretch.Gamma = v, 0.3f, 3, 1, log: true, labelWidth: lw));
+        stretchNote = new NoteRow(ResolvedStretchNote, 9, null, MonoFont);
+        p.Children.Add(stretchNote);
+        if (!st.Linked && st.Method != StretchMethod.None && s.StretchStage == StretchStage.PreCombine)
+            p.Children.Add(Ui.Caption("Unlinked stretches equalise every channel: normalisation and gain have little visible effect."));
+    }
+
+    NoteRow? stretchNote;
+
+    /// <summary>The absolute values the manual stretch resolved to (PixInsight-style numbers), per channel when
+    /// they differ; null for Auto STF and None.</summary>
+    string? ResolvedStretchNote()
+    {
+        var method = model.Settings.Stretch.Method;
+        if (method is not (StretchMethod.Mtf or StretchMethod.Arcsinh or StretchMethod.Ghs or StretchMethod.Log)) return null;
+        if (model.Frame is not { } f || f.Settings.Stretch.Method != method) return null;
+        List<(string, ResolvedStretch)> entries = model.Settings.StretchStage == StretchStage.PreCombine
+            ? ChannelKinds.All.Where(f.ChannelStretch.ContainsKey).Select(k => (k.ShortName(), f.ChannelStretch[k])).ToList()
+            : new[] { "R", "G", "B", "L" }.Zip(f.PostStretch ?? []).Select(t => (t.First, t.Second)).ToList();
+        if (entries.Count == 0) return null;
+        string Value(ResolvedStretch r) => method switch
+        {
+            StretchMethod.Mtf => string.Create(CultureInfo.InvariantCulture, $"m {r.Midtones:0.00000}"),
+            StretchMethod.Arcsinh => string.Create(CultureInfo.InvariantCulture, $"factor {r.ArcsinhStretch:0}"),
+            StretchMethod.Log => string.Create(CultureInfo.InvariantCulture, $"k {r.LogK:0}"),
+            _ => string.Create(CultureInfo.InvariantCulture, $"ln(D+1) {Math.Log(r.GhsD + 1):0.00}, SP {r.GhsSP:0.00000}"),
+        };
+        var values = entries.Select(e => (e.Item1, Value(e.Item2))).ToList();
+        if (values.Select(v => v.Item2).Distinct().Count() == 1) return "Absolute: " + values[0].Item2;
+        return "Absolute: " + string.Join(" · ", values.Select(v => $"{v.Item1} {v.Item2}"));
     }
 
     // Normalisation
@@ -488,9 +529,14 @@ public sealed class ControlsStripView : Border
         left.Children.Add(S("Low freq.", x => x.Detail.LowFrequency, (x, v) => x.Detail.LowFrequency = v, -0.5f, 2, 0, help: "Local contrast of the largest structures (radius ≈ 50 % of the width): separates big nebula regions from the sky without touching fine detail.", note: "50%", labelWidth: lw));
         left.Children.Add(Ui.Separator());
         var right = p;
-        right.Children.Add(S("Sharpen", x => x.Detail.Sharpen, (x, v) => x.Detail.Sharpen = v, 0, 2, 0, help: "Unsharp mask on the luminance (stars excluded from the blur). The radius is in full-resolution pixels, so judge it at 1:1 with HQ on; a fitted preview shows little of it.", labelWidth: lw));
-        right.Children.Add(S("Radius", x => x.Detail.SharpenRadius, (x, v) => x.Detail.SharpenRadius = v, 0.5f, 5, 1.5f, "0.0", help: "Sharpening radius in full-resolution pixels.", note: "px", labelWidth: lw));
-        right.Children.Add(S("Masking", x => x.Detail.SharpenMasking, (x, v) => x.Detail.SharpenMasking = v, 0, 1, 0, help: "Protects flat, noisy areas: only detail above this fraction of the noise level is sharpened (like Camera Raw's Masking).", labelWidth: lw));
+        right.Children.Add(M("Method", x => x.Detail.SharpenMethod, (x, v) => x.Detail.SharpenMethod = v, SharpenMethods.All, m => m.DisplayName(),
+            "Deconvolution: Richardson–Lucy against a Gaussian blur of the radius — edges get steeper and small stars tighter, as if the blur were undone.\nUnsharp mask: adds the difference to a blurred copy — boosts fine contrast (and noise) rather than undoing a blur.\nBoth are held within the local range of the picture, so no dark rings form around stars."));
+        right.Children.Add(S("Sharpen", x => x.Detail.Sharpen, (x, v) => x.Detail.Sharpen = v, 0, 2, 0,
+            help: model.Settings.Detail.SharpenMethod == SharpenMethod.Deconvolution
+                ? "Deconvolution strength (0.1 = one Richardson–Lucy iteration, 2 = twenty). Works in full-resolution pixels: judge it at 1:1 with HQ on; it runs after Denoise since it also sharpens grain."
+                : "Unsharp-mask amount on the luminance. Works in full-resolution pixels: judge it at 1:1 with HQ on.", labelWidth: lw));
+        right.Children.Add(S("Radius", x => x.Detail.SharpenRadius, (x, v) => x.Detail.SharpenRadius = v, 0.5f, 5, 1.5f, "0.0", help: "Size of the blur to undo (Gaussian σ) in full-resolution pixels: about the star FWHM / 2.35.", note: "px", labelWidth: lw));
+        right.Children.Add(S("Masking", x => x.Detail.SharpenMasking, (x, v) => x.Detail.SharpenMasking = v, 0, 1, 0, help: "Protects flat, noisy areas: only detail above this fraction of the noise level is sharpened (like Camera Raw's Masking). Deconvolution always damps a little.", labelWidth: lw));
     }
 
     // Combine stars (the Background tab's blend settings, also editable from the Stars tab)

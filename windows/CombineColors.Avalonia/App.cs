@@ -5,6 +5,7 @@ using Avalonia.Media.Imaging;
 using Avalonia.Styling;
 using Avalonia.Themes.Fluent;
 using Avalonia.Threading;
+using AstroCore;
 using CombineColors.Model;
 using CombineColors.Views;
 
@@ -26,8 +27,9 @@ public sealed class App : Application
     {
         if (ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime desktop) { base.OnFrameworkInitializationCompleted(); return; }
         // `--prefs <file>` keeps a test instance's recent sets (with their saved presets and dust spots) apart from the user's.
-        string? prefsPath = null, screenshot = null, openEditor = null, editorAction = null;
+        string? prefsPath = null, screenshot = null, openEditor = null, editorAction = null, openLayer = null;
         double screenshotDelay = 12;
+        bool hidePanes = false;
         var files = new List<string>();
         var args = desktop.Args ?? [];
         for (int i = 0; i < args.Length; i++)
@@ -39,12 +41,16 @@ public sealed class App : Application
             // `--open-editor gradient:Ha[:background]` (or `dust:Ha`) opens that editor once the channel is loaded (screenshots).
             if (args[i] == "--open-editor" && i + 1 < args.Length) { openEditor = args[++i]; continue; }
             if (args[i] == "--editor-action" && i + 1 < args.Length) { editorAction = args[++i]; continue; }
+            // `--open-layer stars` shows the Stars tab once both tabs are in (screenshots).
+            if (args[i] == "--open-layer" && i + 1 < args.Length) { openLayer = args[++i]; continue; }
+            // `--hide-panes` starts with the side panes hidden, as after Tab (screenshots).
+            if (args[i] == "--hide-panes") { hidePanes = true; continue; }
             if (args[i] == "--scale" && i + 1 < args.Length) { i++; continue; }   // consumed by LinuxScaling before the platform starts
             if (!args[i].StartsWith('-')) files.Add(args[i]);
         }
         Prefs = new Preferences(prefsPath);
-        Model = new ProjectModel(new AvaloniaDispatcher(Dispatcher.UIThread), Prefs) { LaunchEditor = openEditor, LaunchEditorAction = editorAction };
-        var window = new MainWindow(Model);
+        Model = new ProjectModel(new AvaloniaDispatcher(Dispatcher.UIThread), Prefs) { LaunchEditor = openEditor, LaunchEditorAction = editorAction, LaunchLayer = openLayer == "stars" ? ImageLayer.Stars : null };
+        var window = new MainWindow(Model) { PanesHidden = hidePanes };
         desktop.MainWindow = window;
         desktop.ShutdownMode = ShutdownMode.OnMainWindowClose;
         desktop.Exit += (_, _) => { Model.SaveRecentState(); Prefs.Flush(); };
